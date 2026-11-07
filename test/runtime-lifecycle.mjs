@@ -16,6 +16,34 @@ const eventHash = (f) => contentHash(JSON.stringify(f.session.snapshotEvents()))
 const summaryText = (f) => f.summaries().map((event) => messageText({ content: event.data.summary })).join("\n");
 const checkpoints = (f, kind) => f.session.surface.nodes.filter((seq) => f.session.eventAt(seq)?.data?.source?.kind === kind);
 
+test("an incomplete capacity scan after selection preserves the real surface and later maintenance recovers", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  const old = `${h.root}/cut-9-11111111.txt`;
+  fs.writeFileSync(old, "x".repeat(900));
+  const canonicalOld = fs.realpathSync.native(old);
+  process.env.SPINE_SHADOW_MAX_BYTES = "1000";
+  const before = eventHash(f);
+  const original = fs.statSync;
+  const mock = t.mock.method(fs, "statSync", (path, ...args) => {
+    if (String(path) === canonicalOld) throw Object.assign(new Error("unreadable backup"), { code: "EACCES" });
+    return original(path, ...args);
+  });
+  syncBuiltinESMExports();
+  try { await engine.finishTurn(f.agent()); }
+  finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(eventHash(f), before);
+  assert.equal(f.summaries().length, 0);
+  assert.ok(h.warnings.some(line => line.includes("scan is incomplete")));
+  assert.equal(fs.statSync(old).size, 900);
+  process.env.SPINE_SHADOW_MAX_BYTES = "1000000";
+  await engine.finishTurn(f.agent());
+  assert.equal(f.summaries().length, 1, h.warnings.join("\n"));
+  assert.equal(h.modelCalls, 0);
+});
+
 test("positive local cut stays after latest user, preserves prefix bytes and the default three pairs", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ long: { name: "shell" } }));
@@ -83,6 +111,112 @@ test("fifty small-result turns remain usable without inventing cross-user aggreg
   assert.equal(h.warnings.some((line) => /failed|skipped:/.test(line)), false);
 });
 
+for (const kind of ["compact-checkpoint", "spine-checkpoint"]) {
+  test(`terminal commit refuses a ${kind} before backup or replacement`, async (t) => {
+    const h = runtime(t);
+    const f = h.use(fixture());
+    const { engine } = h.engine();
+    h.capture(engine, f);
+    const marker = f.user("existing checkpoint", { kind });
+    const before = eventHash(f);
+    const files = readdirSync(h.root, { recursive: true }).sort();
+    await assert.rejects(engine.commitSelectedSpan(f.agent(), {
+      start: f.longRound[0], end: marker, tokens: 10000,
+      card: { ok: true, text: "fixture retained context" },
+    }, new AbortController().signal), /boundary|checkpoint/);
+    assert.equal(eventHash(f), before);
+    assert.deepEqual(readdirSync(h.root, { recursive: true }).sort(), files);
+  });
+}
+
+test("terminal local commit refuses an old span after a newer genuine user arrives", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  f.user("新的真实用户指令。");
+  const before = eventHash(f);
+  await assert.rejects(engine.commitSelectedSpan(f.agent(), {
+    start: f.longRound[0], end: f.longRound[1], tokens: 3020,
+    card: { ok: true, text: "fixture retained context" },
+  }, new AbortController().signal), /boundary/);
+  assert.equal(eventHash(f), before);
+  assert.equal(f.summaries().length, 0);
+});
+
+test("terminal commit refuses an unbalanced tool span", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  const before = eventHash(f);
+  await assert.rejects(engine.commitSelectedSpan(f.agent(), {
+    start: f.longRound[1], end: f.longRound[1], tokens: 3000,
+    card: { ok: true, text: "fixture retained context" },
+  }, new AbortController().signal), /tool pairing/);
+  assert.equal(eventHash(f), before);
+});
+
+test("a user arriving while local summarization yields prevents stale replacement", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  const summarize = engine.summarize.bind(engine);
+  let latest;
+  t.mock.method(engine, "summarize", async (...args) => {
+    const result = await summarize(...args);
+    latest = f.user("备份后到达的新用户指令。");
+    return result;
+  });
+  await assert.rejects(engine.commitSelectedSpan(f.agent(), {
+    start: f.longRound[0], end: f.longRound[1], tokens: 3020,
+    card: { ok: true, text: "fixture retained context" },
+  }, new AbortController().signal), /boundary/);
+  assert.ok(f.session.surface.nodes.includes(latest));
+  for (const seq of f.longRound) assert.ok(f.session.surface.nodes.includes(seq));
+  assert.equal(f.summaries().length, 0);
+});
+
+test("terminal cloud commit retains the existing earlier-user span contract", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({}, "cloud");
+  const earlier = "保留较早用户原文。";
+  f.user(earlier);
+  const last = f.round("after-earlier", { tokens: 3000, text: "INFO fixture heartbeat ok\n".repeat(300) });
+  const latest = f.user("最新用户留在压缩段之外。");
+  h.capture(engine, f);
+  await engine.commitSelectedSpan(f.agent(), {
+    start: f.longRound[0], end: last[1], tokens: 10000,
+    card: { ok: true, text: `旧用户原文：${JSON.stringify(earlier)}` },
+  }, new AbortController().signal);
+  assert.ok(f.session.surface.nodes.includes(latest));
+  assert.equal(f.summaries().length, 1);
+  assert.ok(summaryText(f).includes(earlier));
+});
+
+test("a new official checkpoint while local summarization yields retires an older cloud span", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({}, "cloud");
+  h.capture(engine, f);
+  const summarize = engine.summarize.bind(engine);
+  let official;
+  t.mock.method(engine, "summarize", async (...args) => {
+    const result = await summarize(...args);
+    official = f.user("new official checkpoint", { kind: "compact-checkpoint" });
+    return result;
+  });
+  await assert.rejects(engine.commitSelectedSpan(f.agent(), {
+    start: f.longRound[0], end: f.longRound[1], tokens: 3020,
+    card: { ok: true, text: "fixture retained context" },
+  }, new AbortController().signal), /boundary|checkpoint/);
+  assert.ok(f.session.surface.nodes.includes(official));
+  for (const seq of f.longRound) assert.ok(f.session.surface.nodes.includes(seq));
+  assert.equal(f.summaries().length, 0);
+});
+
 test("stock → spine → stock uses genuine transactions; cooldown is once per checkpoint and session", async (t) => {
   const h = runtime(t);
   const stockInputs = [];
@@ -136,6 +270,61 @@ test("stock → spine → stock uses genuine transactions; cooldown is once per 
   await restarted.finishTurn(f.agent());
   assert.equal(eventHash(f), afterStock);
   assert.equal(skipLiveOfficialCompaction(f.session), false, "the second stock card was consumed independently");
+});
+
+test("three repeated production stock/spine cycles preserve factual inputs across restart without idle recompression", async (t) => {
+  const facts = ["部署区域是 cn-north-7。", "禁止发布未经过测试的版本。", "提交状态尚未核实，必须读取仓库确认。"];
+  const requests = [];
+  const h = runtime(t, { modelTransport: async function* (options) {
+    assert.equal(options.purpose, "compaction");
+    const input = options.messages.map(messageText).join("\n");
+    for (const fact of facts) assert.ok(input.includes(fact), `official model input lost: ${fact}`);
+    requests.push(input);
+    yield { type: "text-delta", index: 0, text: facts.join("\n") };
+    yield { type: "finish", reason: { kind: "stop" } };
+  } });
+  const f = h.use(fixture({ long: { text: `INFO ledger heartbeat ok\n${facts.join("\n")}\n${"INFO ledger heartbeat ok\n".repeat(300)}` } }));
+  const config = { retainTokens: 100, compactionRetries: 0 };
+  let { engine } = h.engine(config);
+  const agent = () => ({ ...f.agent(), options: { provider: "fixture", model: "fixture-model" } });
+  h.capture(engine, f);
+  await engine.compactNow(agent(), new AbortController().signal);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    if (cycle === 1) {
+      f.session = Session.create(f.session.id, JSON.parse(JSON.stringify(f.session.snapshotEvents())));
+      h.use(f);
+      ({ engine } = h.engine(config));
+    }
+    const oldCards = checkpoints(f, "compact-checkpoint");
+    const oldEvents = oldCards.map(seq => JSON.stringify(f.session.eventAt(seq)));
+    f.user(`继续第 ${cycle + 1} 阶段任务。`);
+    const work = f.round(`cycle-${cycle}`, { name: "read", tokens: 3000, text: "INFO ledger heartbeat ok\n".repeat(300) });
+    for (let i = 0; i < 3; i++) f.round(`cycle-${cycle}-tail-${i}`);
+    h.capture(engine, f);
+    const before = f.summaries().length;
+    await engine.finishTurn(agent());
+    if (cycle !== 1) {
+      assert.equal(f.summaries().length, before, "a live official card skips once");
+      await engine.finishTurn(agent());
+    }
+    assert.equal(f.summaries().length, before + 1, h.warnings.join("\n"));
+    assert.deepEqual(f.summaries().at(-1).data.shadowedSeqs, work);
+    oldCards.forEach((seq, i) => {
+      assert.ok(f.session.surface.nodes.includes(seq));
+      assert.equal(JSON.stringify(f.session.eventAt(seq)), oldEvents[i]);
+    });
+    const text = f.session.deriveMessages().map(messageText).join("\n");
+    for (const fact of facts) assert.ok(text.includes(fact));
+    const settled = eventHash(f);
+    const calls = h.modelCalls;
+    await engine.finishTurn(agent());
+    await engine.finishTurn(agent());
+    assert.equal(eventHash(f), settled);
+    assert.equal(h.modelCalls, calls, "idle local maintenance never invokes the summarizer model");
+    await engine.compactNow(agent(), new AbortController().signal);
+  }
+  assert.equal(requests.length, 4);
+  assert.equal(h.modelCalls, 4);
 });
 
 test("a recognized tool fact survives a real cut; assistant publish prose never becomes execution evidence (#6/#14)", async (t) => {

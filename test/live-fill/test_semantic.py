@@ -240,6 +240,8 @@ class SemanticTests(unittest.TestCase):
                 "mkdir -p audit-bin; cp /bin/rm audit-bin/cat; printf -v PATH '%s' ./audit-bin; cat scratch",
                 "printf '%n' PATH", 'cp /bin/rm audit-bin/cat',
                 "grep ',' < sample.csv", "cat sample.csv | grep ','", "grep ','",
+                "cat sample.csv | grep ',' //dev/stdin", "grep ',' //dev/fd/0 < sample.csv",
+                "cat sample.csv > scratch.txt; grep ',' < scratch.txt",
                 "printf old > conf/settings.toml"):
             with self.subTest(command=command):
                 items = copy.deepcopy(original)

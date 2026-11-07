@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
+import { performance } from "node:perf_hooks";
 import {
   chmodSync,
   appendFileSync,
@@ -46,6 +47,7 @@ const ROTATION_LOCK = ".spine-rotation.lock";
 const ROTATION_OWNER = ".spine-rotation.owner";
 const ROTATION_SHARED = ".spine-rotation.shared";
 const ROTATION_RECOVERED = ".spine-rotation.recovered";
+const USAGE_MAX_AGE_MS = 60_000;
 const rotationOwner = randomBytes(24).toString("hex");
 let rotationScope = null;
 let shadowUsage = null;
@@ -515,9 +517,9 @@ function ownerPid(dir) {
   try {
     const text = readFileSync(join(dir, "owner"), "utf8").trim();
     const pid = Number(text);
-    return Number.isInteger(pid) && pid > 0 ? pid : 0;
-  } catch {
-    return 0;
+    return /^[1-9]\d*$/.test(text) && Number.isSafeInteger(pid) ? pid : null;
+  } catch (error) {
+    return error?.code === "ENOENT" ? 0 : null;
   }
 }
 
@@ -525,8 +527,8 @@ function processAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error?.code !== "ESRCH";
   }
 }
 
@@ -1106,7 +1108,11 @@ export function listShadowEntries(dir, alive = processAlive, { readdir = readdir
       continue;
     }
     if (!entry.isDirectory()) continue;
-    const live = ownerPid(path) ? alive(ownerPid(path)) : false;
+    const owner = ownerPid(path);
+    let live = owner === null;
+    if (owner > 0) {
+      try { live = alive(owner) !== false; } catch { live = true; }
+    }
     for (const file of listPluginShadows(path, { readdir, stat, onError })) {
       entries.push({ ...file, legacy: false, live, sessionKey: file.sessionKey || entry.name });
     }
@@ -1122,16 +1128,33 @@ export function rotateShadow(options) {
   return withShadowRoot(options.dir, () => rotateShadowLocked(options));
 }
 
+function rotationTime(now) {
+  try {
+    const value = now();
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function rotateShadowLocked({
   incomingBytes, protectPath, protectPaths = [], sessionKey, cap,
   unlink = unlinkSync, alive = processAlive, readdir = readdirSync, stat = statSync,
+  now = () => performance.now(),
 }) {
   const { root, identity, exclusive } = rotationScope;
   const low = Math.floor(cap * 0.8);
   const oversize = incomingBytes > cap;
-  if (exclusive && shadowUsage?.cap === cap && Number.isSafeInteger(incomingBytes) && incomingBytes >= 0 && !oversize && shadowUsage.bytes + incomingBytes < low) {
-    return { ok: true, deleted: 0, freed: 0, used: shadowUsage.bytes, cap, oversize: false, failed: false, estimated: true };
+  const cached = shadowUsage;
+  const observed = exclusive ? rotationTime(now) : null;
+  const validTime = observed !== null && (!cached || observed >= cached.lastObservedAt);
+  if (exclusive && cached?.cap === cap && validTime && observed >= cached.calibratedAt &&
+      observed - cached.calibratedAt < USAGE_MAX_AGE_MS && Number.isSafeInteger(cached.bytes) &&
+      Number.isSafeInteger(incomingBytes) && incomingBytes >= 0 && !oversize && cached.bytes + incomingBytes < low) {
+    cached.lastObservedAt = observed;
+    return { ok: true, deleted: 0, freed: 0, used: cached.bytes, cap, oversize: false, failed: false, estimated: true };
   }
+  shadowUsage = null;
   let complete = true;
   const files = listShadowEntries(root, alive, { readdir, stat, onError() { complete = false; } });
   const protect = new Set([protectPath, ...protectPaths].filter(Boolean).map((path) => {
@@ -1140,9 +1163,23 @@ function rotateShadowLocked({
   const current = sanitizeSessionKey(sessionKey);
   let used = files.reduce((sum, file) => sum + file.size, 0);
   const validBytes = [used, incomingBytes, cap].every(Number.isSafeInteger) && used >= 0 && incomingBytes >= 0 && cap > 0;
-  const usage = exclusive && complete && validBytes ? { root, identity, cap, bytes: used } : null;
-  shadowUsage = usage;
+  // Missing entries make used a lower bound, never evidence of free space.
+  // Refuse before deletion as well: a partial scan cannot establish a safe
+  // rotation, even when the incoming backup qualifies for the oversize rule.
+  if (!complete) {
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize, failed: true, reason: "scan-incomplete" };
+  }
+  if (!validBytes) {
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize, failed: true, reason: "invalid-measurement" };
+  }
+  const publishUsage = () => {
+    if (!exclusive || !validTime) return;
+    const completed = rotationTime(now);
+    if (completed === null || completed < observed) return;
+    shadowUsage = { root, identity, cap, bytes: used, calibratedAt: completed, lastObservedAt: completed };
+  };
   if (!oversize && used + incomingBytes <= cap) {
+    publishUsage();
     return { ok: true, deleted: 0, freed: 0, used, cap, oversize: false, failed: false };
   }
   const legacy = [];
@@ -1166,14 +1203,10 @@ function rotateShadowLocked({
     try {
       unlink(file.path);
     } catch (error) {
-      if (error?.code === "ENOENT") {
-        used -= file.size;
-        freed += file.size;
-        deleted += 1;
-        continue;
+      if (error?.code !== "ENOENT") {
+        failed = true;
+        break;
       }
-      failed = true;
-      break;
     }
     used -= file.size;
     freed += file.size;
@@ -1184,11 +1217,11 @@ function rotateShadowLocked({
       } catch {}
     }
   }
-  if (usage) usage.bytes = used;
-  if (failed) shadowUsage = null;
   const fits = used + incomingBytes <= cap;
+  const ok = !failed && (oversize || fits);
+  if (ok) publishUsage();
   return {
-    ok: !failed && (oversize || fits),
+    ok,
     deleted,
     freed,
     used,

@@ -551,6 +551,122 @@ test("dedicated first scan calibrates; second is estimated; 80 percent, cap and 
   assert.equal(f.calls.readdir.length, 4);
 });
 
+test("exclusive estimates expire at 60000 without renewal by fast returns or actual saves", (t) => {
+  const f = fixture(t);
+  configure(t, f, true, 5000);
+  let tick = 0;
+  f.io.now = () => tick;
+  rotation(f, 0, { cap: 5000 });
+  const scans = f.calls.readdir.length;
+  for (let i = 0; i < 8; i++) {
+    tick = 50000 + i * 1000;
+    backup(f, 80, { kind: i % 2 ? "cut" : "official" });
+  }
+  tick = 59999;
+  assert.equal(rotation(f, 0, { cap: 5000 }).estimated, true);
+  assert.equal(f.calls.readdir.length, scans);
+  tick = 60000;
+  const expired = rotation(f, 0, { cap: 5000 });
+  assert.equal(expired.estimated, undefined);
+  assert.equal(expired.used, 640);
+  assert.ok(f.calls.readdir.length > scans);
+  tick = 119999;
+  assert.equal(rotation(f, 0, { cap: 5000 }).estimated, true);
+  tick = 120000;
+  assert.equal(rotation(f, 0, { cap: 5000 }).estimated, undefined);
+});
+
+test("calibration lifetime starts when its successful scan completes", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  let tick = 0;
+  const read = f.io.readdir;
+  f.io.now = () => tick;
+  f.io.readdir = (...args) => { tick += 5000; return read(...args); };
+  rotation(f);
+  assert.equal(tick, 5000);
+  tick = 64999;
+  assert.equal(rotation(f).estimated, true);
+  tick = 65000;
+  assert.equal(rotation(f).estimated, undefined);
+});
+
+test("rollback since the last fast observation retires the estimate even after its calibration time", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  let tick = 0;
+  f.io.now = () => tick;
+  rotation(f);
+  tick = 59000;
+  assert.equal(rotation(f).estimated, true);
+  tick = 58000;
+  assert.equal(rotation(f).estimated, undefined);
+  tick = 58001;
+  assert.equal(rotation(f).estimated, undefined, "a rollback scan must not publish a fresh lifetime");
+  tick = 58002;
+  assert.equal(rotation(f).estimated, true);
+});
+
+for (const bad of [NaN, Infinity, -1, "throw"]) {
+  test(`invalid monotonic clock ${String(bad)} scans without seeding an estimate`, (t) => {
+    const f = fixture(t);
+    configure(t, f);
+    let tick = 0;
+    f.io.now = () => { if (tick === "throw") throw new Error("clock unavailable"); return tick; };
+    rotation(f);
+    tick = bad;
+    assert.equal(rotation(f).estimated, undefined);
+    assert.equal(rotation(f).estimated, undefined);
+    tick = 1000;
+    assert.equal(rotation(f).estimated, undefined);
+    tick = 1001;
+    assert.equal(rotation(f).estimated, true);
+  });
+}
+
+test("clock failure at calibration completion does not publish a lifetime", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  let values = [0, NaN];
+  f.io.now = () => values.length ? values.shift() : 1000;
+  rotation(f);
+  assert.equal(rotation(f).estimated, undefined);
+  assert.equal(rotation(f).estimated, true);
+});
+
+test("expired failed calibration and partial deletion failure cannot refresh a fast path", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  let tick = 0;
+  f.io.now = () => tick;
+  rotation(f);
+  tick = 60000;
+  const failed = rotation(f, 0, { readdir() { throw new Error("scan denied"); } });
+  assert.equal(failed.ok, false);
+  tick++;
+  assert.equal(rotation(f).estimated, undefined);
+  const first = plant(f, "cut-1-11111111.txt", 900, 1);
+  const last = plant(f, "cut-2-22222222.txt", 100, 2);
+  const refused = rotation(f, 1000, { unlink(path) {
+    if (path === last) throw new Error("unlink denied");
+    return f.io.unlink(path);
+  } });
+  assert.equal(refused.failed, true);
+  assert.equal(existsSync(first), false);
+  assert.equal(statSync(last).size, 100);
+  assert.equal(rotation(f).estimated, undefined);
+  assert.equal(rotation(f).estimated, true);
+});
+
+test("shared roots keep full scans regardless of clock validity or elapsed lifetime", (t) => {
+  const f = fixture(t);
+  configure(t, f, false);
+  for (const tick of [0, 1, 60000, NaN]) {
+    assert.equal(rotation(f, 0, { now: () => tick }).estimated, undefined);
+  }
+  assert.equal(f.calls.readdir.length, 4);
+});
+
 test("eight actual cut/official saves below 80 percent do no backup readdir/stat after calibration and charge once", (t) => {
   const f = fixture(t);
   configure(t, f, true, 5000);
@@ -573,6 +689,80 @@ test("eight actual cut/official saves below 80 percent do no backup readdir/stat
     assert.equal(statSync(first.file).mode & 0o777, 0o600);
     assert.equal(statSync(f.dir).mode & 0o777, 0o700);
   }
+});
+
+for (const optIn of [false, true]) {
+  test(`real raw burst after calibration rotates 200 x 20KiB at a 2MiB cap (${optIn ? "dedicated" : "shared"})`, (t) => {
+    const f = fixture(t);
+    const cap = 2 * 1024 * 1024;
+    configure(t, f, optIn, cap);
+    f.io.now = () => 0;
+    assert.equal(rotation(f, 0, { cap }).used, 0);
+    const scans = f.calls.readdir.length;
+    const records = [];
+    for (let i = 0; i < 200; i++) {
+      const result = captureOwnedToolResult({ dir: join(f.dir, "mine"), root: f.dir,
+        toolCallId: `burst-${i}`, text: "x".repeat(20 * 1024) });
+      assert.equal(result.ok, true);
+      records.push(result.path);
+    }
+    const stats = join(f.dir, "spine-stats.json");
+    writeShadowFile(stats, "{}\n", {}, { root: f.dir });
+    assert.equal(f.calls.readdir.length, scans, "raw capture does not itself call capacity rotation");
+    assert.equal(records.reduce((sum, file) => sum + statSync(file).size, 0), 4096000);
+    assert.ok(records.reduce((sum, file) => sum + statSync(`${file}.meta.json`).size, 0) > 0);
+    assert.ok(statSync(join(f.dir, "mine", "owner")).size > 0);
+    assert.ok(statSync(stats).size > 0);
+    const rotated = rotation(f, 0, { cap, sessionKey: "mine" });
+    assert.equal(rotated.estimated, undefined);
+    assert.equal(rotated.ok, true);
+    assert.equal(rotated.deleted, 119);
+    assert.equal(rotated.used, 1658880);
+    assert.ok(f.calls.readdir.length > scans);
+    const remaining = records.filter(file => existsSync(file));
+    assert.equal(remaining.reduce((sum, file) => sum + statSync(file).size, 0), 1658880);
+    for (const file of records.filter(file => !existsSync(file))) {
+      assert.equal(existsSync(`${file}.meta.json`), false);
+      assert.ok(f.calls.unlink.includes(`${file}.meta.json`));
+    }
+    assert.equal(existsSync(stats), true, "ancillary files stay outside payload quota and deletion");
+  });
+}
+
+test("80 percent waterline and cap equality do not trigger premature deletion", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  f.io.now = () => 0;
+  const file = plant(f, "cut-1-11111111.txt", 600);
+  rotation(f);
+  assert.equal(rotation(f, 199).estimated, true);
+  assert.equal(rotation(f, 200).estimated, undefined);
+  assert.equal(rotation(f, 400).deleted, 0);
+  assert.equal(statSync(file).size, 600);
+  const over = rotation(f, 401);
+  assert.equal(over.ok, true);
+  assert.equal(over.deleted, 1);
+  assert.equal(over.freed, 600);
+});
+
+test("a missing raw body still attempts its exact paired metadata cleanup once", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const file = plant(f, "raw-1111111111111111.txt", 900);
+  writeFileSync(`${file}.meta.json`, "{}");
+  const result = rotation(f, 200, { unlink(path) {
+    if (path === file) {
+      f.io.unlink(path);
+      throw Object.assign(new Error("already removed"), { code: "ENOENT" });
+    }
+    return f.io.unlink(path);
+  } });
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, 1);
+  assert.equal(result.freed, 900);
+  assert.equal(result.used, 0);
+  assert.equal(existsSync(`${file}.meta.json`), false);
+  assert.deepEqual(f.calls.unlink, [file, `${file}.meta.json`]);
 });
 
 test("UTF-8, Buffer, raw, owner and metadata scopes, overwrite and partial failures are conservatively charged once", (t) => {
@@ -637,18 +827,31 @@ test("a normal raw helper infers its configured root before the session director
   assert.equal(rotation(f).estimated, true);
 });
 
-for (const failedPart of ["root readdir", "session readdir", "stat"]) {
-  test(`incomplete ${failedPart} never seeds an estimate`, (t) => {
+for (const optIn of [false, true]) for (const failedPart of ["root readdir", "session readdir", "root stat", "session stat"]) {
+  test(`incomplete ${failedPart} refuses admission and never seeds an estimate (${optIn ? "dedicated" : "shared"})`, (t) => {
     const f = fixture(t);
-    configure(t, f);
-    const file = plant(f, "dead/cut-1-11111111.txt", 900);
-    const bad = failedPart === "stat" ? { stat() { throw new Error("EACCES"); } } : {
+    configure(t, f, optIn);
+    const file = plant(f, failedPart === "root stat" ? "cut-1-11111111.txt" : "dead/cut-1-11111111.txt", 900);
+    const bad = failedPart.endsWith("stat") ? { stat(path) {
+      if (path === file) throw new Error("EACCES");
+      return f.io.stat(path);
+    } } : {
       readdir(path, options) {
         if ((failedPart === "root readdir" && path === f.dir) || (failedPart === "session readdir" && path !== f.dir)) throw new Error("EACCES");
         return f.io.readdir(path, options);
       },
     };
-    rotation(f, 0, bad);
+    for (const incoming of [0, 200, 1100]) {
+      const failed = rotation(f, incoming, bad);
+      assert.equal(failed.ok, false, "an unreadable payload cannot establish capacity, including the oversize exception");
+      assert.equal(failed.failed, true);
+      assert.equal(failed.reason, "scan-incomplete");
+      assert.equal(failed.estimated, undefined);
+      assert.equal(failed.deleted, 0);
+      assert.equal(failed.freed, 0);
+      assert.equal(statSync(file).size, 900);
+      assert.deepEqual(f.calls.unlink, [], "partial scans must not start deleting");
+    }
     const retry = rotation(f, 200);
     assert.equal(retry.estimated, undefined);
     assert.equal(retry.ok, true);
@@ -656,6 +859,118 @@ for (const failedPart of ["root readdir", "session readdir", "stat"]) {
     assert.deepEqual(f.calls.unlink, [file]);
   });
 }
+
+for (const optIn of [false, true]) for (const failedPart of ["root readdir", "session readdir", "root stat", "session stat"]) {
+  test(`failed capacity scan ${failedPart} prevents real required and optional 900 + 200 saves (${optIn ? "dedicated" : "shared"})`, (t) => {
+    const f = fixture(t);
+    configure(t, f, optIn);
+    const old = plant(f, failedPart === "root stat" ? "cut-9-11111111.txt" : "dead/cut-9-11111111.txt", 900);
+    const originalIO = { ...f.io };
+    f.io.stat = (path) => {
+      if (failedPart.endsWith("stat") && path === old) throw Object.assign(new Error("unreadable backup"), { code: "EACCES" });
+      return originalIO.stat(path);
+    };
+    f.io.readdir = (path, options) => {
+      if ((failedPart === "root readdir" && path === f.dir) || (failedPart === "session readdir" && path === join(f.dir, "dead"))) {
+        throw Object.assign(new Error("unreadable directory"), { code: "EACCES" });
+      }
+      return originalIO.readdir(path, options);
+    };
+    assert.throws(() => backup(f, 200), (error) => error.code === "ESHADOWSCAN");
+    assert.equal(existsSync(join(f.dir, "mine", "cut-1-aaaaaaaa.txt")), false);
+    const optional = backup(f, 200, { required: false, kind: "official" });
+    assert.equal(existsSync(optional.file), false);
+    assert.equal(listShadowEntries(f.dir).reduce((sum, file) => sum + file.size, 0), 900);
+    assert.deepEqual(f.calls.unlink, []);
+    Object.assign(f.io, originalIO);
+    const healthy = backup(f, 200);
+    assert.equal(statSync(healthy.file).size, 200);
+    assert.equal(existsSync(old), false);
+    assert.equal(rotation(f).used, 200);
+  });
+}
+
+test("invalid incoming, cap and observed sizes never authorize deletion or backup", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const file = plant(f, "cut-1-11111111.txt", 900);
+  const cases = [
+    ...[NaN, Infinity, -1, 0.5].map(incomingBytes => ({ incomingBytes })),
+    ...[NaN, Infinity, 0, -1, Number.MAX_SAFE_INTEGER + 1].map(cap => ({ cap })),
+    { stat(path) { const info = statSync(path); info.size = NaN; return info; } },
+  ];
+  for (const extra of cases) {
+    const { incomingBytes = 200, ...options } = extra;
+    const result = rotation(f, incomingBytes, options);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "invalid-measurement");
+    assert.equal(result.deleted, 0);
+    assert.equal(statSync(file).size, 900);
+  }
+  assert.deepEqual(f.calls.unlink, []);
+});
+
+for (const code of ["EPERM", "EACCES", "EIO"]) {
+  test(`session owner PID ${code} is protected; only ESRCH proves death`, (t) => {
+    const f = fixture(t);
+    configure(t, f);
+    const file = plant(f, "other/cut-1-11111111.txt", 900);
+    const owner = join(f.dir, "other", "owner");
+    writeFileSync(owner, "424242");
+    let status = code;
+    const kill = process.kill;
+    t.mock.method(process, "kill", (pid, signal) => {
+      if (pid === 424242) throw Object.assign(new Error(status), { code: status });
+      return kill(pid, signal);
+    });
+    let reads = 0;
+    withFsMock(t, "readFileSync", (read) => (path, ...args) => {
+      if (String(path) === owner) reads++;
+      return read(path, ...args);
+    }, () => {
+      const refused = rotation(f, 200, { sessionKey: "mine" });
+      assert.equal(refused.ok, false);
+      assert.equal(statSync(file).size, 900);
+      assert.deepEqual(f.calls.unlink, []);
+      assert.equal(reads, 1, "read owner once to avoid inconsistent classifications");
+      status = "ESRCH";
+      assert.equal(rotation(f, 200, { sessionKey: "mine" }).ok, true);
+      assert.equal(existsSync(file), false);
+    });
+  });
+}
+
+for (const kind of ["unreadable", "empty", "malformed", "negative", "exponent"]) {
+  test(`an ${kind} session owner is not evidence of a dead session`, (t) => {
+    const f = fixture(t);
+    configure(t, f);
+    const file = plant(f, "other/cut-1-11111111.txt", 900);
+    const owner = join(f.dir, "other", "owner");
+    const text = { unreadable: "424242", empty: "", malformed: "unknown", negative: "-1", exponent: "1e3" }[kind];
+    writeFileSync(owner, text);
+    withFsMock(t, "readFileSync", (read) => (path, ...args) => {
+      if (kind === "unreadable" && String(path) === owner) throw Object.assign(new Error("owner denied"), { code: "EACCES" });
+      return read(path, ...args);
+    }, () => {
+      assert.equal(rotation(f, 200, { sessionKey: "mine", alive: () => false }).ok, false);
+      assert.equal(statSync(file).size, 900);
+      assert.deepEqual(f.calls.unlink, []);
+    });
+  });
+}
+
+test("unknown custom liveness and genuinely missing owners have distinct deletion behavior", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const file = plant(f, "other/cut-1-11111111.txt", 900);
+  const owner = join(f.dir, "other", "owner");
+  writeFileSync(owner, "424242");
+  assert.equal(rotation(f, 200, { sessionKey: "mine", alive() { throw new Error("unknown status"); } }).ok, false);
+  assert.equal(statSync(file).size, 900);
+  unlinkSync(owner);
+  assert.equal(rotation(f, 200, { sessionKey: "mine" }).ok, true);
+  assert.equal(existsSync(file), false);
+});
 
 test("original removal order, both protection forms, live owners, raw metadata and unrelated files are preserved", (t) => {
   const f = fixture(t);

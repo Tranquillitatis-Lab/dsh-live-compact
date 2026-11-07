@@ -59,7 +59,7 @@ export function fixture({ totalTokens = 24000, id = `runtime-${++serial}`, sessi
 
 // Real Context + engine + Session; only host I/O, token prices and model transport
 // are fixtures. Provider discovery must never inspect the user's profiles.
-export function runtime(t, { liveSessions = false } = {}) {
+export function runtime(t, { liveSessions = false, modelTransport } = {}) {
   const keys = [...Object.values(ENV), "SPINE_SHADOW_DIR", "SPINE_THUNDER", "SPINE_ENGINE_FAIL",
     "SPINE_SHADOW_MAX_BYTES", "SPINE_SHADOW_MAX_MB"];
   const saved = new Map(keys.map((key) => [key, process.env[key]]));
@@ -78,7 +78,9 @@ export function runtime(t, { liveSessions = false } = {}) {
     else ctx.sessions = {};
     ctx.sessions.flush = async () => {};
     ctx.tokenMeter = { measure: (session) => fixtures.get(session).measure(), estimateMessage: () => 200 };
-    ctx.llm = new Proxy({}, { get: () => () => { h.modelCalls++; throw new Error("model calls forbidden"); } });
+    ctx.llm = modelTransport
+      ? { stream(options) { h.modelCalls++; return modelTransport(options); } }
+      : new Proxy({}, { get: () => () => { h.modelCalls++; throw new Error("model calls forbidden"); } });
     ctx.provide("toolResultPruner", { pruneSession() { h.pruneCalls++; } });
     const engine = new Engine(ctx.isolate("compaction"), { auto: false, ...config });
     engine.engineFor = () => ({ engine: engineKind, source: "fixture" });
@@ -95,7 +97,7 @@ export function runtime(t, { liveSessions = false } = {}) {
   t.after(async () => {
     try {
       for (const ctx of contexts) await ctx.fiber.dispose();
-      assert.equal(h.modelCalls, 0, "these local maintenance tests must never request a model");
+      if (!modelTransport) assert.equal(h.modelCalls, 0, "these local maintenance tests must never request a model");
     } finally {
       for (const [key, value] of saved) {
         if (value === undefined) delete process.env[key]; else process.env[key] = value;

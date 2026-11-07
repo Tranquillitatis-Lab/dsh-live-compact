@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 OPAQUE = 'unauditable tool behavior; independent command review required'
 READERS = {'cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'sed', 'awk', 'sort', 'uniq'}
 STATUS = '\x00audit-status\x00'  # Internal token; NUL is forbidden in raw shell input.
+UNBOUND_STDIN = object()  # No pipe/redirect; distinct from an opaque producer.
 PY_FUNCTIONS = {'print', 'sum', 'len', 'str', 'int', 'float', 'bool', 'list', 'tuple', 'dict',
                 'enumerate', 'range', 'sorted', 'min', 'max', 'any', 'all', 'zip', 'open'}
 PY_MEMBERS = {'Path', 'reader', 'DictReader', 'loads', 'read', 'read_text', 'read_bytes',
@@ -19,8 +20,45 @@ PY_MEMBERS = {'Path', 'reader', 'DictReader', 'loads', 'read', 'read_text', 'rea
 PY_IMPORTS = {'csv': {'reader', 'DictReader'}, 'json': {'loads'}, 'pathlib': {'Path'}}
 
 
+def is_csv_path(value):
+    # suffix misses the hidden filename .csv. Normalize like path_errors does.
+    return isinstance(value, str) and str(PurePosixPath(value)).lower().endswith('.csv')
+
+
+def reader_operands(args, flags=(), short_flags='', counts=False):
+    """Bounded read-only options, not general utility/shell emulation.
+
+    Consume count arguments as values, never paths. After -- every token is an
+    operand, including numbers and option-looking names. Unknown options fail.
+    """
+    paths, options = [], True
+    args = iter(args)
+    for arg in args:
+        if options and arg == '--':
+            options = False
+        elif options and arg.startswith('-') and arg != '-':
+            if arg in flags or (short_flags and re.fullmatch('-['+short_flags+']+', arg)):
+                continue
+            if counts and arg in ('-n', '-c', '--lines', '--bytes'):
+                if not re.fullmatch(r'[+-]?[0-9]+', next(args, '')):
+                    raise ValueError('count')
+            elif counts and re.fullmatch(r'-[nc][+-]?[0-9]+|--(?:lines|bytes)=[+-]?[0-9]+|-[0-9]+', arg):
+                continue
+            else:
+                raise ValueError('reader option')
+        elif options and counts and re.fullmatch(r'\+[0-9]+', arg):
+            raise ValueError('ambiguous legacy count')
+        else:
+            paths.append(arg)
+    return paths
+
+
 def path_errors(value, turn, write=False, listing=False):
     if not isinstance(value, str) or not value or re.search(r'[$`*?\[\]{}~\x00]', value):
+        return [OPAQUE]
+    # POSIX gives double-leading slashes implementation-defined meaning. Reject
+    # them before normalization can hide a descriptor or other path alias.
+    if value.startswith('//'):
         return [OPAQUE]
     parts = PurePosixPath(value).parts
     if '..' in parts:
@@ -144,7 +182,7 @@ def shell_errors(command, turn, depth=0):
     return shell_audit(command, turn, depth)[0]
 
 
-def shell_audit(command, turn, depth=0, stdin_paths=None):
+def shell_audit(command, turn, depth=0, stdin_paths=UNBOUND_STDIN):
     # None means opaque input; an empty set is proven literal/status output.
     # Only a pipe carries a producer's sources to the next command.
     if not isinstance(command, str) or not command.strip() or len(command) > 65536 or depth > 4:
@@ -178,7 +216,7 @@ def shell_audit(command, turn, depth=0, stdin_paths=None):
     return bad, shell_output
 
 
-def simple_audit(words, turn, depth, stdin_paths=None):
+def simple_audit(words, turn, depth, stdin_paths=UNBOUND_STDIN):
     head, *args = words
     name = PurePosixPath(head).name
     bad, operands = [], []
@@ -193,9 +231,10 @@ def simple_audit(words, turn, depth, stdin_paths=None):
                 if target not in ('1', '2'):
                     bad.append(OPAQUE)
             else:
-                bad += path_errors(target, turn, write=token != '<')
+                errors = path_errors(target, turn, write=token != '<')
+                bad += errors
                 if token == '<':
-                    stdin_paths = {target}
+                    stdin_paths = None if errors else {target}
                 else:
                     redirected_output = True
                 if token != '<' and target.endswith(('.py', '.sh')):
@@ -208,7 +247,12 @@ def simple_audit(words, turn, depth, stdin_paths=None):
             operands.append(token)
 
     def finish(errors=(), sources=None):
-        return bad + list(errors), None if redirected_output else sources
+        # We do not track written files across commands/turns. Refuse CSV-derived
+        # or unknown output writes before a later path can erase its provenance.
+        errors = list(errors)
+        if redirected_output and (sources is None or any(is_csv_path(p) for p in sources)):
+            errors.append(OPAQUE)
+        return bad + errors, None if redirected_output else sources
 
     if name == 'rm':
         return finish(['forbidden rm command'])
@@ -247,47 +291,54 @@ def simple_audit(words, turn, depth, stdin_paths=None):
                 any(p.startswith('-') or '=' in p for p in operands[1:])):
             return finish([OPAQUE])
         operands = operands[1:]
-    elif name in ('sort', 'uniq'):
-        flags = {'sort': {'-n', '-r', '-rn', '-nr', '--'}, 'uniq': {'-c', '--'}}[name]
-        if any(p.startswith('-') and p not in flags for p in operands):
-            return finish([OPAQUE])
-        operands = [p for p in operands if p not in flags]
-        # uniq's second operand is an output FILE, unlike sort's inputs.
-        if name == 'uniq' and len(operands) > 1:
-            return finish([OPAQUE])
-    elif name == 'sed':
-        # sed can execute shell commands and write files. Admit only print scripts.
-        scripts = [a for a in operands if not a.startswith('-')]
-        if (any(a not in ('-n', '-e', '--') for a in operands if a.startswith('-')) or
-                operands.count('-e') > 1 or not scripts or
-                any(a.startswith('-') for a in operands[operands.index(scripts[0])+1:]) or
-                not re.fullmatch(r'(?:\d+(?:,\d+|,\$)?|\$|/[^/\n]+/)p', scripts[0])):
-            return finish([OPAQUE])
-        operands = scripts[1:]
-    elif name in ('grep', 'rg'):
-        # No recursive/default directory scans or external pattern files.
-        flags = {'-n', '-c', '-F', '-E', '-i', '-v', '-h', '-H', '-l', '-o', '-q', '-s', '--',
-                 '--no-heading', '--line-number', '--count', '--fixed-strings', '--ignore-case'}
-        if any(a.startswith('-') and a not in flags and not re.fullmatch(r'-[ncFEivhHloqs]+', a) for a in operands):
-            return finish([OPAQUE])
-        operands = [a for a in operands if a not in flags and not re.fullmatch(r'-[ncFEivhHloqs]+', a)]
-        if not operands:
-            return finish([OPAQUE])
-        operands = operands[1:]  # literal pattern is data, not a path/program
-        if name == 'rg' and any(p != '-' and not PurePosixPath(p).suffix for p in operands):
-            bad.append(OPAQUE)  # rg recurses on directories, unlike plain grep.
     elif name not in READERS | {'mkdir', 'mv', 'cp', 'touch'}:
         return finish([OPAQUE])
     if name in READERS:
-        sources = {p for p in operands if not p.startswith('-') and not p.isdigit()}
-        if name != 'ls' and (not sources or '-' in operands):
-            if stdin_paths is None:
+        try:
+            if name in ('head', 'tail'):
+                operands = reader_operands(operands, flags={'-q', '-v', '--quiet', '--silent', '--verbose'}, counts=True)
+            elif name in ('sort', 'uniq'):
+                operands = reader_operands(operands, flags={
+                    'sort': {'-n', '-r', '-rn', '-nr'}, 'uniq': {'-c'}}[name])
+                # uniq's second operand is an output FILE, unlike sort's inputs.
+                if name == 'uniq' and len(operands) > 1:
+                    raise ValueError('uniq output')
+            elif name == 'sed':
+                # Only [-n] [-e] PRINT_SCRIPT [--] FILE...; no writes/code.
+                while operands[:1] == ['-n']:
+                    operands = operands[1:]
+                if operands[:1] == ['-e']:
+                    operands = operands[1:]
+                operands = reader_operands(operands)
+                if not operands or not re.fullmatch(r'(?:\d+(?:,\d+|,\$)?|\$|/[^/\n]+/)p', operands[0]):
+                    raise ValueError('sed script')
+                operands = operands[1:]
+            elif name in ('grep', 'rg'):
+                # No recursive/default directory scans or external pattern files.
+                operands = reader_operands(operands, short_flags='ncFEivhHloqs', flags={
+                    '--no-heading', '--line-number', '--count', '--fixed-strings', '--ignore-case'})
+                if not operands:
+                    raise ValueError('pattern')
+                operands = operands[1:]  # Literal pattern is data, not a path/program.
+                if name == 'rg' and any(p != '-' and not PurePosixPath(p).suffix for p in operands):
+                    bad.append(OPAQUE)  # rg recurses on directories, unlike plain grep.
+            elif name in ('cat', 'wc', 'ls'):
+                operands = reader_operands(operands, short_flags={
+                    'cat': 'AbEnstTv', 'wc': 'clmwL', 'ls': 'alhdtrS1'}[name])
+        except ValueError:
+            return finish([OPAQUE])
+        sources = {p for p in operands if p != '-'}
+        if name != 'ls' and (not sources or '-' in operands or stdin_paths is not UNBOUND_STDIN):
+            # Explicit files do not erase a known/opaque pipe. A validated input
+            # redirect has already replaced that pipe above. ls never reads stdin.
+            if stdin_paths is UNBOUND_STDIN or stdin_paths is None:
                 return finish([OPAQUE])
             sources |= stdin_paths
-        if name in ('grep', 'rg', 'sed', 'awk') and turn >= 7 and any(p.lower().endswith('.csv') for p in sources):
+        if name in ('grep', 'rg', 'sed', 'awk') and turn >= 7 and any(
+                is_csv_path(p) for p in sources):
             bad.append('unauditable CSV regex/split parsing')
         for path in operands:
-            if not path.startswith('-') and not path.isdigit():
+            if path != '-':
                 bad += path_errors(path, turn)
         return finish(sources=set() if name == 'ls' else sources)
     flags = {'mkdir': {'-p', '--'}, 'mv': {'--'}, 'cp': {'--'}, 'touch': {'--'}}
@@ -367,7 +418,7 @@ def tool_errors(call, turn, cwd=None, check_paths=None):
     path = args.get('path' if tool == 'grep' else 'file_path')
     write = tool in ('write', 'edit')
     bad = path_errors(path, turn, write)
-    if tool == 'grep' and turn >= 7 and isinstance(path, str) and path.endswith('.csv'):
+    if tool == 'grep' and turn >= 7 and is_csv_path(path):
         bad.append('unauditable CSV regex/split parsing')
     if write and isinstance(path, str) and path.endswith('.py'):
         source = args.get('content' if tool == 'write' else 'new_string', '')

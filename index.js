@@ -209,6 +209,17 @@ export function saveShadowImpl(
       });
 
       if (!rotation.ok) {
+        if (rotation.reason) {
+          const incomplete = rotation.reason === "scan-incomplete";
+          const error = Object.assign(new Error(incomplete
+            ? "spine: shadow capacity scan is incomplete; backup refused; leaving the span"
+            : "spine: shadow capacity measurement is invalid; backup refused; leaving the span"), {
+            code: incomplete ? "ESHADOWSCAN" : "ESHADOWMETER",
+          });
+          if (required) throw error;
+          this.ctx.logger?.warn?.(error.message);
+          return;
+        }
         this.warnShadowFull(warnKey, shadow, rotation.used, cap);
         if (required) {
           throw new Error(
@@ -644,12 +655,31 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   async commitSelectedSpan(agent, chunk, signal) {
     signal?.throwIfAborted();
     const session = agent.session;
-    const nodes = session.surface.nodes;
-    const startIdx = nodes.indexOf(chunk.start);
-    const endIdx = nodes.indexOf(chunk.end);
-    if (startIdx < 0 || endIdx < startIdx) throw new Error("spine: selected span is not on the surface");
     if (chunk.card?.ok !== true || !chunk.card.text) throw new Error("spine: approved card missing; leaving the span");
-    const shadowedSeqs = nodes.slice(startIdx, endIdx + 1);
+    const assertCurrentSpan = (expected) => {
+      const nodes = session.surface.nodes;
+      const start = nodes.indexOf(chunk.start);
+      const end = nodes.indexOf(chunk.end);
+      if (start < 0 || end < start) throw new Error("spine: selected span is not on the surface");
+      const selected = nodes.slice(start, end + 1);
+      if (expected && (selected.length !== expected.length || selected.some((seq, i) => seq !== expected[i]))) {
+        throw new Error("spine: selected span changed before commit");
+      }
+      const items = nodes.map(seq => ({
+        type: session.eventAt(seq)?.type === "user/message" ? "user" : "other",
+        ...classifyUserEvent(session, seq),
+        checkpoint: isCheckpoint(session, seq),
+      }));
+      const floor = items.findLastIndex(item => item.checkpoint);
+      if (start <= floor || !pointerSpanAllowed(items, start, end, this.engineFor(agent).engine)) {
+        throw new Error("spine: selected span violates checkpoint or user boundary");
+      }
+      if (!cutOk(toolPairingBalancedBefore, session, chunk.start) || !cutOk(toolPairingBalancedAfter, session, chunk.end)) {
+        throw new Error("spine: selected span violates tool pairing");
+      }
+      return selected;
+    };
+    const shadowedSeqs = assertCurrentSpan();
     const messages = [];
     for (const seq of shadowedSeqs) {
       const event = session.eventAt(seq);
@@ -666,6 +696,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
+    signal?.throwIfAborted();
+    assertCurrentSpan(shadowedSeqs);
     const compactionId = CompactionId(randomUUID());
     const checkpointMessage = createUserMessage({
       content: [

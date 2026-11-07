@@ -14,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Session } from "@deepseek-ai/dsh-session";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
   attachBackupHint,
   backupHint,
@@ -362,26 +364,22 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
 
   try {
     const appended = [];
-    const session = {
-      id: "p0-commit",
-      dir: conversationDir,
-      surface: { nodes: [41] },
-      eventAt(seq) {
-        assert.equal(seq, 41);
-        return {
-          type: "user/message",
-          data: { content: "必须保留当前任务上下文。" },
-        };
-      },
-      append(type, data, options) {
-        const event = { seq: 100 + appended.length, type, data, options };
-        appended.push(event);
-        return event;
-      },
+    const session = Session.create("p0-commit");
+    const older = session.append("user/message", createUserMessage({
+      content: [{ type: "text", text: "必须保留当前任务上下文。" }], source: { kind: "user" },
+    }), { surfaceOp: "append" }).seq;
+    const latest = session.append("user/message", createUserMessage({
+      content: [{ type: "text", text: "最新用户要求继续任务，留在切段之外。" }], source: { kind: "user" },
+    }), { surfaceOp: "append" }).seq;
+    const append = session.append.bind(session);
+    session.append = (type, data, options) => {
+      const event = append(type, data, options);
+      appended.push(event);
+      return event;
     };
     const chunk = {
-      start: 41,
-      end: 41,
+      start: older,
+      end: older,
       tokens: 20,
       card: attachBackupHint(
         buildCard("必须保留当前任务上下文。", "", [
@@ -393,6 +391,7 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
     assert.equal(chunk.card.ok, true);
     assert.equal(chunk.card.text.includes(backupFile), false);
     const engine = {
+      engineFor() { return { engine: "cloud", source: "fixture" }; },
       ctx: {
         tokenMeter: {
           estimateMessage() {
@@ -424,6 +423,8 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
     );
 
     const serialized = JSON.stringify(appended);
+    assert.ok(session.surface.nodes.includes(latest));
+    assert.equal(session.surface.nodes.includes(older), false);
     assert.equal(appended.some((event) => event.type === "user/message"), true);
     assert.equal(serialized.includes("不含路径的摘要。"), true);
     assert.equal(serialized.includes("Spine extract."), true);

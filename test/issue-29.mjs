@@ -68,6 +68,51 @@ function work(f, name = "after-card", tool = "read") {
   return pair;
 }
 
+for (const scenario of [
+  { name: "account fallback", engine: "cloud" },
+  { name: "explicit loopback", engine: "local", baseURL: LOCAL },
+  { name: "unknown notice metadata", engine: "cloud", unknown: true },
+]) {
+  test(`#29 combined restored account route and injected notices: ${scenario.name}`, async (t) => {
+    const h = routing(t);
+    const f = fixture({ totalTokens: 60000, long: { name: "shell", tokens: 30, text: "INFO prefix stays" } });
+    f.add("request/header", { header: { config: {
+      provider: ACCOUNT, model: "fixture-no-network", ...(scenario.baseURL ? { baseURL: scenario.baseURL } : {}),
+    } }, reason: "initial" }, 0, {});
+    const card = official(f);
+    f.lastUser = f.user("继续这项真实用户任务。");
+    const target = [];
+    for (let i = 0; i < 3; i++) {
+      if (i) target.push(f.add("user/message", createUserMessage({
+        source: { kind: "progress-rules", form: "notice", summary: "过程纪律：要求正文通报",
+          ...(scenario.unknown ? { unknown: true } : {}) },
+        content: [{ type: "text", text: "（过程纪律提醒）先通报，再继续任务。" }],
+      }), 80));
+      target.push(...f.round(`combined-${i}`, { tokens: 600, text: "INFO disposable heartbeat\n".repeat(250) }));
+    }
+    const kept = [];
+    for (let i = 0; i < 3; i++) kept.push(...f.round(`combined-tail-${i}`));
+    f.session = Session.create(f.session.id, JSON.parse(JSON.stringify(f.session.snapshotEvents())));
+    h.use(f);
+    h.capture(h.engine, f);
+    const agent = f.agent();
+    assert.equal(h.engine.engineFor(agent).engine, scenario.engine);
+    assert.ok(card < f.session.firstLiveSeq);
+    const before = hash(f);
+    await h.engine.finishTurn(agent);
+    if (scenario.unknown) {
+      assert.equal(hash(f), before);
+      assert.equal(f.summaries().length, 0);
+    } else {
+      assert.equal(f.summaries().length, 1, h.warnings.join("\n"));
+      assert.deepEqual(f.summaries()[0].data.shadowedSeqs, target);
+      assert.ok(f.session.surface.nodes.includes(card));
+      for (const seq of kept) assert.ok(f.session.surface.nodes.includes(seq));
+    }
+    assert.equal(h.modelCalls, 0);
+  });
+}
+
 test("#29 exact account no-address fallback; near names and existing public providers keep their behavior", (t) => {
   const h = routing(t);
   assert.deepEqual(h.engine.engineFor(h.agent), { engine: "cloud", source: "provider" });
