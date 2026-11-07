@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
 """Generate the long-task fixtures. Same turn map as the 1.0.8 fill."""
-import json
 from pathlib import Path
-
-FILL = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27]
-NOTICE = {
-    4: "NOTICE cache layer pinned to sqlite",
-    11: "NOTICE reviewer queue flushed Okafor",
-    20: "NOTICE edge cache purged keys=1207",
-}
-HIDDEN = {
-    2: "INFO hidden shard expected 9f2c71ab",
-    6: "INFO hidden ratelimit 37 per minute",
-    9: "INFO hidden alert threshold 0.875",
-    13: "INFO hidden batch_size 250",
-    17: "INFO hidden region eu-west-3",
-    22: "INFO hidden ticket LED-4471",
-}
+import tempfile
+from contract import FILL, NOTICE, HIDDEN, sha
 
 def build_log(turn):
     warns = 3 + (turn % 9)
@@ -32,7 +18,7 @@ def build_log(turn):
     return "\n".join(lines) + "\n", warns
 
 def write_workspace(root: Path):
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=False)
     (root / "trash").mkdir(exist_ok=True)
     (root / "vendor").mkdir(exist_ok=True)
     (root / "conf").mkdir(exist_ok=True)
@@ -45,18 +31,19 @@ def write_workspace(root: Path):
         "#!/bin/sh\necho 'E1729 shard 0x3F (expected 9f2c71ab, got 9f2c71ae)' >&2\nexit 3\n"
     )
     (root / "check.sh").chmod(0o755)
-    truth = {}
-    for turn in FILL:
+    # Turn 13's frozen update says batch_size=250. The old generator's HIDDEN[13]
+    # was unreachable: add only this missing log, preserving all original bytes.
+    for turn in sorted(set(FILL) | set(HIDDEN)):
         text, warns = build_log(turn)
         (root / f"part{turn}.log").write_text(text)
-        truth[str(turn)] = {
-            "warns": warns,
-            "notice": NOTICE.get(turn),
-            "hidden": HIDDEN.get(turn),
-        }
-    (root / "truth.json").write_text(json.dumps(truth, indent=2))
-    return truth
+    return {str(p.relative_to(root)): sha(p.read_bytes())
+            for p in root.rglob("*") if p.is_file()}
 
 if __name__ == "__main__":
     import sys
     write_workspace(Path(sys.argv[1]))
+
+
+def expected_inventory():
+    with tempfile.TemporaryDirectory(prefix="live-fill-fixtures-") as tmp:
+        return write_workspace(Path(tmp) / "work")

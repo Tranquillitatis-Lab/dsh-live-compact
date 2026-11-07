@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import test from "node:test";
 import Spine from "../index.js";
+import { windowsAclCall } from "./helpers/windows-acl.mjs";
 import {
   defaultShadowAccessRunner,
   ensureShadowDir,
@@ -21,21 +22,17 @@ const ENV = { SystemRoot: "D:\\WinX" };
 function tools(env = ENV) {
   return {
     whoami: win32Tool("whoami.exe", env),
-    icacls: win32Tool("icacls.exe", env),
+    powershell: win32Tool("WindowsPowerShell\\v1.0\\powershell.exe", env),
   };
 }
 
 function fakeExec(calls, env = ENV) {
-  const { whoami, icacls } = tools(env);
-  return (file, args) => {
-    calls.push({ file, args: [...args] });
+  const { whoami } = tools(env);
+  return (file, args, options) => {
+    calls.push({ file, args: [...args], options });
     if (file === whoami) return `"DESKTOP-P0","${SID}"`;
-    assert.equal(file, icacls);
-    assert.equal(args.includes("/restore"), false);
-    if (args[0] && String(args.at(-2) || "").includes("(OI)(CI)") === false) {
-      assert.equal(args.some((arg) => String(arg).includes("(OI)") || String(arg).includes("(CI)")), false);
-    }
-    return "";
+    windowsAclCall(file, args, options, env, SID);
+    return "DSH_SHADOW_ACL_OK";
   };
 }
 
@@ -87,39 +84,30 @@ test("a locked directory is granted once and later files do not spawn", () => {
     writeFileSync(join(dir, "already.txt"), "old");
     writeShadowFile(join(dir, "already.txt"), "new", access);
     assert.equal(calls.filter((call) => call.file === tools().whoami).length, 1);
-    assert.equal(calls.filter((call) => call.file === tools().icacls).length, 1);
-    assert.equal(calls[1].args.includes("/inheritance:r"), true);
-    assert.equal(calls[1].args.some((arg) => String(arg).includes("(OI)(CI)F")), true);
-    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith(":F") && String(arg).includes("(OI)"))), false);
+    assert.equal(calls.filter((call) => call.file === tools().powershell).length, 1);
+    assert.equal(calls[1].options.env.DSH_SHADOW_ACL_KIND, "dir");
   } finally {
     rmSync(root, { recursive: true, force: true });
     resetShadowAccessState();
   }
 });
 
-test("a file grant has no inheritance flags", () => {
+test("a file DACL is requested separately with no inherited ACEs", () => {
   resetShadowAccessState();
   const calls = [];
-  defaultShadowAccessRunner({
-    path: join(tmpdir(), "spine-20-file.txt"),
-    kind: "file",
-    platform: "win32",
-    env: ENV,
-    execFile(file, args) {
-      calls.push({ file, args: [...args] });
-      if (file === tools().whoami) return `"DESKTOP-P0","${SID}"`;
-      return "";
-    },
-  });
-  const grants = calls[1].args.slice(3);
-  assert.equal(grants.length, 3);
-  for (const grant of grants) {
-    assert.equal(grant.endsWith(":F"), true);
-    assert.equal(grant.includes("(OI)"), false);
-    assert.equal(grant.includes("(CI)"), false);
+  const dir = mkdtempSync(join(tmpdir(), "spine-20-file-"));
+  const file = join(dir, "backup.txt");
+  try {
+    writeFileSync(file, "");
+    defaultShadowAccessRunner({ path: file, kind: "file", platform: "win32", env: ENV, execFile: fakeExec(calls) });
+    assert.equal(calls[1].options.env.DSH_SHADOW_ACL_KIND, "file");
+    const script = Buffer.from(calls[1].args[4], "base64").toString("utf16le");
+    assert.match(script, /\$inheritance = \[Security.AccessControl.InheritanceFlags\]::None/);
+    assert.match(script, /if \(\$kind -eq 'dir'\) \{[\s\S]*?ContainerInherit/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    resetShadowAccessState();
   }
-  assert.equal(calls[1].args.includes("/restore"), false);
-  resetShadowAccessState();
 });
 
 test("a stale persisted cursor does not recapture the whole log", () => {
@@ -182,7 +170,7 @@ test("replaying many tool results spawns once, not once per result", () => {
       assert.equal(record.ok, true);
     }
     assert.equal(calls.filter((call) => call.file === tools().whoami).length, 1);
-    assert.equal(calls.filter((call) => call.file === tools().icacls).length, 2);
+    assert.equal(calls.filter((call) => call.file === tools().powershell).length, 2);
   } finally {
     if (previous == null) delete process.env.SPINE_SHADOW_DIR;
     else process.env.SPINE_SHADOW_DIR = previous;

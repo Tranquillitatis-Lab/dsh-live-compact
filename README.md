@@ -1,31 +1,26 @@
 # 边做边压 Live Compact
 
-Live Compact 就是边做边压。活着的时候就压，不等窗口堆满。
+一段对话做久了，读过的日志、跑过的命令和工具输出会越积越多。Live Compact 会在每轮结束时检查，能安全收短的长输出就整理一下。这一步在本机做，无需再请求模型。只替换选中的一段，切点前面的内容保持原样。整理前会备份原文，备份失败就保留原来的内容。
 
-DSH 把压缩写死在大约 80%。不到这条线，上下文一直堆。到了才调一次模型，十几秒，还要计费。压完注意力会飘。更麻烦的是，压完没多久又满了。1M 的窗口根本不够用，再压一次更慢。
+## 云端和本地怎么用
 
-为什么非要等到 80%？边做边压不行吗？
+- **用 DeepSeek、GLM 这类云端 API**，按下面的命令安装即可。先看答案是否正确，再一起看缓存命中、未命中输入和实际费用。命中率的百分比不是费用本身，输入变少时要连同 token 数一起比较。
+- **用本机或内网跑的模型**，同样按下面的命令安装。优先看答案对不对、当前上下文有没有降低、实际少了多少 token。界面显示「上下文 2 万多」是还留着的内容量，不是没有压缩。本地缓存复用也会尽量改善，但不套云端计费缓存的固定命中率门槛；同一任务前后还可以比较复用量和预填充耗时。
 
-## 云端和端侧
+默认到 2 万 token，插件才开始检查有没有合适的内容可以压缩。实际会不会压缩，还要看这轮读进了什么、下一轮可能有多长。上下文接近窗口上限时，DSH 仍可调用模型做一次大摘要。
 
-云端（公网地址，如 DeepSeek、GLM）：装上即可。不要设置 `SPINE_THUNDER`。看题对不对，以及缓存命中。切点前面的原文不动。
-
-端侧（本机、内网、27B）：也可以装。不要设置 `SPINE_THUNDER`。不要拿云端缓存命中来要求它。看题对不对，以及切掉多少 token。本地服务没有云端那种前缀缓存，每次提问都会把当前上下文重新预填充。两万多是当前上下文的大小，不是插件没切。
-
-`SPINE_THUNDER` 默认关闭。只有设为 `1` 才走雷霆。再设 `SPINE_THUNDER_MODEL=27b` 时，前缀超过 8 万会每次都少发，一次雷霆变成次次雷霆。端侧不要开。
-
-超过 2 万 token 就切一刀。切的是刚结束的这一轮，不调用模型。切点前面的原文不动，缓存命中还是原来的水准。上下文因此一直被按在较低的位置。雷霆大压缩能拖就拖，拖到尽可能后面。就算哪天满了、真的触发了，掉下来之后小切还在，不会很快又堆回去。
+平常用默认设置就够了。`SPINE_THUNDER` 是实验性的模型摘要模式，默认关闭。需要试用时才设为 `1`。本机或内网模型建议保持关闭。
 
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.1
+dsh plugin --profile headless add dsh-live-compact@1.1.2
 ```
 
-网页和桌面端（共用 web profile，装一次两边都生效）：
+网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.1
+dsh plugin --profile web add dsh-live-compact@1.1.2
 ```
 
 想先装到本机看版本：
@@ -35,10 +30,32 @@ npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
 
+## 1.1.2
+
+- 常用压缩参数可以在 DSH 插件设置里改，保留原有环境变量用法。
+- 专用备份目录确认只有一个插件进程使用时，低于用量水线可以跳过全目录扫描；完整校准满 60 秒后，下次轮转会重新扫描。默认目录和共享目录继续按原规则检查、清理。
+- 扫描不完整或计量不合法时拒绝本次备份。无法确认其他会话已经退出时，不删除它的正文。
+- 提交小切前重新检查 checkpoint、用户边界和工具配对；等待期间出现的新消息也会重新检查。
+- 账号模式没有显式地址、恢复旧官方卡片和精确的过程通知可以组合工作；真实用户消息与未知通知仍保留边界。
+- 重启后会核验已有备份和游标，再从最近的工作位置继续。
+- Windows 会重新设置备份访问权限，失败时停止写备份并保留原工具输出。
+
+### Windows 备份权限
+
+Windows 双用户实测（Actions run `42367713007`，Windows 11 Enterprise ARM / Server 2022 x64）确认：1.1.1 的 `/inheritance:r /grant:r` 会留下其他主体的显式 ACE，第二个普通用户仍能读取备份。1.1.2 改为完整替换 DACL。本次运行时代码修改后，最终候选仍须重新完成原生 Windows 与 Desktop 验收，结果随最终候选记录。
+
+权限写入改为固定的 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`（Windows PowerShell 5.1 / .NET Framework），使用 `-NoProfile -NonInteractive -EncodedCommand`。脚本固定内嵌在已打包的 `shadow.js`，路径、SID、文件类型通过子进程环境传递，不拼进脚本。当前用户 SID 仍由固定 System32 `whoami.exe` 每进程获取一次，脚本再对照自身 Windows 身份。新建受保护的 DACL，只允许当前用户、SYSTEM、Administrators 完全控制；目录 ACE 带 OI/CI，直接修正的文件 ACE 不带继承标志。只修改 DACL，不提权，不改 owner、group 或 SACL，不使用临时宽松 ACL。写后读取实际 DACL，核验保护位、完整 ACE 数量、SID、Allow、权限及继承标志，收到确认才缓存。工具失败、超时、SID 非法或读回不符都会熔断本进程后续备份，不回退到 chmod。
+
+目录缓存核对规范路径、设备/文件编号及创建时间；替换目录或改指向的已知别名会拒绝后续备份。经确认目录内以 `wx` 新建的空文件，核对已打开句柄与路径指向同一文件后，使用继承的 allowlist，不逐文件启动子进程，写入正文前完成检查。既有文件不能只凭父目录缓存获得信任：仅在本进程已确认同一文件身份时复用缓存，否则对被请求的文件单独替换 DACL。拒绝文件符号链接、非普通文件及多硬链接文件。不扫描或批量修复历史备份；捕获/恢复所请求的旧 raw、meta、cursor 文件在使用时修正。未触及的旧文件（包括直接外部读取或 shadow-search 读取的旧文件）不保证已修复，也无法撤回此前泄露的数据。不要把 shadow 指向混有其他文件的目录。
+
+缓存信任同一用户和管理员不在进程运行期间原地改写 ACL；元数据核对不能发现同一文件上的 ACL 原地变更，也不能消除同用户/管理员并发改路径的全部竞态。SystemRoot/windir 必须指向可信 Windows 安装；文件系统须提供稳定文件身份并支持 Windows DACL，工具缺失或策略禁止运行时拒绝备份。Unix 仍使用目录 0700 / 文件 0600。切点、token/cap 策略、#27 根目录协调与重启口径不变。
+
+离线门禁用 `npm run test:gate`。其中 Windows 权限测试用注入的文件系统和命令验证失败分支。真实权限另用两个 Windows 普通账户验证，分别检查写入、可读的对照文件和备份的读取结果。评分器的离线测试用 `npm run test:live-gate`。
+
 ## 1.1.1
 
 1. Windows 上取 SID 和写权限不再走 PATH。固定调用 `%SystemRoot%\System32` 下的 `whoami.exe` 和 `icacls.exe`。环境变量不是盘符绝对路径时，这次备份直接跳过，不退回裸命令名。
-2. 不再使用需要还原特权的 `icacls /restore`。目录用 `/inheritance:r /grant:r`，给当前用户、SYSTEM、Administrators 三条可继承的完全控制。文件只用 `F`，不带 `(OI)(CI)`。已收紧目录里的文件不再逐条跑 `icacls`。当前用户 SID 和目录权限每个进程只做一次。
+2. 当时用 `/inheritance:r /grant:r` 替代 `icacls /restore`；后续双用户实测确认它保留其他显式 ACE，不能实现完整 allowlist。修正及验证限制见上面的 1.1.2 候选说明。
 3. 权限失败不再把宿主打退出。这次备份不落盘，不退回 `chmod`，只提示一次。压缩照常进行。
 4. 进程重启后补抓工具结果，只补最近 3 轮。已经记下的位置还在，就从那里接着记。记下的位置比当前日志还大，按重启口径补最近 3 轮，不从 0 把整份日志再扫一遍。
 5. 一轮里有不少于 1000 token 的 `read`，这一刀只切这一轮，不把要留的后 3 轮短结果一起卷进去。这一轮里单个工具结果达到 3.2 万，只留指针。这一轮切不下来，才按原来的规则切更早的轮。
@@ -57,11 +74,11 @@ dsh-live-compact --version
 
 这轮连的是插件版。10 组同一套 31 轮填日志，组内串行，两个模型同时开。原版 DSH 压缩对比留到 1.1.2。Coder 390 27B 这轮没跑，后补。测评图在下面，也在 [v1.1.1](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.1)。
 
-云端看题对不对，以及每轮第一个 `step_end` 的缓存命中。这个命中是这些首步的 `cacheRead / (cacheRead + input)` 加总。切掉的 token 是 `spine-cuts.jsonl` 里 `saved` 的合计。含切刀的轮是这些轮的墙钟合计，刀本身是毫秒。任务墙钟从第 1 轮文件生成算到第 31 轮写完。结束上下文是最后一轮的 `totalTokens`，已经包含前面各轮，不是每轮增量。
+看图时，先看日志题答对多少，再看首步缓存和压缩节省。首步缓存取每轮第一个 `step_end`，把命中 token 加起来，再除以这些请求的总输入 token。压缩节省是 `spine-cuts.jsonl` 里 `saved` 的合计。压缩轮次耗时是发生压缩的各轮总耗时之和，压缩操作本身为毫秒级。任务墙钟是从第 1 轮开始到第 31 轮结束的实际用时。结束上下文取最后一轮的 `totalTokens`，包含此前保留下来的内容。
 
-DS V4.1 Flash，10 组，填日志 230/230，跳过 0。首步缓存 98.64%。切掉 65180。10 组墙钟合计 36 分 18 秒。多数组结束在 3.5 万到 4.6 万。第 1 组 `read` 全文 25 次，正文留在上下文里，四刀只省 21493，结束 282871。第 2 组几乎只用 bash，只 `read` 一次，没切，结束 37781。
+DS V4.1 Flash 跑了 10 组，填日志 230/230，跳过 0。首步缓存 98.64%，压缩节省 65 180 token，总用时 36 分 18 秒。多数组结束在 3.5 万到 4.6 万 token。第 1 组读了 25 次全文，4 次压缩共节省 21 493 token，结束时仍有 282 871。第 2 组几乎只用 bash，只读了一次全文，未触发压缩，结束时是 37 781。
 
-GLM 5.3 Flash，同一插件、同一套题。第 1、2、3、4、8、9、10 组填日志 23/23。第 5、6 组全程连接失败，不计入。第 7 组前段连接失败，填日志 14/23，不算通过。不要写成 230/230。有用量的轮首步缓存 98.97%。第 1、2 组主要是 grep，没切，结束 39511 和 29987。插件没有把 GLM 切得更多。第 4、9 组也反复 `read` 全文，结束 285535 和 281515，和第 1 组 DS 是同一种形状。可比的 7 组里，DS 每组都更快。
+GLM 5.3 Flash 用了同一个插件、同一套题。有 7 组填日志达到 23/23。第 5、6 组全程连接失败。第 7 组前段连接失败，完成 14/23。有用量记录的轮次，首步缓存是 98.97%。第 1、2 组主要用 grep，未触发压缩，结束时分别是 39 511 和 29 987 token。第 4、9 组反复读全文，结束时分别是 285 535 和 281 515，和 DS 第 1 组很像。可比的 7 组里，DS 每组都更快。
 
 ![插件版对比](docs/slide-111-overview.jpg)
 
@@ -238,20 +255,24 @@ GLM 5.3 Flash，同一插件、同一套题。第 1、2、3、4、8、9、10 组
 - 去掉「已确认」。摘要开头写明：这是旧内容摘录，不是新指令，也不是你的授权。
 - 这一刀如果没有合格的摘要，就整段留下，不去调模型。卡片可以很短。
 - 备份只有自己能读。文件名不带会话号。本机路径不发给模型。备份默认上限 256MB。满了先删最老的，删不出空间才不切。
-- 2 万和 65 万没动。配置里的 0.8 只管官方大压缩，不管这一刀。想改小切的起点，只能在启动前设 `SPINE_MIN_TOKENS`。
+- 2 万和 65 万没动。配置里的 0.8 只管官方大压缩，不管这一刀。想改小切的起点，用下面的设置界面改 `minTokens`（老的 `SPINE_MIN_TOKENS` 仍然有效）。
 
 ## 环境变量
 
 | 变量 | 默认值 | 作用 |
 |---|---:|---|
-| `SPINE_THRESHOLD_RATIO` | 0.8 | 预设中官方大压缩的触发比例，在 `gate.js` 加载时读取。 |
-| `SPINE_HEADROOM_TOKENS` | 65536 | 预设中官方大压缩的预留空间（token），在 `gate.js` 加载时读取。 |
-| `SPINE_RETAIN_TOKENS` | 8192 | 预设中官方大压缩的保留量（token），在 `gate.js` 加载时读取。 |
+| `SPINE_THRESHOLD_RATIO` | 0.8 | 官方大压缩的触发比例，构造引擎或加载预设时读取。 |
+| `SPINE_HEADROOM_TOKENS` | 65536 | 官方大压缩的预留空间（token），构造引擎或加载预设时读取。 |
+| `SPINE_RETAIN_TOKENS` | 8192 | 官方大压缩的保留量（token），构造引擎或加载预设时读取；显式 `retainRatio` 优先。 |
 | `SPINE_POINTER_TOKENS` | `SPINE_CHUNK_MAX`（默认 32000） | 单个工具结果超过此 token 数才只留指针。 |
 | `SPINE_MIN_TOKENS` | 20000 | 轮后小切的最低上下文 token 数。 |
-| `SPINE_KEEP_ROUNDS` | 3 | 原处保留的最近已结束工具轮数。 |
+| `SPINE_KEEP_ROUNDS` | 3 | 原处保留的最近已结束工具轮数，至少 1 轮；旧非法值回退。 |
 | `SPINE_KEEP_ROUND_TOKENS` | 32000 | 云端收尾的停止线；最近 3 个已结束工具轮始终留在原文。 |
+| `SPINE_CHUNK_MIN` | 1000 | 一刀至少包含的 token 数。 |
+| `SPINE_CHUNK_MAX` | 32000（`RAIL_TOKENS`） | 一刀最多包含的 token 数，也是指针阈值的默认值。 |
+| `SPINE_COOLDOWN_MS` | 0 | 官方压缩后的额外时间窗口；仅正数开启，未设置、空串、非数字、0 或负数均关闭。 |
 | `SPINE_SHADOW_DIR` | `~/.dsh/compaction-spine/shadow` | 备份目录；设了 `DSH_HOME` 时以它替代 `~/.dsh`。 |
+| `SPINE_SHADOW_SINGLE_PROCESS` | 关闭 | 仅 `1` 开启专用目录契约；必须另设专用 `SPINE_SHADOW_DIR`，详见下文。 |
 | `SPINE_SHADOW_MAX_BYTES` | 268435456 | 正数直接作为备份字节上限，优先于 `SPINE_SHADOW_MAX_MB`。 |
 | `SPINE_SHADOW_MAX_MB` | 256 | 未设置正数字节上限时，按 MB 设置备份上限。 |
 | `SPINE_ENGINE` | 自动识别 | 设为 `cloud` 或 `local` 可强制切法，其他值忽略。 |
@@ -259,9 +280,12 @@ GLM 5.3 Flash，同一插件、同一套题。第 1、2、3、4、8、9、10 组
 | `SPINE_THUNDER_MODEL` | `flash` | 设为 `27b` 且前缀超过 8 万时，每次官方压缩都少发。端侧不要设。 |
 | `SPINE_ENGINE_FAIL` | 无 | **仅供测试**：用 `import`、`construct`、`after-super` 注入引擎故障。 |
 | `SPINE_STOCK_FAIL` | 无 | **仅供测试**：设为 `1` 时禁止回退原版引擎。 |
-| `SPINE_CHUNK_MIN` | 1000 | 一刀至少包含的 token 数。 |
-| `SPINE_CHUNK_MAX` | 32000（`RAIL_TOKENS`） | 一刀最多包含的 token 数，也是指针阈值的默认值。 |
-| `SPINE_COOLDOWN_MS` | 0 | 官方压缩后的额外时间窗口；仅正数开启，未设置、空串、非数字、0 或负数均关闭。 |
+
+设置界面中的数值留空或重置会清除显式覆盖。优先级是：**显式配置 > 有效环境变量 > 默认值**；空串、纯空白和非数字环境变量视为未配置，显式 `0` 仍对允许零值的字段有效。未配置字段可显示为空，旁边的说明列出默认值。
+
+插件小切参数在每次轮后维护开始时取得本引擎的一致快照，保存后下一次维护生效，多个引擎互不覆盖。官方大压缩参数沿用宿主的构造时快照，保存后需要重建引擎或会话。宿主支持的 `retainRatio`、`maxTokens`、摘要模型路由、`modelPolicies`、溢出重试等配置继续由宿主校验并保留；`retainRatio` 与 `retainTokens` 互斥。
+
+接管开关只影响未来加载的官方预设。新预设按 **预设引擎显式配置 > 根插件显式配置 > 有效环境变量 > 默认值** 取值；已有预设保留加载时的数值，根设置后续修改需要重新加载预设。原生客户端 slot、资源声明和安装方式沿用现有接口。
 
 每个新的 `compact-checkpoint` 只让轮后小切跳过一次，`spine-checkpoint` 不触发这个跳过。
 
@@ -272,8 +296,8 @@ GLM 5.3 Flash，同一插件、同一套题。第 1、2、3、4、8、9、10 组
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.1
-dsh plugin --profile web add dsh-live-compact@1.1.1
+dsh plugin --profile headless add dsh-live-compact@1.1.2
+dsh plugin --profile web add dsh-live-compact@1.1.2
 ```
 
 想先装到本机看版本：
@@ -283,7 +307,7 @@ npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
 
-备用：上不了 npm 的，用国内镜像站的包。1.0.2 到 1.1.0 的旧链接仍在。
+旧版 1.1.1 的国内镜像安装命令：
 
 ```sh
 dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.1.tgz
@@ -296,7 +320,7 @@ dsh-live-compact --version
 
 DSH-TUI 同样换不掉预设里的原版压缩，先不要装。
 
-被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`，只有自己能读。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。
+被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`。Unix 权限为目录 0700 / 文件 0600；Windows 新建/修正后的备份允许当前用户、SYSTEM、Administrators，历史文件及缓存限制见上面的 ACL 说明。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。
 
 `dsh-live-compact stats` 的 `saved` 是切完当下少掉的 token，`rewrite` 是同一次收尾实际要重写的尾巴，只记一次。同一步连切不会按刀数把尾巴乘上去。这两个数口径不同，比值不是盈亏。桌面端没有终端，`rg "spine cut"` 只在终端输出里找得到。逐刀明细在 shadow 目录的 `spine-cuts.jsonl`。
 
@@ -313,5 +337,19 @@ rm -f ~/.dsh/compaction-spine/shadow/*/*.txt ~/.dsh/compaction-spine/shadow/*.tx
 ```
 
 设了 `DSH_HOME` 或 `SPINE_SHADOW_DIR` 时，目录在那边。删不掉旧文件时，这一刀不切，同一次会话只警告一次。
+
+默认目录（包括 `DSH_HOME` 下的目录）和未声明独占的目录，每次仍执行完整轮换扫描，可继续与旧版 writer 共用。仅设置 `SPINE_SHADOW_DIR` 不开启估算。需要减少扫描时，可将它指向一个**专用本地目录**，并另设 `SPINE_SHADOW_SINGLE_PROCESS=1`；即使显式指定默认目录，也不会开启。这个声明要求整个目录只由本进程的这一份插件使用，不能与旧版、不遵守协调协议的 writer、外部修改目录树或正文的程序共用。自定义代码调用底层备份函数时，必须传入同一 `root`，不能把会话子目录当根。无法满足契约时保持默认设置。
+
+专用根首次完整扫描后，只有目录身份、容量和所有权不变、预计用量严格低于 80%，且完整校准还不到 60 秒时，才省去正文遍历。60 秒到期后，在下一次同步轮转时重新扫描；没有后台定时清理。快返回和写入都不会延长有效期。时钟异常或回退也改走全扫。扫描不完整或计量不合法时拒绝本次需要容量准入的备份，保留原内容，不用漏算后的数字放行。
+
+正常锁路径下，所有普通 raw/cut/official 写入先在根目录取得原子锁并检查协作标记；cut/official 的容量检查和正文写入也在同一临界区。按 UTF-8 或 Buffer 的实际正文长度保守计账，覆盖写和失败清理不随意扣回，完整扫描后再校正。raw 沿用原来的捕获规则，写入本身不触发容量轮转；连续 raw 写入可能先超过限额，由下一次轮转处理。容量沿用正文口径，不含伴随 meta、owner、统计或锁文件，不是整个目录的物理占用硬配额。超大备份例外和删除顺序、引用保护不变；其他会话进程只有明确已死亡才按原规则清理，权限不足或 owner 状态不明时保守保留。共享目录仍可能有同步扫描停顿。
+
+`.spine-rotation.owner` 保存随机生命周期标识，第二个参与进程、worker 或插件副本（含路径别名）会先创建 `.spine-rotation.shared`，再写正文；之后此根一直退回完整扫描，另一进程退出也不自动恢复估算。该标记只检测协作方，不能发现旧版或外部 writer。锁由同目录临时文件完整写入、刷盘并关闭后，通过原子硬链接发布为 `.spine-rotation.lock`，包含持有者 PID 和每次事务唯一的随机标识。发布成功后的临时名称清理失败不会丢失锁的精确所有权，也不会阻断后续备份；可能残留不参与轮换的临时名称。
+
+仅当硬链接操作本身返回 `ENOTSUP`、`EOPNOTSUPP` 或 `ENOSYS` 时，先刷盘 shared 围栏，再确认没有先前的活跃或潜在独占事务，才允许原来的完整轮换和 raw/cut/official/游标写入；此根不再启用独占估算。正文写入前继续核验围栏和锁状态。`EPERM`、`EACCES`、`EIO`、`EXDEV`、`EINVAL` 等不明确错误，以及其他步骤返回的 unsupported 错误，都拒绝本次备份。该回退沿用旧共享并发语义，不提供独占容量保证。
+
+活跃锁、PID 已复用、旧版空目录锁、记录损坏或无法确认死亡时，本次备份被拒绝，原文保留；不按锁龄抢占，`EPERM` 和未知错误也不代表死亡。只有 `process.kill(pid, 0)` 明确返回 `ESRCH`，才先持久化 shared 标记、清除估算，并将该锁的完整身份原子记录到 `.spine-rotation.recovered`；硬链接不支持时以 `.spine-rotation.recovered-<pid>-<事务标识>` 空文件的完整名称记录并刷盘，避免半写 JSON。原锁始终保留作围栏，不删除、不替换；之后所有协作实例对这个已确认死亡的身份均走原来的完整轮换和正文写入，PID 后来复用也不改变该身份已经死亡的事实。恢复后共享操作沿用原来的并发语义，不再提供独占容量临界区。标记文件均刷盘，POSIX 另刷目录；Windows 的 Node 接口不能刷目录句柄，不承诺突然断电后的目录项持久性。
+
+正常重启没有遗留锁时，旧 owner 仍触发共享回退，不自动替换或继承旧估算。重新启用独占估算应选新专用目录，或仅在所有使用者停止后清除 `.spine-rotation.lock`、`.spine-rotation.owner`、`.spine-rotation.shared`、`.spine-rotation.recovered` 及该根的事务专属 recovered 空文件。旧版空锁等不明确的记录也只能在确认全部使用者停止后人工处理。与不遵守协议的旧版 writer 共用时，仍不得声明专用目录契约。
 
 MIT，见 `LICENSE`。

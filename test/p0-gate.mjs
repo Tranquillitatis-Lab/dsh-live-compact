@@ -6,12 +6,16 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Session } from "@deepseek-ai/dsh-session";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
   attachBackupHint,
   backupHint,
@@ -37,6 +41,9 @@ import {
   win32Tool,
   writeShadowOwner,
 } from "../shadow.js";
+import { windowsAclCall } from "./helpers/windows-acl.mjs";
+import { DEFAULTS, readSettings } from "../settings.js";
+import shellEntry from "../shell.js";
 
 const failures = [];
 
@@ -179,68 +186,53 @@ check("p0-2 out-of-cut tool is ignored", () => {
 check("p0-1 windows plan replaces the complete protected DACL", () => {
   const sid = "S-1-5-21-100-200-300-1001";
   const plan = shadowAccessPlan("win32", sid);
-
   assert.equal(plan.kind, "acl");
   assert.equal(plan.usesChmodOnly, false);
-  assert.equal(plan.inheritance, "remove");
-
-  assert.deepEqual(plan.grant, [
-    `*${sid}:(OI)(CI)F`,
-    "*S-1-5-18:(OI)(CI)F",
-    "*S-1-5-32-544:(OI)(CI)F",
-  ]);
-
-  assert.deepEqual(shadowAccessPlan("win32", sid, "file").grant, [
-    `*${sid}:F`,
-    "*S-1-5-18:F",
-    "*S-1-5-32-544:F",
-  ]);
+  assert.equal(plan.replace, true);
+  assert.equal(plan.protected, true);
+  assert.equal(plan.rights, "FullControl");
+  assert.deepEqual(plan.allow, [sid, "S-1-5-18", "S-1-5-32-544"]);
+  assert.deepEqual(plan.inheritance, ["ObjectInherit", "ContainerInherit"]);
+  assert.deepEqual(shadowAccessPlan("win32", sid, "file").inheritance, []);
 });
 
-check("p0-1 windows default runner applies the restrictive ACL", () => {
+check("p0-1 windows default runner replaces and verifies the protected DACL", () => {
   const sid = "S-1-5-21-100-200-300-1001";
-  const target = join(tmpdir(), "spine-p0-windows", "session");
+  const root = mkdtempSync(join(tmpdir(), "spine-p0-windows-"));
   const env = { SystemRoot: "D:\\WinX" };
   const whoami = win32Tool("whoami.exe", env);
-  const icacls = win32Tool("icacls.exe", env);
-
-  for (const kind of ["dir", "file"]) {
+  try {
+    for (const kind of ["dir", "file"]) {
+      const target = join(root, kind);
+      if (kind === "dir") mkdirSync(target);
+      else writeFileSync(target, "");
+      resetShadowAccessState();
+      const calls = [];
+      const execFile = (file, args, options) => {
+        calls.push({ file, args: [...args] });
+        if (file === whoami) return `"DESKTOP-P0","${sid}"`;
+        const action = windowsAclCall(file, args, options, env, sid);
+        assert.equal(action.path, realpathSync.native(target));
+        assert.equal(action.kind, kind);
+        return "DSH_SHADOW_ACL_OK";
+      };
+      assert.equal(defaultShadowAccessRunner({ path: target, kind, platform: "win32", execFile, env }), true);
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0].file, whoami);
+      assert.deepEqual(calls[0].args, ["/user", "/fo", "csv", "/nh"]);
+      assert.equal(calls.some((call) => String(call.file).includes("C:\\Windows")), false);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
     resetShadowAccessState();
-    const calls = [];
-    const execFile = (file, args) => {
-      calls.push({ file, args: [...args] });
-      if (file === whoami) return `"DESKTOP-P0","${sid}"`;
-      assert.equal(file, icacls);
-      return "";
-    };
-
-    assert.equal(defaultShadowAccessRunner({
-      path: target,
-      kind,
-      platform: "win32",
-      execFile,
-      env,
-    }), true);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0].file, whoami);
-    assert.deepEqual(calls[0].args, ["/user", "/fo", "csv", "/nh"]);
-    assert.equal(calls[1].file, icacls);
-    assert.equal(calls[1].args.includes("/restore"), false);
-    assert.deepEqual(calls[1].args, [
-      resolve(target),
-      "/inheritance:r",
-      "/grant:r",
-      ...shadowAccessPlan("win32", sid, kind).grant,
-    ]);
-    assert.equal(calls.some((call) => String(call.file).includes("C:\\Windows")), false);
   }
 });
 
-check("p0-1 windows icacls failure closes the write", () => {
+check("p0-1 windows DACL replacement failure closes the write", () => {
   const sid = "S-1-5-21-100-200-300-1001";
   const env = { SystemRoot: "D:\\WinX" };
   const whoami = win32Tool("whoami.exe", env);
-  const icacls = win32Tool("icacls.exe", env);
+  const powershell = win32Tool("WindowsPowerShell\\v1.0\\powershell.exe", env);
   const target = mkdtempSync(join(tmpdir(), "spine-p0-denied-"));
   try {
     resetShadowAccessState();
@@ -253,12 +245,12 @@ check("p0-1 windows icacls failure closes the write", () => {
         execFile(file) {
           calls.push(file);
           if (file === whoami) return `"DESKTOP-P0","${sid}"`;
-          throw Object.assign(new Error("injected icacls failure"), { status: 1300 });
+          throw Object.assign(new Error("injected DACL failure"), { status: 1300 });
         },
       }),
       (error) => error?.code === "ESHADOWACCESS",
     );
-    assert.deepEqual(calls, [whoami, icacls]);
+    assert.deepEqual(calls, [whoami, powershell]);
     if (process.platform !== "win32") {
       assert.equal(statSync(target).mode & 0o777, 0o755);
     }
@@ -372,26 +364,22 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
 
   try {
     const appended = [];
-    const session = {
-      id: "p0-commit",
-      dir: conversationDir,
-      surface: { nodes: [41] },
-      eventAt(seq) {
-        assert.equal(seq, 41);
-        return {
-          type: "user/message",
-          data: { content: "必须保留当前任务上下文。" },
-        };
-      },
-      append(type, data, options) {
-        const event = { seq: 100 + appended.length, type, data, options };
-        appended.push(event);
-        return event;
-      },
+    const session = Session.create("p0-commit");
+    const older = session.append("user/message", createUserMessage({
+      content: [{ type: "text", text: "必须保留当前任务上下文。" }], source: { kind: "user" },
+    }), { surfaceOp: "append" }).seq;
+    const latest = session.append("user/message", createUserMessage({
+      content: [{ type: "text", text: "最新用户要求继续任务，留在切段之外。" }], source: { kind: "user" },
+    }), { surfaceOp: "append" }).seq;
+    const append = session.append.bind(session);
+    session.append = (type, data, options) => {
+      const event = append(type, data, options);
+      appended.push(event);
+      return event;
     };
     const chunk = {
-      start: 41,
-      end: 41,
+      start: older,
+      end: older,
       tokens: 20,
       card: attachBackupHint(
         buildCard("必须保留当前任务上下文。", "", [
@@ -403,6 +391,7 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
     assert.equal(chunk.card.ok, true);
     assert.equal(chunk.card.text.includes(backupFile), false);
     const engine = {
+      engineFor() { return { engine: "cloud", source: "fixture" }; },
       ctx: {
         tokenMeter: {
           estimateMessage() {
@@ -434,6 +423,8 @@ await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint",
     );
 
     const serialized = JSON.stringify(appended);
+    assert.ok(session.surface.nodes.includes(latest));
+    assert.equal(session.surface.nodes.includes(older), false);
     assert.equal(appended.some((event) => event.type === "user/message"), true);
     assert.equal(serialized.includes("不含路径的摘要。"), true);
     assert.equal(serialized.includes("Spine extract."), true);
@@ -714,13 +705,16 @@ check("p0-15 source has no SPINE_MAX_TOKENS", () => {
   }
 });
 
-check("p0-15 BIG_GATE stays 650000 with SPINE_MAX_TOKENS=1", () => {
-  const moduleURL = new URL("../index.js", import.meta.url).href;
+check("p0-15 bigGate stays 650000 with SPINE_MAX_TOKENS=1", () => {
   const output = execFileSync(process.execPath, [
     "--input-type=module",
     "--eval",
-    `const { BIG_GATE } = await import(${JSON.stringify(moduleURL)}); process.stdout.write(String(BIG_GATE));`,
+    `import Engine, { BIG_GATE } from "dsh-live-compact/engine";
+     import { DEFAULTS } from "./settings.js";
+     if (typeof Engine !== "function" || BIG_GATE !== DEFAULTS.bigGate) throw new Error("engine export contract");
+     process.stdout.write(String(BIG_GATE));`,
   ], {
+    cwd: packageRoot,
     encoding: "utf8",
     env: { ...process.env, SPINE_MAX_TOKENS: "1" },
   });
@@ -765,26 +759,83 @@ check("p0-15 importing index never resolves shadow-search.js", () => {
   assert.equal(/shadow-search/.test(resolved), false);
 });
 
-check("p0-15 package version is 1.1.1", () => {
-  assert.equal(packageJson.version, "1.1.1");
+check("p0-15 package version is 1.1.2", () => {
+  assert.equal(packageJson.version, "1.1.2");
 });
 
 check("p0-15 README drops obsolete backup limits", () => {
   assert.equal(/\b(64|128)\s*Mi?B\b/i.test(readme), false);
 });
 
-check("p0-16 only adapter.js imports a DSH package", () => {
-  const adapter = join(packageRoot, "adapter.js");
+// 服务端只认 adapter.js；客户端 bundle 在宿主模块图里跑，只能自己 require 一次官方 primitives。
+check("p0-16 only the adapter and the client bundle import a DSH package", () => {
+  const allowed = new Set([join(packageRoot, "adapter.js"), join(packageRoot, "client.js")]);
   const files = packageJavaScriptFiles(packageRoot);
-  assert.ok(files.includes(adapter), adapter);
+  assert.ok(files.includes(join(packageRoot, "adapter.js")));
   for (const file of files) {
     const imports = /(?:from\s*|import\(\s*|require\(\s*)["']@deepseek-ai\//.test(readFileSync(file, "utf8"));
-    assert.equal(imports, file === adapter, file);
+    assert.equal(imports, allowed.has(file), file);
   }
+  const client = readFileSync(join(packageRoot, "client.js"), "utf8");
+  assert.equal((client.match(/["']@deepseek-ai\//g) ?? []).length, 1, "client names exactly one DSH package");
 });
 
 check("p0-16 package ships adapter.js", () => {
   assert.equal(packageJson.files.includes("adapter.js"), true);
+});
+
+check("p0-17 settings schema owns the plugin knobs", () => {
+  const shape = shellEntry.Config({});
+  const plain = (value) => (value && typeof value === "object" && typeof value.get === "function" ? value.get() : value);
+  const knobs = ["minTokens", "keepRounds", "keepRoundTokens", "pointerTokens", "chunkMin", "chunkMax", "bigGate", "cooldownMs"];
+  for (const key of knobs) assert.equal(plain(shape[key]), undefined, `${key} preserves absence for env fallback`);
+  assert.deepEqual(readSettings(shape, {}), { ...DEFAULTS, pointerTokens: DEFAULTS.chunkMax });
+  assert.equal(plain(shape.takeoverPresets), true);
+  for (const key of ["auto", "thresholdRatio", "headroomTokens", "retainTokens", "compactionRetries"]) {
+    assert.equal(key in shape, true, key);
+  }
+  // 宿主设置界面只列 volatile 字段，漏标整份表单就不出现。
+  for (const [key, field] of Object.entries(shellEntry.Config.dict)) {
+    assert.equal(field.meta?.volatile, true, key);
+  }
+});
+
+check("p0-18 settings UI ships through native client slots", () => {
+  assert.equal(packageJson.exports["./client"], "./client.js");
+  assert.equal(packageJson.dsh.client.platform, "web");
+  assert.equal(packageJson.files.includes("client.js"), true);
+  const source = readFileSync(join(packageRoot, "client.js"), "utf8");
+  assert.match(source, /window\.__ModuleLoader__\.load\(/);
+  assert.match(source, /require\("react"\)/);
+  assert.match(source, /plugins\.row\.config/);
+  assert.match(source, /locale\.register/);
+  assert.match(source, /SettingsFormModel/);
+  assert.match(source, /settingsNumberField/);
+  assert.match(source, /configForms/);
+  assert.match(source, /SettingsValueField/);
+  assert.match(source, /props\.edit\(name, text\)/);
+  assert.match(source, /hooks: \{ liveCompact: store \}/);
+  assert.match(source, /model\.dispose\(\)/);
+  assert.equal(/^\s*(?:import|export)\s/m.test(source), false);
+  assert.equal(/from\s*["']@deepseek-ai\//.test(source), false);
+});
+
+check("p0-18 bundle exposes one component with an internal preset gate", () => {
+  const patch = readFileSync(join(packageRoot, "cordis.patch.yml"), "utf8");
+  assert.equal((patch.match(/name: dsh-live-compact\b/g) ?? []).length, 1);
+  assert.equal(patch.includes("live-compact-gate"), false);
+  assert.match(patch, /takeoverPresets: true/);
+  assert.match(readFileSync(join(packageRoot, "shell.js"), "utf8"), /installPresetGate\(ctx, config\)/);
+});
+
+check("p0-17 config beats env beats default", () => {
+  const env = { SPINE_MIN_TOKENS: "9000", SPINE_CHUNK_MIN: "500" };
+  assert.equal(readSettings({}, env).minTokens, 9000);
+  assert.equal(readSettings({ minTokens: 1234 }, env).minTokens, 1234);
+  assert.equal(readSettings({}, {}).minTokens, DEFAULTS.minTokens);
+  assert.equal(readSettings({}, {}).pointerTokens, DEFAULTS.chunkMax);
+  assert.equal(readSettings({ chunkMax: 40000 }, {}).pointerTokens, 40000);
+  assert.equal(readSettings({ chunkMax: 40000, pointerTokens: 7000 }, {}).pointerTokens, 7000);
 });
 
 if (failures.length) {

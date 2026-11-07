@@ -3,16 +3,19 @@
  * Thin entry. This file must evaluate even when the engine cannot load.
  * A throw here leaves stock disabled and /compact waiting.
  *
- * 配置预先检查失败时不构造引擎，也不再构造原版，避免报错被盖成「服务已被注册」。
- * On a preflight failure, construct neither engine. Stock would register and hide the real error.
+ * 预检查只解析配置，校验交给实际引擎；构造失败时释放本次注册，不重试原版盖掉报错。
+ * Resolve config before construction; let the engine validate it and preserve its actual error.
  */
-import { loadBase, loadCompaction } from "./adapter.js";
+import { loadBase, loadCompaction, loadSchema } from "./adapter.js";
+import { configSchema, engineConfig } from "./settings.js";
+import { installPresetGate } from "./gate.js";
 
 let Engine = null;
 let Stock = null;
 let CompactionEngine = null;
 let ManualCompactionError = null;
 let loadError = null;
+let Schema = null;
 
 if (process.env.SPINE_ENGINE_FAIL === "import") {
   loadError = new Error("spine: engine import refused");
@@ -40,32 +43,35 @@ try {
   if (!loadError) loadError = error instanceof Error ? error : new Error(String(error));
 }
 
+// 官方设置界面按这份 schema 自动生成表单。拿不到 schemastery 就退回 stock 的 schema。
+try {
+  const schema = await loadSchema();
+  Schema = configSchema(schema.default, Stock?.Config);
+} catch {
+  Schema = null;
+}
+
 function reasonText(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
 export function preflightConfig(config = {}) {
-  if (!config || typeof config !== "object") return;
-  const threshold = config.thresholdRatio;
-  if (typeof threshold !== "number") return;
-  if (config.retainTokens !== undefined) return;
-  const ratio = config.retainRatio ?? 0.16;
-  if (ratio >= threshold) {
-    throw new Error(`BasicCompactionConfig: retainRatio (${ratio}) must be less than the resolved thresholdRatio (${threshold})`);
-  }
+  return engineConfig(config);
 }
 
-function releaseCompaction(ctx) {
+function compactionRecord(ctx) {
+  const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
+  return key === undefined ? undefined : ctx?.reflect?.store?.[key];
+}
+
+function releaseCompaction(ctx, previous) {
   const store = ctx?.reflect?.store;
-  if (!store) return false;
-  const keys = [...Object.getOwnPropertySymbols(store), ...Object.keys(store)];
-  for (const key of keys) {
-    if (store[key]?.name !== "compaction") continue;
-    delete store[key];
-    if (ctx.fiber?.store) delete ctx.fiber.store.compaction;
-    return true;
-  }
-  return false;
+  const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
+  const current = compactionRecord(ctx);
+  if (!current || current === previous || current.fiber !== ctx.fiber) return false;
+  delete store[key];
+  if (ctx.fiber?.store?.compaction === current) delete ctx.fiber.store.compaction;
+  return true;
 }
 
 function visibleTakeover(ctx, reason) {
@@ -98,15 +104,18 @@ const UnavailableCompaction = CompactionEngine
 
 export default class LiveCompactEntry {
   static inject = ["llm", "tokenMeter", "sessions"];
-  static Config = Stock?.Config || Engine?.Config;
+  static Config = Schema || Stock?.Config || Engine?.Config;
 
   constructor(ctx, config) {
+    installPresetGate(ctx, config);
+    const previousCompaction = compactionRecord(ctx);
     let cause = loadError;
+    let resolvedConfig;
     let skipStock = process.env.SPINE_ENGINE_FAIL === "construct";
     if (skipStock) cause = new Error("spine: constructor refused");
     if (!loadError && !skipStock) {
       try {
-        preflightConfig(config);
+        resolvedConfig = preflightConfig(config);
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));
         skipStock = true;
@@ -114,10 +123,10 @@ export default class LiveCompactEntry {
     }
     if (!loadError && !skipStock && Engine) {
       try {
-        return new Engine(ctx, config);
+        return new Engine(ctx, config, resolvedConfig);
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));
-        releaseCompaction(ctx);
+        releaseCompaction(ctx, previousCompaction);
         skipStock = true;
       }
     }
@@ -125,10 +134,10 @@ export default class LiveCompactEntry {
     if (!skipStock && process.env.SPINE_STOCK_FAIL !== "1" && Stock) {
       try {
         visibleTakeover(ctx, `这一轮用原版压缩。${reasonText(cause)}`);
-        return new Stock(ctx, config);
+        return new Stock(ctx, engineConfig(config));
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));
-        releaseCompaction(ctx);
+        releaseCompaction(ctx, previousCompaction);
       }
     }
     visibleTakeover(ctx, reasonText(cause));

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Context } from "@deepseek-ai/cordis";
 import { Session } from "@deepseek-ai/dsh-session";
 import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { buildCard, RAIL_TOKENS, selectCutIndexes } from "../plan.js";
@@ -44,7 +45,7 @@ async function check(name, fn) {
   }
 }
 
-function fixture({ oldTokens = 27000, middleTokens = 300, smallTokens = 300, newestTokens = 15000, recentText = "INFO recent small log" } = {}) {
+function fixture({ oldTokens = 27000, middleTokens = 300, smallTokens = 300, newestTokens = 15000, recentText = "INFO recent small log", smallName = "read" } = {}) {
   const session = Session.create(`finalize-${Math.random().toString(16).slice(2)}`);
   const prices = new Map();
   const add = (type, data, tokens) => {
@@ -55,11 +56,11 @@ function fixture({ oldTokens = 27000, middleTokens = 300, smallTokens = 300, new
   const user = (text, tokens, source = { kind: "user" }) => add("user/message", createUserMessage({
     content: [{ type: "text", text }], source,
   }), tokens);
-  const round = (id, text, tokens) => {
+  const round = (id, text, tokens, name = "read") => {
     const call = add("assistant/message", { turn: 1, message: createAssistantMessage({
       content: [
         { type: "text", text: assistantProse },
-        { type: "tool-call", id, name: "read", arguments: "{}" },
+        { type: "tool-call", id, name, arguments: "{}" },
       ], source: { provider: "deepseek-official", model: "deepseek-chat" },
     }) }, 20);
     const result = add("tool/result", { turn: 1, message: createToolResultMessage({
@@ -77,11 +78,11 @@ function fixture({ oldTokens = 27000, middleTokens = 300, smallTokens = 300, new
   const middleRound = round("call-middle", "INFO old log tail", middleTokens);
   const cardB = buildCard("", "", [{ role: "user", text: "必须原位保留最新卡 B。" }]);
   const b = checkpoint(cardB.text);
-  const smallRound = round("call-small", recentText, smallTokens);
+  const smallRound = round("call-small", recentText, smallTokens, smallName);
   round("call-recent-a", "INFO recent A", 20);
   round("call-recent-b", "INFO recent B", 20);
   const lastUser = user("继续当前任务，不要重新执行已完成的调用。", 80);
-  const newestRound = round("call-newest", "newest tool result stays verbatim", newestTokens);
+  const newestRound = round("call-newest", "newest tool result stays verbatim", newestTokens, "shell");
   const tail = add("assistant/message", { turn: 1, message: createAssistantMessage({
     content: [{ type: "text", text: "本轮结束。" }], source: { provider: "deepseek-official", model: "deepseek-chat" },
   }) }, 20);
@@ -133,7 +134,7 @@ function continuousFixture(roundCount = 8) {
     const call = add("assistant/message", { turn: index, message: createAssistantMessage({
       content: [
         { type: "text", text: assistantProse },
-        { type: "tool-call", id: `continuous-${index}`, name: "read", arguments: "{}" },
+        { type: "tool-call", id: `continuous-${index}`, name: index < roundCount - 3 ? "read" : "shell", arguments: "{}" },
       ], source: { provider: "deepseek-official", model: "deepseek-chat" },
     }) }, 20);
     const text = `${index}: INFO svc=ledger heartbeat ok\n${"ordinary log line\n".repeat(1000)}`;
@@ -162,20 +163,20 @@ function continuousFixture(roundCount = 8) {
 
 async function finalize(f, { Engine = SpineCompactionEngine, engine = "cloud", drain = true, baseline = true } = {}) {
   // 只替换宿主服务与 tokenMeter；finishTurn、选刀、buildCard 和 commitSelectedSpan 都跑真实实现。
-  const instance = Object.create(Engine.prototype);
   const warnings = [];
   const cuts = [];
-  instance.ctx = {
-    tokenMeter: { measure: f.measure, estimateMessage: f.estimateMessage },
-    sessions: { flush: async () => {} },
-    logger: { info() {}, debug() {}, warn: (text) => warnings.push(text) },
-  };
-  instance.sessionState = new Map();
-  instance.rawSeen = new Map();
-  instance.shadowFullWarned = new Set();
+  const ctx = new Context();
+  ctx.tokenMeter = { measure: f.measure, estimateMessage: f.estimateMessage };
+  ctx.sessions = { flush: async () => {} };
+  ctx.logger = { info() {}, debug() {}, warn: (text) => warnings.push(text) };
+  ctx.llm = new Proxy({}, { get() { throw new Error("model calls forbidden"); } });
+  const instance = new Engine(ctx.isolate("compaction"), { auto: false });
   instance.engineFor = () => ({ engine, source: "fixture" });
-  instance.ensurePruneGuard = () => {};
-  instance.captureSession = () => {};
+  // Simulate live capture before the first restart cursor is persisted.
+  for (const event of f.session.snapshotEvents()) {
+    instance.noteEvent(f.session, event);
+    if (event.type === "tool/result") instance.captureOne(f.session, event);
+  }
   const agent = { session: f.session, runMaintenance: async (fn) => fn(new AbortController().signal) };
   const state = instance.stateFor(agent);
   // 普通云端用零增长；收尾用已记录增长。baseline=false 模拟没有上一轮测量的会话。
@@ -185,7 +186,8 @@ async function finalize(f, { Engine = SpineCompactionEngine, engine = "cloud", d
     cuts.push(args[1]);
     return Engine.prototype.commitSelectedSpan.apply(instance, args);
   };
-  await instance.finishTurn(agent);
+  try { await instance.finishTurn(agent); }
+  finally { await ctx.fiber.dispose(); }
   assert.equal(warnings.some((text) => /cut failed|after-turn skipped/.test(text)), false, warnings.join("\n"));
   return { cuts, warnings };
 }
@@ -262,7 +264,7 @@ try {
   });
 
   await check("T5 ordinary cloud never cuts and local never crosses the last user", async () => {
-    const f = fixture({ oldTokens: 14500, smallTokens: 2500, recentText: numberedLog() });
+    const f = fixture({ oldTokens: 14500, smallTokens: 2500, recentText: numberedLog(), smallName: "shell" });
     const before = snapshot(f);
     const { cuts } = await finalize(f, { drain: false });
     assert.equal(cuts.length, 0);
@@ -272,7 +274,7 @@ try {
       maxEnd: f.session.surface.nodes.indexOf(f.smallRound[1]),
     }), null);
 
-    const local = fixture({ oldTokens: 14500, smallTokens: 2500, recentText: numberedLog() });
+    const local = fixture({ oldTokens: 14500, smallTokens: 2500, recentText: numberedLog(), smallName: "shell" });
     const localBefore = snapshot(local);
     const localResult = await finalize(local, { engine: "local" });
     assert.equal(localResult.cuts.length, 0);

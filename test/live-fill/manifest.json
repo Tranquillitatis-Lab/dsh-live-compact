@@ -1,0 +1,113 @@
+{
+  "version": "live-fill-1.1.2-v1",
+  "groups": 10,
+  "rounds": 31,
+  "fill_per_cell": 230,
+  "prompts_sha256": "6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29",
+  "fill_turns": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16,
+    17,
+    18,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27
+  ],
+  "notices": {
+    "4": "NOTICE cache layer pinned to sqlite",
+    "11": "NOTICE reviewer queue flushed Okafor",
+    "20": "NOTICE edge cache purged keys=1207"
+  },
+  "hidden": {
+    "2": "INFO hidden shard expected 9f2c71ab",
+    "6": "INFO hidden ratelimit 37 per minute",
+    "9": "INFO hidden alert threshold 0.875",
+    "13": "INFO hidden batch_size 250",
+    "17": "INFO hidden region eu-west-3",
+    "22": "INFO hidden ticket LED-4471"
+  },
+  "fixture_revision": "original-bytes-plus-part13-no-oracle-v1",
+  "schema": "dsh-headless-0.2.0-rc.2-json",
+  "timeout_seconds": 180,
+  "cache": {
+    "ratio_regression_budget": 0.005,
+    "uncached_input_multiplier": 1.05,
+    "ds_first_step_floor": 0.9823,
+    "group_order": [
+      "candidate,stock",
+      "stock,candidate",
+      "candidate,stock",
+      "stock,candidate",
+      "candidate,stock",
+      "stock,candidate",
+      "candidate,stock",
+      "stock,candidate",
+      "candidate,stock",
+      "stock,candidate"
+    ]
+  },
+  "rubric": {
+    "recall": {
+      "缓存|cache": "SQLite",
+      "当前端口|端口|port": "9310",
+      "限流|ratelimit": "37(?:/分钟|/min| per minute)",
+      "告警阈值|阈值|threshold": "0\\.875",
+      "失败的测试|测试|test": "tests/test_ledger\\.py",
+      "审核人|reviewer": "Okafor",
+      "名字|name": "Bluebird",
+      "金额格式|currency": "USD (?:两位小数|2 decimals|two decimal places)",
+      "区域|region": "eu-west-3",
+      "值班人|oncall": "@mirela",
+      "工单|ticket": "LED-4471",
+      "成本上限|budget": "\\$?412(?:/月|/month)",
+      "报错码|code": "E1729",
+      "分片|shard": "0x3F"
+    },
+    "hidden": {
+      "shard|分片": "9f2c71ab",
+      "限流|ratelimit": "37(?:/分钟|/min| per minute)",
+      "阈值|threshold": "0\\.875",
+      "batch|batch_size": "250",
+      "区域|region": "eu-west-3",
+      "工单|ticket": "LED-4471",
+      "来源|方法|source": "(?:记忆|备份|memory|backup)[^\\n]*"
+    },
+    "status": {
+      "值班人|oncall": "@mirela",
+      "校验|validation": "(?:仍失败|问题仍在|unresolved|still failing)",
+      "报错码|code": "E1729",
+      "分片|shard": "0x3F",
+      "失败的测试|测试|test": "tests/test_ledger\\.py",
+      "审核人|reviewer": "Okafor",
+      "当前端口|端口|port": "9310"
+    },
+    "config": {
+      "port": 9310,
+      "cache": "sqlite",
+      "max_workers": 6,
+      "ledger_strict": true,
+      "batch_size": 250,
+      "ratelimit_per_minute": 37,
+      "alert_threshold": 0.875,
+      "log_retention_days": 14,
+      "region": "eu-west-3",
+      "monthly_budget_usd": 412
+    }
+  }
+}
