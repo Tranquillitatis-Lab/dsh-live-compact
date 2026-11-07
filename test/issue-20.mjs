@@ -268,7 +268,7 @@ test("captureOne refuses a failed backup without throwing", () => {
   }
 });
 
-test("a unix permission failure does not fuse later backups", () => {
+test("a unix permission failure does not fuse later backups", { skip: process.platform === "win32" ? "POSIX chmod mode semantics; Windows ACL has separate gates" : false }, () => {
   resetShadowAccessState();
   const root = mkdtempSync(join(tmpdir(), "spine-20-unix-"));
   try {

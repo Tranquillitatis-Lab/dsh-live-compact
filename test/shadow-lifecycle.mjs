@@ -349,7 +349,7 @@ test("cursor temps inherit the secured Windows session ACL before creation", (t)
     engine.writeCaptureCursor(key, 300, access);
   } finally { openMock.mock.restore(); syncBuiltinESMExports(); }
   assert.equal(creates, 2);
-  assert.equal(engine.readCaptureCursor(key), 300);
+  assert.equal(engine.readCaptureCursor(key, access), 300);
   assert.equal(readdirSync(dir).some((name) => name.endsWith(".tmp")), false);
   assert.deepEqual(h.warnings, []);
 });
