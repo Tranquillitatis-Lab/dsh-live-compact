@@ -5,6 +5,40 @@ on:
 permissions:
   contents: read
 jobs:
+  core_gate:
+    if: github.ref == 'refs/heads/validation/112-windows-runtime' && contains(github.event.head_commit.message, '[windows-runtime]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-11-arm
+            arch: arm64
+            node: '22.22.2'
+          - runner: windows-2022
+            arch: x64
+            node: '22.22.2'
+          - runner: windows-2022
+            arch: x64
+            node: '24.15.0'
+    name: core gate (${{ matrix.runner }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+          architecture: ${{ matrix.arch }}
+      - name: Install gate dependencies in this separate clean job
+        run: npm install --ignore-scripts --no-audit --no-fund --package-lock=false --registry=https://registry.npmjs.org
+      - name: Full Node release gate
+        run: npm run test:gate
   runtime:
     if: github.ref == 'refs/heads/validation/112-windows-runtime' && contains(github.event.head_commit.message, '[windows-runtime]')
     strategy:
