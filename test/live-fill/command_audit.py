@@ -98,6 +98,12 @@ def python_errors(source, turn):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 module = (node.module or '') if isinstance(node, ast.ImportFrom) else alias.name
+                # Calls are recognized by their surface names in this small
+                # language. Imports must not change a recognized name's meaning
+                # (e.g. Path as str would bypass literal Path argument checks).
+                if (alias.asname and alias.asname != alias.name and
+                        alias.asname in PY_FUNCTIONS | PY_MEMBERS | set(PY_IMPORTS)):
+                    bad.append(OPAQUE)
                 imports[alias.asname or alias.name.split('.')[0]] = module.split('.')[0]
                 if turn >= 7 and module.split('.')[0] == 'pandas' or turn >= 13 and module.split('.')[0] == 'tenacity':
                     bad.append('forbidden package use: ' + module.split('.')[0])

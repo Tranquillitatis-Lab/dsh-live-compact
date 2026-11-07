@@ -1114,7 +1114,9 @@ export function listShadowEntries(dir, alive = processAlive, { readdir = readdir
       try { live = alive(owner) !== false; } catch { live = true; }
     }
     for (const file of listPluginShadows(path, { readdir, stat, onError })) {
-      entries.push({ ...file, legacy: false, live, sessionKey: file.sessionKey || entry.name });
+      // The directory and its owner define deletion authority. Raw tool output
+      // is untrusted data and may itself start with a spine-session marker.
+      entries.push({ ...file, legacy: false, live, sessionKey: entry.name });
     }
   }
   return entries;

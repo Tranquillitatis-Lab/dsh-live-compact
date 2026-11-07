@@ -450,10 +450,10 @@ test("permission failure while recovering disk originals leaves prune/cut untouc
   h.capture(first, f);
   const raw = first.rawSeen.get(first.rawKey(f.session, "long"));
   const { engine, ctx } = h.engine();
-  const chmod = fs.chmodSync;
-  const deny = t.mock.method(fs, "chmodSync", (path, ...args) => {
+  const read = fs.readFileSync;
+  const deny = t.mock.method(fs, "readFileSync", (path, ...args) => {
     if (path === raw.path) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    return chmod(path, ...args);
+    return read(path, ...args);
   });
   syncBuiltinESMExports();
   const before = eventHash(f);

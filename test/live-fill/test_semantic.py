@@ -253,6 +253,21 @@ class SemanticTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'hard evidence/tool/behavior failure'):
                         verify(self.policy, self.packet, self.mapping, self.receipts)
 
+    def test_turn29_import_alias_rereads_are_nonwaivable(self):
+        path = self.roots['ds/candidate'] / 'runs/spine-1/t29.jsonl'
+        original = [json.loads(x) for x in path.read_text().splitlines()]
+        for alias in ('str', 'print', 'open', 'reader', 'read_text'):
+            command = (f"python3 -c 'from pathlib import Path as {alias}; "
+                       f'{alias}("part" + "14.log").read_text()' + "'")
+            items = copy.deepcopy(original)
+            items[3:3] = [dict(type='tool_call', callId='alias-reread', tool='bash',
+                              input={'command':command}),
+                          dict(type='tool_result', callId='alias-reread', status='completed',
+                               result='[exit code: 0]')]
+            with self.subTest(alias=alias), self.changed_events(path, items):
+                with self.assertRaisesRegex(ValueError, 'hard evidence/tool/behavior failure'):
+                    verify(self.policy, self.packet, self.mapping, self.receipts)
+
     def test_absent_full_run_or_stale_run_rejected(self):
         path = self.extra_path
         path.rename(path.with_suffix('.held'))

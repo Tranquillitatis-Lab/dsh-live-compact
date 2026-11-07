@@ -584,6 +584,33 @@ class FullCellTests(unittest.TestCase):
                     if not allowed:
                         self.assertIn('g1/t30: forbidden part log reread', report['quality_errors'])
 
+    def test_turn29_import_aliases_cannot_hide_reads_in_complete_evidence(self):
+        group = self.root/'runs/spine-1'
+        path = group/'t29.jsonl'
+        original = [json.loads(x) for x in path.read_text().splitlines()]
+        for alias in ('str', 'print', 'open', 'reader', 'read_text'):
+            command = (f"python3 -c 'from pathlib import Path as {alias}; "
+                       f'{alias}("part" + "14.log").read_text()' + "'")
+            with self.subTest(alias=alias), contextlib.ExitStack() as logs:
+                items = copy.deepcopy(original)
+                items[3:3] = [dict(type='tool_call', callId='alias-read', tool='bash',
+                                  input={'command':command, 'workdir':str(self.root/'work/spine-1')}),
+                              dict(type='tool_result', callId='alias-read', status='completed',
+                                   result='[exit code: 0]')]
+                data = ''.join(json.dumps(x)+'\n' for x in items).encode()
+                logs.enter_context(self.changed(path, data))
+                for suffix in ('.meta.json', '.process.json'):
+                    target = path.with_suffix(suffix)
+                    meta = read_json(target);meta['stdout_sha256'] = sha(data)
+                    logs.enter_context(self.changed(target, json.dumps(meta).encode()))
+                report = score_cell(self.root)
+                self.assertTrue(report['evidence_pass'], report['evidence_errors'])
+                self.assertEqual((report['complete_turns'],report['fill_correct']), (310,230))
+                self.assertFalse(report['hard_quality_pass'])
+                self.assertFalse(report['gate_pass'])
+                self.assertTrue(any(x.startswith('g1/t29: unauditable tool behavior;')
+                                    for x in report['tool_behavior_errors']))
+
     def test_candidate_wrong_nonzero_stock_wrong_reported(self):
         for root in (self.root,self.stock):
             with self.bad_answer(root):
