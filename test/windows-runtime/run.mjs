@@ -164,7 +164,7 @@ try {
   }
   if (longMode) {
     current = 'long-session';
-    const sessionId = 'a0000000-0000-4000-8000-000000000034';
+    let sessionId;
     const turns = [];
     for (let turn = 1; turn <= 29; turn++) {
       const stage = `long-${String(turn).padStart(2, '0')}`;
@@ -175,9 +175,14 @@ try {
       writeFileSync(patch, overlay(replay, fixture, script));
       writeFileSync(events, '');
       const stageEnv = { ...env, SPINE_SHADOW_DIR: healthyShadow, PROBE_STAGE: stage, PROBE_DENIED: '0', PROBE_EVENTS: events, PROBE_INSTALLED: installed, PROBE_PIN: join(here, 'candidate.json'), PROBE_DSH_ANCHOR: dshAnchor, ...(expectedSid ? { PROBE_EXPECTED_SID: expectedSid } : {}) };
-      const output = await command(stage, ['--import', pathToFileURL(join(here, 'observe.mjs')).href, dsh, '--profile', 'headless', '--patch', patch, '--json', '--session-id', sessionId, `Issue 34 long-session turn ${turn}`], { root, cwd: workspace, env: stageEnv, timeout: 120000 });
+      const resume = sessionId ? ['--session-id', sessionId] : [];
+      const output = await command(stage, ['--import', pathToFileURL(join(here, 'observe.mjs')).href, dsh, '--profile', 'headless', '--patch', patch, '--json', ...resume, `Issue 34 long-session turn ${turn}`], { root, cwd: workspace, env: stageEnv, timeout: 120000 });
       const rows = readFileSync(events, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
       const projected = output.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      const observedSession = projected.find((event) => event.type === 'session')?.sessionId;
+      assert.ok(observedSession, `long turn ${turn} session identity`);
+      if (!sessionId) sessionId = observedSession;
+      assert.equal(observedSession, sessionId, `long turn ${turn} persisted session`);
       assert.equal(projected.at(-1)?.type, 'final', `long turn ${turn} final event`);
       assert.ok(JSON.stringify(projected.at(-1)).includes(`SYNTHETIC_FINAL_${stage}`), `long turn ${turn} replay completion`);
       assert.ok(projected.filter((event) => event.type === 'tool_result').length >= 2, `long turn ${turn} tool results`);
