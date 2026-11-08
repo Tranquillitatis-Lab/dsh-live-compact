@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from contract import FILL, MANIFEST, NOTICE
 from command_audit import bash_input_errors, tool_errors
+from mkfx import build_log
 
 
 def lines(text):
@@ -16,6 +17,9 @@ UNCERTAIN = r"\b(?:maybe|perhaps|guess|probably|possibly|uncertain|unsure|unclea
 ALTERNATIVE = r'\bor\b|或者|或'
 WARN_LABEL = r"(?:(?:当前|本次|current(?: turn)?)\s*)?WARN(?:\s*(?:条数|数量|count))?"
 NOTICE_LABEL = r"NOTICE(?:\s*(?:原文行?|original(?: line)?|line))?"
+# Consume numeric-looking tokens whole, including malformed/unsupported forms.
+# A count noun may be adjacent; other ASCII suffixes remain part of the token.
+NUMERIC_TOKEN = r'(?<![a-zA-Z0-9_.+−-])[+−-]?(?:\d|\.\d)(?:(?!(?:WARN|NOTICE)\b)[a-zA-Z0-9_.+−,，-])*'
 
 
 def cells(line):
@@ -59,7 +63,7 @@ def answer_value(value):
 
 def warn_value(value, expected):
     """A whole count with only balanced, bounded explanatory annotations."""
-    match = re.fullmatch(r'(0|[1-9]\d*)\s*(.*?)[。.]?', value.strip(), re.I)
+    match = re.fullmatch(r'(0|[1-9]\d*)\s*(?:条|lines?)?\s*(.*?)[。.]?', value.strip(), re.I)
     if not match or match[1] != str(expected):
         return False
     suffix = match[2]
@@ -83,7 +87,8 @@ def warn_value(value, expected):
     annotation = (r'(?:all(?: WARN (?:lines?|entries))?(?: are)?\s+)?ledger drift\b|'
                   r'(?:均为|全部为|全是|都是)\s*(?:同一类\s*)?ledger drift\b|'
                   r'same (?:category|kind)\b|同一类|同类|'
-                  r'e\.g\.?|for example\b|example\b|例如|示例')
+                  r'e\.g\.?|for example\b|example\b|例如|示例|'
+                  r'(?:行号|line numbers?)\s*(?:\d+\s*[,，、\s]*)+')
     return bool(re.fullmatch(r'(?:\s|[,，;；:：.。“”"\'‘’]|'+annotation+r')*',
                              ''.join(explanation), re.I))
 
@@ -124,18 +129,20 @@ def counts_before_warn(line):
 
     noun = re.compile(r'(?:条目|条|行)?\s*WARN(?![a-zA-Z0-9_])'
                       r'(?:\s*(?:条目|条|行)|\s+(?:lines?|entr(?:y|ies)|rows?|records?|messages?)\b)?', re.I)
-    for match in re.finditer(r'\d+', line):
+    # A signed, fractional, grouped or exponential number must never donate
+    # its last digit sequence as a separate integer count.
+    for match in re.finditer(NUMERIC_TOKEN, line, re.I):
         before_end = annotation_end(match.end())
         counted = noun.match(line, before_end)
         if counted:
             after_end = annotation_end(counted.end())
             # A nearby alternative belongs to this claim; stop at sentence or
             # clause boundaries rather than consuming unrelated later prose.
-            alternative = re.match(r'[,，:：]?\s*(?:'+ALTERNATIVE+r'|/)\s*\d+',
+            alternative = re.match(r'[,，:：]?\s*(?:'+ALTERNATIVE+r'|/)\s*\S+',
                                    line[after_end:], re.I)
             if alternative:
                 after_end += alternative.end()
-            yield line[match.start():before_end] + line[counted.end():after_end]
+            yield match[0], line[match.start():before_end] + line[counted.end():after_end]
 
 
 def notice_count_values(line):
@@ -146,7 +153,9 @@ def notice_count_values(line):
             stack.append(char)
         elif char in ')）' and stack:
             stack.pop()
-        if not stack and (char in ',，;；。|' or
+        numeric_comma = (char in ',，' and index > 0 and index+1 < len(line)
+                         and line[index-1].isdigit() and line[index+1].isdigit())
+        if not stack and not numeric_comma and (char in ',，;；。|' or
                           (char == '.' and (index + 1 == len(line) or line[index + 1].isspace()))):
             clauses.append(line[start:index])
             start = index + 1
@@ -156,12 +165,12 @@ def notice_count_values(line):
         # A separator does not turn an alternate value into unrelated prose.
         values = []
         continuation = (r'\s*(?:[（(]|'+ALTERNATIVE+r'|/|(?:but\s+)?'
-                        r'(?:[+-]?\d|not\b|actually\b|而是|实为|(?:(?:the\s+)?count|条数|数量)\s*(?:[:：=为]|\bis\b)))')
+                        r'(?:[+−-]?\d|not\b|actually\b|而是|实为|(?:(?:the\s+)?count|条数|数量)\s*(?:[:：=为]|\bis\b)))')
         if previous is not None and re.match(continuation, clause, re.I):
             values.append(previous+' '+clause)
         for match in re.finditer(r'NOTICE\s*(?:(?:(?:lines?|rows?|entries|matches)\s+)?count|条数|数量)\s*(?:[:：=为]|\bis\b)\s*', clause, re.I):
             values.append(clause[match.end():])
-        for match in re.finditer(r'(?<![a-zA-Z0-9_])[+-]?\d+(?:[.\w]*\d+)?', clause):
+        for match in re.finditer(NUMERIC_TOKEN, clause, re.I):
             end, depth = match.end(), 0
             while end < len(clause):
                 char = clause[end]
@@ -186,27 +195,101 @@ def notice_count_value(value, expected):
     if not match or match[1] != str(expected):
         return False
     suffix = match[2]
-    stack = []
+    stack, explanation = [], []
     for char in suffix:
         if char in '(（':
             stack.append(')' if char == '(' else '）')
-        elif char in ')）' and (not stack or stack.pop() != char):
+            explanation.append(' ')
+        elif char in ')）':
+            if not stack or stack.pop() != char:
+                return False
+            explanation.append(' ')
+        elif stack:
+            explanation.append(char)
+        elif not char.isspace():
             return False
-    # File/line references explain the count; they are not alternate values.
-    explanation = re.sub(r'\bpart\d+\.log\b|\bline\s+\d+\b', '', suffix, flags=re.I)
-    return not (stack or re.search(UNCERTAIN+r'|\d|(?:'+ALTERNATIVE+r'|/)\s*(?:none|zero|one)\b', explanation, re.I))
+    # Only bounded explanations, including references, may accompany a count.
+    # Arbitrary words can assert a second count just as digits can.
+    annotation = (r'fixture verified\b|verified\b|read in full\b|no extra lines\b|'
+                  r'checked\s+(?:part[1-9]\d*\.log|line\s+[1-9]\d*)\b|'
+                  r'read WARN or NOTICE entries\b|已核实|已完整读取文件')
+    return not stack and bool(re.fullmatch(r'(?:\s|[,，;；:：.。]|'+annotation+r')*',
+                                           ''.join(explanation), re.I))
+
+
+def citation_numbers_after_label(line, position):
+    tail = line[position:].lstrip()
+    tail = re.sub(r'^(?:[:：=]\s*)', '', tail)
+    if tail.startswith(('(', '（')):
+        opening, closing = tail[0], ')' if tail[0] == '(' else '）'
+        depth = 0
+        for index, char in enumerate(tail):
+            if char == opening:
+                depth += 1
+            elif char == closing:
+                depth -= 1
+                if depth == 0:
+                    return [int(x) for x in re.findall(r'\d+', tail[1:index])]
+        return [int(x) for x in re.findall(r'\d+', tail[1:])]
+    match = re.match(r'[0-9０-９][0-9０-９\s,，、]*', tail)
+    return [int(x) for x in re.findall(r'\d+', match[0])] if match else []
+
+
+def warn_citation_errors(text, turn):
+    fixture_lines = build_log(turn)[0].splitlines()
+    warn_lines = {n for n, text_line in enumerate(fixture_lines, 1)
+                  if text_line.startswith('WARN ')}
+    bad = []
+    for line in lines(text):
+        for note in re.finditer(r'(?:行号|line numbers?)', line, re.I):
+            cited = citation_numbers_after_label(line, note.end())
+            if not cited:
+                continue
+            if (not cited or len(set(cited)) != len(cited) or
+                    any(n not in warn_lines for n in cited)):
+                bad.append('WARN false supplemental citation')
+        for citation in re.finditer(r'\bWARN ledger drift turn=(\d+) n=(\d+)\b', line):
+            if int(citation[1]) != turn or int(citation[2]) >= 3 + turn % 9:
+                bad.append('WARN false supplemental citation')
+    return bad
 
 
 def fill_answer(text, turn):
     warn, notice = [], []
     cited_notice = []
-    bad = []
+    bad = warn_citation_errors(text, turn)
     for line in lines(text):
+        # Explicit count prose must consume the complete token. This prevents
+        # malformed values, word alternatives, and adjacent nouns from being
+        # silently skipped by the narrower extraction helpers below.
+        for malformed in re.finditer(r'(?<![\d])(?:[+−-]{2,}\d+|\d+[.，,]\d+|\d+[a-zA-Z_]+|\d+\.)\s*(?:条\s*)?(?:WARN|NOTICE)', line, re.I):
+            bad.append(('WARN' if 'WARN' in malformed[0].upper() else 'NOTICE') + ' contradictory supplemental count')
+        for malformed in re.finditer(r'(?<![\d])\d+(WARN|NOTICE)(?:条|行|lines?)', line, re.I):
+            bad.append(malformed[1].upper() + ' contradictory supplemental count')
+        for malformed in re.finditer(r'\b(WARN|NOTICE)(?:[+−-]{2,}\d|[+−-]?\d)(?:条|行|lines?)', line, re.I):
+            bad.append(malformed[1].upper() + ' contradictory supplemental count')
+        for malformed in re.finditer(r'\b(WARN|NOTICE)[+−-]{2,}\d', line, re.I):
+            bad.append(malformed[1].upper() + ' contradictory supplemental count')
+        if re.search(r'\b(?:WARN|NOTICE)\b.*?[，,；;。]\s*[+−-]{2,}\d', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'(?:共有|本轮共有|there\s+are|the\s+(?:WARN|NOTICE)\s+count\s+is)\s+(?:nine|zero|one)\s*(?:或|or)\b', line, re.I) or re.search(r'(?:共有|本轮共有|there\s+are|the\s+(?:WARN|NOTICE)\s+count\s+is)\s+(?:\d+)\s*(?:或|or)\s*(?:nine|zero|one)\b', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'(?:共有|本轮共有|there\s+are|the\s+(?:WARN|NOTICE)\s+count\s+is)\s+\d+\s*(?:或|或者|or|/)\s*(?:nine|zero|one)\s*(?:条\s*)?(?:WARN|NOTICE)\b', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'\b(?:nine|zero|one)\s*(?:或|或者|or)\s*\d+\s*(?:条\s*)?(?:WARN|NOTICE)\b', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'\b(?:nine|zero|one)\s*/\s*\d+\s*(?:条\s*)?(?:WARN|NOTICE)\b', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'\b\d+\s*(?:或|或者|or|/)\s*(?:nine|zero|one)\s*(?:条\s*)?(?:WARN|NOTICE)\b', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
+        if re.search(r'(?:WARN|NOTICE)\s*(?:条|lines?|entries)?\s*[，,]\s*[+−-]+\d', line, re.I):
+            bad.append('WARN contradictory supplemental count' if 'WARN' in line.upper() else 'NOTICE contradictory supplemental count')
         if re.fullmatch(r'\d+(?:\s*(?:or|或|/)\s*\d+)?\s*(?:条)?[。.]?', line):
             bad.append('WARN ambiguous unlabeled numeric answer')
-        summary = re.fullmatch(r'已读取 .*（\d+ 行，已做大小写不敏感复核，\d+ 处匹配 = (\d+) 条 WARN \+ (\d+) 条 NOTICE）：', line)
+        summary = re.fullmatch(r'已读取 (?:\./)?part([1-9]\d*)\.log（(\d+) 行，已做大小写不敏感复核，(\d+) 处匹配 = (\d+) 条 WARN \+ (\d+) 条 NOTICE）：', line)
         if summary:
-            if summary.groups() != (str(3 + turn % 9), str(int(turn in NOTICE))):
+            w, n = 3 + turn % 9, int(turn in NOTICE)
+            if summary.groups() != tuple(map(str, (turn, 520, w+n, w, n))):
                 bad.append('WARN/NOTICE contradictory summary')
             continue
         row = cells(line)
@@ -241,8 +324,11 @@ def fill_answer(text, turn):
                 citation_value = re.fullmatch(r'(\d+)\s*(?:条|lines?)?\s*[,，]\s*(?:e\.g\.?|for example|example|例如|示例)\s*[:：]?\s*[“”"\'‘’\s]*', value, re.I)
                 if excerpts and citation_value:
                     value = citation_value[1]
-                if not warn_value(value, 3 + turn % 9) or re.match(WARN_LABEL, supplemental, re.I):
+                value = re.sub(r'[:：]\s*$', '', value)
+                if not warn_value(value, 3 + turn % 9):
                     bad.append('WARN ambiguous/contradictory current answer')
+                elif re.match(WARN_LABEL + r'\s*(?:[:：=为共]|\bis\b)', supplemental, re.I):
+                    warn.append(str(3 + turn % 9))
             if re.search(r'(?:not|不是|并非)\s*WARN|WARN\s*(?:不是|并非|isn.t)', supplemental, re.I):
                 bad.append('WARN contradictory current answer')
             if re.search(UNCERTAIN, supplemental, re.I):
@@ -250,10 +336,12 @@ def fill_answer(text, turn):
             if re.match(r'^WARN\s*\d', supplemental) or (re.search(r'WARN\s*(?:条数|数量|count)?\s*\d', supplemental, re.I)
                                                      and re.search(UNCERTAIN, supplemental, re.I)):
                 bad.append('WARN ambiguous/uncertain current answer')
-            if re.search(r'\d+\s*(?:' + ALTERNATIVE + r'|/)\s*\d+\s*(?:条\s*)?WARN\b', supplemental, re.I):
+            if (re.search(r'\d+\s*(?:' + ALTERNATIVE + r'|/)\s*\d+\s*(?:条\s*)?WARN\b', supplemental, re.I) or
+                    re.search(r'\b(?:nine|zero|one)\s+WARN\b.*(?:' + ALTERNATIVE + r')', supplemental, re.I) or
+                    re.search(r'\bWARN\b.*(?:' + ALTERNATIVE + r')\s*(?:nine|zero|one)', supplemental, re.I)):
                 bad.append('WARN ambiguous supplemental count')
-            for count in counts_before_warn(supplemental):
-                if not warn_value(count, 3 + turn % 9):
+            for token, count in counts_before_warn(supplemental):
+                if not re.fullmatch(r'0|[1-9]\d*', token) or not warn_value(count, 3 + turn % 9):
                     bad.append('WARN contradictory supplemental count')
         if line != before_history:
             # Only an empty, verified history clause may precede a citation.
@@ -278,22 +366,39 @@ def fill_answer(text, turn):
         if core == 'NONE':
             notice.append(None)
             if explanation and (re.search(UNCERTAIN, explanation, re.I) or
-                                not re.fullmatch(r"(?:文件中)?(?:没有任何|无|没有)\s*NOTICE\s*(?:行|条目)|no NOTICE (?:lines?|entries)", explanation, re.I)):
+                                not re.fullmatch(r"(?:已(?:按|做)大小写不敏感(?:复核|复查)，\s*)?(?:文件中)?(?:没有任何|无|没有)\s*(?:NOTICE|notice)\s*(?:行|条目|字样)|(?:对\s*WARN/NOTICE\s*行做了全文件匹配，\s*)?未命中任何\s*NOTICE\s*行|(?:case-insensitive\s+)?no\s+notice\s+(?:lines?|entries)", explanation, re.I)):
                 bad.append('NOTICE ambiguous explanation')
-        elif core.startswith('NOTICE ') and not re.match(r'NOTICE\s+(?:(?:lines?|rows?|count|matches|entries|is|was|has|original|in|text|answer)\b|条数|数量)', core, re.I):
+        elif core.startswith('NOTICE ') and not re.match(r'NOTICE\s+(?:(?:lines?|rows?|count|matches|entries|is|was|has|original|in|text|answer)\b|条数|数量|不存在|存在|为)', core, re.I):
             notice.append(candidate)  # original NOTICE bytes, including any false suffix
         elif labeled and notice_label(labeled[1]):
             bad.append('NOTICE ambiguous/contradictory current answer')
         elif re.search(r"NOTICE", line, re.I):
             # Ordinary prose isn't an answer field. Concrete extra originals,
             # counts, absence/presence claims and uncertainty are still audited.
-            absent = bool(re.search(r'(?:没有|不存在|无|\bno\b)\s*(?:任何\s*)?NOTICE|NOTICE\s*(?:不存在|为 NONE|is NONE|is absent)', line, re.I))
-            present = bool(re.search(r'NOTICE\s*(?:存在|is present)|(?:有|\bthere is\s*)\s*(?:一|1)\s*(?:条\s*)?NOTICE', line, re.I))
-            if (absent and turn in NOTICE) or (present and turn not in NOTICE):
+            # Consume the complete Chinese verb first: the affirmative 有
+            # inside 没有 must never become an independent presence claim.
+            for claim in re.finditer(r'(没有|不存在|无|有)\s*(?:任何\s*)?(?:[一1]\s*(?:条\s*)?)?NOTICE(?![a-zA-Z0-9_])', line, re.I):
+                if (claim[1] == '有') != (turn in NOTICE):
+                    bad.append('NOTICE contradictory supplemental claim')
+            for claim in re.finditer(r'NOTICE\s*(不存在|存在|为\s*NONE)', line, re.I):
+                if (claim[1] == '存在') != (turn in NOTICE):
+                    bad.append('NOTICE contradictory supplemental claim')
+            if ((re.search(r'\b(?:no|not|without)\s+NOTICE\b', line, re.I) and turn in NOTICE) or
+                    (re.search(r'\bthere is\s+(?:one|1)\s+NOTICE\b', line, re.I) and turn not in NOTICE)):
                 bad.append('NOTICE contradictory supplemental claim')
-            for value in notice_count_values(line):
-                if not notice_count_value(value, int(turn in NOTICE)):
-                    bad.append('NOTICE contradictory supplemental count')
+            for claim in re.finditer(r'\bNOTICE\s+is\s+(not\s+)?(present|absent|NONE)\b', line, re.I):
+                exists = (claim[2].lower() == 'present') != bool(claim[1])
+                if exists != (turn in NOTICE):
+                    bad.append('NOTICE contradictory supplemental claim')
+            negative_notice = bool(re.search(r'(?:没有|不存在|无|\bno\b)\s*(?:任何\s*)?(?:[一1]\s*(?:条\s*)?)?NOTICE', line, re.I))
+            negative_notice = negative_notice and not bool(re.search(r'(?:NOTICE\b.*\bcount\b|NOTICE\s+(?:数量|条数)\b|(?:共有|本轮共有|there\s+are)\s+\d+\s*(?:条\s*)?NOTICE\b)', line, re.I))
+            if (re.search(r'\b(?:nine|zero|one)\s+NOTICE\b.*(?:' + ALTERNATIVE + r'|/)', line, re.I) or
+                    re.search(r'\bNOTICE\b.*(?:' + ALTERNATIVE + r'|/)\s*(?:nine|zero|one)', line, re.I)):
+                bad.append('NOTICE ambiguous alternative claim')
+            if not negative_notice:
+                for value in notice_count_values(line):
+                    if not notice_count_value(value, int(turn in NOTICE)):
+                        bad.append('NOTICE contradictory supplemental count')
             for original in re.finditer(r'NOTICE\s+([a-zA-Z]+)', line, re.I):
                 if not re.match(r'(?:lines?|rows?|count|matches|entries|is|was|has|original|in|text|answer)\b', original[1], re.I):
                     bad.append('NOTICE extra original claim')
@@ -302,7 +407,9 @@ def fill_answer(text, turn):
             extra_line = re.search(r'NOTICE\s+(?:original line|line)\s*(?:is|为|[:：=])\s*(.+)', line, re.I)
             if extra_line and extra_line[1] != (NOTICE.get(turn) or 'NONE'):
                 bad.append('NOTICE false supplemental original')
-            if re.search(UNCERTAIN, line.split('。')[0], re.I):
+            if re.search(r'(?:NOTICE\s*(?:存在|不存在)|NOTICE\s+is\s+(?:not\s+)?(?:present|absent)|(?:有|没有|不存在|无)\s*(?:任何\s*)?(?:[一1]\s*)?NOTICE)', line, re.I) and re.search(r'(?:'+ALTERNATIVE+r'|/)', line, re.I):
+                bad.append('NOTICE ambiguous alternative claim')
+            if re.search(UNCERTAIN, line, re.I):
                 bad.append('NOTICE uncertain current answer')
         elif re.search(r'\bNONE\b', line):
             bad.append('NOTICE ambiguous extra NONE')
@@ -313,6 +420,357 @@ def fill_answer(text, turn):
     if notice != [NOTICE.get(turn)]:
         bad.append("NOTICE not unique exact original line/NONE")
     return bad
+
+
+def normal_fill_answer(text, turn):
+    """Judge current facts while allowing ordinary Markdown and explanations."""
+    expected_warn = 3 + turn % 9
+    errors = []
+    counts = []
+    invalid_count = False
+    history = r'历史|此前|早前|趋势|earlier|previous|history'
+
+    def historical_claim(line, position):
+        prefix = re.split(r'[；;。.,，→>\n）)]', line[:position])[-1]
+        return bool(re.search(history, prefix, re.I)) and not bool(
+            re.search(r'当前|本轮|实际|now|current|this\s+round', prefix, re.I))
+
+    count_patterns = (
+        r'\bWARN\b\s*(?:条数|数量|count|matches|总数)\s*(?:[:：=为]|is)\s*([^\s，；;。|`*（）()]+)',
+        r'\bWARN\s*[:：]\s*([^\s，；;。|`*（）()]+)',
+        r'(?:共有|本轮共有|there\s+are)\s+([^\s，；;。|`*（）()]+)\s*(?:条\s*)?WARN\b',
+    )
+    def strip_markdown_emphasis(value):
+        result = []
+        code_delimiter = None
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char == '`':
+                end = index + 1
+                while end < len(value) and value[end] == '`':
+                    end += 1
+                delimiter = value[index:end]
+                result.append(delimiter)
+                if code_delimiter is None:
+                    code_delimiter = delimiter
+                elif delimiter == code_delimiter:
+                    code_delimiter = None
+                index = end
+            elif code_delimiter is None and value.startswith('**', index):
+                index += 2
+            else:
+                result.append(char)
+                index += 1
+        return ''.join(result)
+
+    raw_lines = [strip_markdown_emphasis(re.sub(r"^(?:>\s*|[-*+] |\d+[.)] )", "", x.strip())).strip()
+                 for x in text.splitlines() if x.strip() and not x.strip().startswith("```")]
+    for line in raw_lines:
+        for pattern in count_patterns:
+            for match in re.finditer(pattern, line, re.I):
+                if historical_claim(line, match.start()):
+                    continue
+                token = match[1]
+                if not re.fullmatch(r'(?:0|[1-9][0-9]*(?:,[0-9]{3})*)', token):
+                    invalid_count = True
+                    continue
+                counts.append(int(token.replace(',', '')))
+    if invalid_count:
+        errors.append('WARN current count invalid')
+    if not counts:
+        errors.append('WARN current count missing')
+    elif set(counts) != {expected_warn}:
+        errors.append('WARN current count incorrect or contradictory')
+
+    expected_notice = NOTICE.get(turn)
+    notice_none = 0
+    notice_values = []
+    ignored_labels = {'original', 'line', 'rows', 'count', 'matches', 'entries',
+                      'is', 'was', 'has', 'in', 'text', 'answer'}
+
+    def clean_notice(value, strip_closing=True):
+        value = value.strip()
+        # A labelled citation is extracted from inside its opening backtick,
+        # so remove only that one closing delimiter. Preserve literal `*` and
+        # other punctuation that belongs to the cited line.
+        if strip_closing and value.endswith('`') and not value.startswith('`'):
+            value = value[:-1].rstrip()
+        while len(value) >= 2 and value[0] == value[-1] and value[0] in '`*_':
+            value = value[1:-1].strip()
+        return value.strip()
+
+    def segment(value):
+        code_delimiter = None
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char == '`':
+                end = index + 1
+                while end < len(value) and value[end] == '`':
+                    end += 1
+                delimiter = value[index:end]
+                if code_delimiter is None:
+                    code_delimiter = delimiter
+                elif delimiter == code_delimiter:
+                    code_delimiter = None
+                index = end
+                continue
+            if code_delimiter is None and char in '；;。':
+                return value[:index], index
+            index += 1
+        return value, len(value)
+
+    def segment_prefix(value):
+        code_delimiter = None
+        start = 0
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char == '`':
+                end = index + 1
+                while end < len(value) and value[end] == '`':
+                    end += 1
+                delimiter = value[index:end]
+                if code_delimiter is None:
+                    code_delimiter = delimiter
+                elif delimiter == code_delimiter:
+                    code_delimiter = None
+                index = end
+                continue
+            if code_delimiter is None and char in '；;。':
+                start = index + 1
+            index += 1
+        return value[start:]
+
+    def find_closing_delimiter(value, start, delimiter):
+        index = start
+        while index < len(value):
+            if value[index] != '`':
+                index += 1
+                continue
+            end = index + 1
+            while end < len(value) and value[end] == '`':
+                end += 1
+            if value[index:end] == delimiter:
+                return index
+            index = end
+        return -1
+
+    for line in raw_lines:
+        skip_until = -1
+        for occurrence in re.finditer(r'\bNOTICE\b', line, re.I):
+            prefix_text = segment_prefix(line[:occurrence.start()])
+            if occurrence.start() < skip_until or historical_claim(line, occurrence.start()):
+                continue
+            if re.search(r'(?:当前|本轮|实际|this\s+round|now|current).{0,20}(?:没有|不存在|未找到|不是|并非|not|without|no)\s*`*\s*$',
+                         prefix_text, re.I):
+                notice_values.append('__NEGATED_NOTICE__')
+                skip_until = occurrence.end()
+                continue
+            if re.search(r'(?:没有|不存在|未找到|查找|全文.*(?:0|没有|匹配|查找|大小写)|只有|同样|得到|命中|全文中的|这条|次数|数量|\bsearched\b|\bsearch\b|\bno\b|\bwithout\b)', prefix_text, re.I):
+                continue
+            if re.search(r'(?:不是|并非|没有|不存在|未找到|not|without|no)\s*`+\s*$', prefix_text, re.I):
+                notice_values.append('__NEGATED_NOTICE__')
+                skip_until = occurrence.end()
+                continue
+            if occurrence.start() > 0 and line[occurrence.start() - 1] == '`':
+                opening = occurrence.start() - 1
+                while opening > 0 and line[opening - 1] == '`':
+                    opening -= 1
+                delimiter = line[opening:occurrence.start()]
+                close = find_closing_delimiter(line, occurrence.end(), delimiter)
+                if close != -1:
+                    if re.search(r'(?:不是|并非|没有|不存在|未找到|not|without|no)\s*`?\s*$',
+                                 line[:occurrence.start()], re.I):
+                        notice_values.append('__NEGATED_NOTICE__')
+                        skip_until = close + 1
+                        continue
+                    notice_values.append(line[occurrence.start():close])
+                    skip_until = close + 1
+                    continue
+            rest = line[occurrence.end():]
+            if (re.search(r'全文|匹配|大小写', prefix_text, re.I)
+                    and re.search(r'命中\s*0|0\s*条|未找到|没有', rest, re.I)):
+                continue
+            labelled = re.match(
+                r'\s*(?:原文行?(?:（[^）]*）)?|original(?:\s+line)?|line)?\s*[:：=]\s*(.*)$',
+                rest, re.I)
+            if labelled:
+                raw_body, consumed = segment(labelled[1])
+                if re.match(r'\s*(?:NONE|无)(?=\s|[（(]|$)', raw_body, re.I):
+                    notice_none += 1
+                    skip_until = len(line)
+                    continue
+                raw_text = None
+                raw_prefix = ''
+                if not re.match(r'\s*(?:NONE|无)\b', raw_body, re.I):
+                    for raw_match in re.finditer(r'\bNOTICE\b', raw_body, re.I):
+                        opening = raw_match.start() - 1
+                        while opening > 0 and raw_body[opening - 1] == '`':
+                            opening -= 1
+                        delimiter = raw_body[opening:raw_match.start()]
+                        if delimiter:
+                            close = find_closing_delimiter(raw_body, raw_match.end(), delimiter)
+                            if close != -1:
+                                raw_text = raw_body[raw_match.start():close]
+                                raw_prefix = raw_body[:raw_match.start()]
+                                break
+                    if raw_text is None:
+                        raw_match = re.search(r'\bNOTICE\b.*$', raw_body, re.I)
+                        if raw_match:
+                            raw_text = raw_match[0]
+                            raw_prefix = raw_body[:raw_match.start()]
+                if raw_text and re.search(r'(?:不是|并非|没有|不存在|未找到|not|without|no)\s*`*\s*$',
+                                          raw_prefix, re.I):
+                    notice_values.append('__NEGATED_NOTICE__')
+                    skip_until = occurrence.end() + labelled.start(1) + consumed
+                    continue
+                body = clean_notice(raw_text if raw_text is not None else raw_body,
+                                    strip_closing=raw_text is None)
+                if re.fullmatch(r'NONE(?:\s*[（(].*)?', body, re.I) or body == '无':
+                    notice_none += 1
+                elif body and (body.upper().startswith('NOTICE ') or not re.search(
+                        r'第|行|条|line|original|count', body, re.I)):
+                    notice_values.append(body if body.upper().startswith('NOTICE ') else 'NOTICE ' + body)
+                skip_until = occurrence.end() + labelled.start(1) + consumed
+                continue
+            raw_body, _ = segment(rest)
+            body = clean_notice(raw_body)
+            if not body:
+                continue
+            if re.search(r'(?:不是|并非|没有|不存在|未找到|not|without|no)\s+NOTICE\b', body, re.I):
+                notice_values.append('__NEGATED_NOTICE__')
+                continue
+            if re.search(r'^(?:这次|本次|此次|该次).*(?:出现|一条|缓存|配置|记录)', body, re.I):
+                continue
+            first = body.split()[0].lower()
+            if first in ignored_labels:
+                continue
+            if re.fullmatch(r'NONE(?:\s*[（(].*)?', body, re.I) or body == '无':
+                notice_none += 1
+            else:
+                notice_values.append(body if body.upper().startswith('NOTICE ') else 'NOTICE ' + body)
+
+    if expected_notice:
+        if notice_none or notice_values != [expected_notice]:
+            errors.append('NOTICE current answer missing or contradictory')
+    else:
+        if notice_values or notice_none != 1:
+            errors.append('NOTICE current answer missing or contradictory')
+    return errors
+
+
+def normal_recall_errors(text):
+    """Check frozen recall facts without accepting historical values."""
+    expected_by_key = {
+        '缓存|cache': r'\bSQLite\b',
+        '当前端口|端口|port': r'(?<![\d.+\-eE])9310(?![\d.,eE])',
+        '限流|ratelimit': r'(?<![\d.+\-eE])37(?![\d.,eE])\s*(?:次\s*)?/(?:分钟|min)|(?<![\d.+\-eE])37(?![\d.,eE])\s+per\s+minute',
+        '告警阈值|阈值|threshold': r'(?<![\d.,+\-eE])0\.875(?![\d.,eE])',
+        '失败的测试|测试|test': r'\btests/test_ledger\.py\b',
+        '审核人|reviewer': r'\bOkafor\b',
+        '名字|name': r'\bBluebird\b',
+        '金额格式|currency': r'\bUSD\b(?=.*(?:两位小数|2\s*decimals?|two\s+decimal\s+places))',
+        '区域|region': r'\beu-west-3\b',
+        '值班人|oncall': r'@mirela\b',
+        '工单|ticket': r'\bLED-4471\b',
+        '成本上限|budget': r'(?<![\d.,+\-eE$])\$?412(?![\d.,eE])',
+        '报错码|code': r'\bE1729\b',
+        '分片|shard': r'\b0x3F\b',
+    }
+    errors = []
+    old = r'旧值|旧|此前|早前|废弃|停用|old|former|previous|deprecated'
+    numeric_keys = {'当前端口|端口|port', '告警阈值|阈值|threshold', '成本上限|budget'}
+    for key, expected in expected_by_key.items():
+        label = ALIASES.get(key, key)
+        if key == '名字|name':
+            label = r'名字(?:（(?:项目)?代号）)?|名称|代号|name'
+        elif key == '报错码|code':
+            label = r'(?:check\.sh\s*(?:的)?\s*)?(?:报错码|错误码|报错原文|报错|error code|code)'
+        present = False
+        wrong = False
+        text_lines = lines(text)
+        for index, line in enumerate(text_lines):
+            label_matches = list(re.finditer(
+                r'(?<!\w)(?:' + label + r')(?![A-Za-z0-9_])\s*(?:[:：=]|为|is)?',
+                line, re.I))
+            for match_index, match in enumerate(label_matches):
+                prefix = re.split(r'[；;。,，]', line[:match.start()])[-1]
+                if re.search(old, prefix, re.I):
+                    continue
+                end = (label_matches[match_index + 1].start()
+                       if match_index + 1 < len(label_matches) else len(line))
+                tail = re.split(r'[；;。]', line[match.end():end], maxsplit=1)[0]
+                for clause in (tail,):
+                    old_marker = re.search(old, clause, re.I)
+                    current = clause.strip()
+                    if not current:
+                        continue
+                    if key == '报错码|code':
+                        codes = re.findall(r'\bE\d+\b', current, re.I)
+                        value_match = re.search(expected, current, re.I)
+                        if value_match and re.search(r'不是|并非|非|not|without', current[:value_match.start()], re.I):
+                            wrong = True
+                        elif any(code.upper() != 'E1729' for code in codes):
+                            wrong = True
+                        elif value_match:
+                            if old_marker and value_match.start() >= old_marker.end():
+                                wrong = True
+                            elif (old_marker and value_match.start() < old_marker.start()
+                                  and re.search(r'(?:为|是)\s*(?:旧值|旧|此前|早前|废弃|停用|old|former|previous|deprecated)',
+                                                current[value_match.end():old_marker.end()], re.I)):
+                                wrong = True
+                            elif (old_marker and value_match.start() < old_marker.start()
+                                  and re.search(old, current[value_match.end():old_marker.end()], re.I)
+                                  and not re.search(r'\bE\d+\b', current[old_marker.end():], re.I)):
+                                wrong = True
+                            present = True
+                        elif re.search(r'原文|raw|error|check', current, re.I) and not old_marker:
+                            following = '\n'.join(text_lines[index + 1:index + 3])
+                            follow_codes = re.findall(r'\bE\d+\b', following, re.I)
+                            if (re.search(expected, following, re.I)
+                                    and not re.search(r'不是|并非|非|not|without', following, re.I)
+                                    and not re.search(old, following, re.I)
+                                    and not any(code.upper() != 'E1729' for code in follow_codes)):
+                                present = True
+                            elif follow_codes or re.search(old, following, re.I):
+                                wrong = True
+                        elif not codes and not value_match:
+                            wrong = True
+                        continue
+                    value_match = re.search(expected, current, re.I)
+                    if value_match:
+                        if old_marker and key in numeric_keys:
+                            after_old = clause[old_marker.end():]
+                            if (re.search(r'\d', after_old)
+                                    and (value_match.start() >= old_marker.end()
+                                         or re.search(r'当前|本轮|实际|now|current|this\s+round|为|是',
+                                                      after_old, re.I))):
+                                wrong = True
+                        if old_marker and value_match.start() >= old_marker.end():
+                            wrong = True
+                        if old_marker and value_match.start() < old_marker.start():
+                            after_value = clause[value_match.end():old_marker.end()]
+                            if re.search(r'(?:为|是)\s*(?:旧值|旧|此前|早前|废弃|停用|old|former|previous|deprecated)',
+                                         after_value, re.I):
+                                wrong = True
+                        before = current[:value_match.start()]
+                        after = current[value_match.end():]
+                        if (re.search(r'不是|并非|非|无|not|without|except', before, re.I)
+                                or re.search(r'(?:为|是)\s*$', after, re.I)):
+                            wrong = True
+                        else:
+                            present = True
+                    elif key in numeric_keys and re.search(r'\d', current):
+                        wrong = True
+                    elif key == '分片|shard' and re.search(r'0x[0-9A-Fa-f]+', current):
+                        wrong = True
+                    else:
+                        wrong = True
+        if not present or wrong:
+            errors.append(f'recall: missing or incorrect {key}')
+    return errors
 
 
 # Label synonyms change presentation only; keys/expected values remain frozen.
@@ -404,22 +862,22 @@ def fields(text, name):
                     bad.append(f'{name}: contradictory supplemental assertion')
                 continue
         if label == 'combined' or re.fullmatch(COMBINED_ERROR, label, re.I):
-            # Require both actual tokens, not exit code 3 in place of E1729.
-            for key, pattern in (('报错码|code', r'\bE1729\b'), ('分片|shard', r'\b0x3F\b')):
+            # Match the entire bounded combined value. Merely finding both
+            # tokens can hide contradictory assertions later in this field.
+            combined = bool(re.fullmatch(r'E1729\s*(?:/|,|，|;|；|and|与|和)\s*(?:shard\s+)?0x3F', value, re.I))
+            combined = combined or value == 'E1729 shard 0x3F (expected 9f2c71ab, got 9f2c71ae)'
+            for key in ('报错码|code', '分片|shard'):
                 if key in seen:
-                    seen[key].append(bool(re.search(pattern, value)) and not re.search(UNCERTAIN + '|' + ALTERNATIVE + r'|\bnot\b|不是|并非|无报错|已修复', value, re.I))
-            if re.search(r'\bE\d+\b', value) and set(re.findall(r'\bE\d+\b', value)) != {'E1729'}:
-                bad.append(f'{name}: contradictory error code')
-            if set(re.findall(r'\b0x[0-9a-f]+\b', value, re.I)) - {'0x3F'}:
-                bad.append(f'{name}: contradictory shard')
+                    seen[key].append(combined)
             pending = None
             continue
         # A quoted full original check diagnostic also explicitly supplies code
         # and shard; it does not supply unrelated facts from unstructured prose.
-        if pending == 'combined' or label == '报错原文':
+        if label == '报错原文':
             if value == 'E1729 shard 0x3F (expected 9f2c71ab, got 9f2c71ae)':
                 for key in ('报错码|code', '分片|shard'):
                     diagnostic[key] = True
+                pending = None
                 continue
             if label == '报错原文':
                 bad.append(f'{name}: incorrect original diagnostic')
@@ -630,7 +1088,7 @@ def behavior(turn, calls, snapshot, initial, cwd=None):
         # and once-only checks. Everything else must be observable and audited.
         if not (turn >= 30 and archival_move(call, files, initial, cwd)):
             plan = check_plan(command) if call.get('tool') == 'bash' else None
-            bad += tool_errors(call, turn, cwd, check_paths=plan['redirected'] if plan else None)
+            bad += tool_errors(call, turn, cwd, check_paths=plan['redirected'] if plan else None, files=files)
         if re.search(r"(?:^|/)\.env$", path) or re.search(r"(?<![\w.])\.env(?![\w.])", command):
             bad.append("forbidden .env access")
         if command and check_activity(command):

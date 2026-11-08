@@ -35,6 +35,7 @@ dsh-live-compact --version
 - 常用压缩参数可以在 DSH 插件设置里改，保留原有环境变量用法。
 - 专用备份目录确认只有一个插件进程使用时，低于用量水线可以跳过全目录扫描；完整校准满 60 秒后，下次轮转会重新扫描。默认目录和共享目录继续按原规则检查、清理。
 - 扫描不完整或计量不合法时拒绝本次备份。无法确认其他会话已经退出时，不删除它的正文。
+- 失败工具结果保留退出码、错误类型、标准错误和标准输出里的关键原因；过长时保留原因和首尾，不能把失败卡片写成正常完成。`npm run test:gate` 也会检查这条路径。
 - 提交小切前重新检查 checkpoint、用户边界和工具配对；等待期间出现的新消息也会重新检查。
 - 账号模式没有显式地址、恢复旧官方卡片和精确的过程通知可以组合工作；真实用户消息与未知通知仍保留边界。
 - 重启后会核验已有备份和游标，再从最近的工作位置继续。
@@ -74,17 +75,19 @@ Windows 双用户实测（Actions run `42367713007`，Windows 11 Enterprise ARM 
 
 这轮连的是插件版。10 组同一套 31 轮填日志，组内串行，两个模型同时开。原版 DSH 压缩对比留到 1.1.2。Coder 390 27B 这轮没跑，后补。测评图在下面，也在 [v1.1.1](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.1)。
 
+下面三张图沿用已完成的 1.1.1 实测数据；1.1.2 只更新运行时修复和门禁，图标题按当前发布版本标注。
+
 看图时，先看日志题答对多少，再看首步缓存和压缩节省。首步缓存取每轮第一个 `step_end`，把命中 token 加起来，再除以这些请求的总输入 token。压缩节省是 `spine-cuts.jsonl` 里 `saved` 的合计。压缩轮次耗时是发生压缩的各轮总耗时之和，压缩操作本身为毫秒级。任务墙钟是从第 1 轮开始到第 31 轮结束的实际用时。结束上下文取最后一轮的 `totalTokens`，包含此前保留下来的内容。
 
-DS V4.1 Flash 跑了 10 组，填日志 230/230，跳过 0。首步缓存 98.64%，压缩节省 65 180 token，总用时 36 分 18 秒。多数组结束在 3.5 万到 4.6 万 token。第 1 组读了 25 次全文，4 次压缩共节省 21 493 token，结束时仍有 282 871。第 2 组几乎只用 bash，只读了一次全文，未触发压缩，结束时是 37 781。
+DS V4.1 Flash 跑了 10 组，填日志 230/230，跳过 0。首步缓存 98.64%，压缩节省 65 180 token，总墙钟 36 分 18 秒。多数组结束在 3.5 万到 4.6 万 token。第 1 组读了 25 次全文，4 次压缩共节省 21 493 token，结束时仍有 282 871。第 2 组几乎只用 bash，只读了一次全文，未触发压缩，结束时是 37 781。图中的“含切割轮次墙钟”是整轮模型、工具和网络等待，不是插件小切耗时；小切操作本身为毫秒级。
 
-GLM 5.3 Flash 用了同一个插件、同一套题。有 7 组填日志达到 23/23。第 5、6 组全程连接失败。第 7 组前段连接失败，完成 14/23。有用量记录的轮次，首步缓存是 98.97%。第 1、2 组主要用 grep，未触发压缩，结束时分别是 39 511 和 29 987 token。第 4、9 组反复读全文，结束时分别是 285 535 和 281 515，和 DS 第 1 组很像。可比的 7 组里，DS 每组都更快。
+GLM 5.3 Flash 用了同一个插件、同一套题。完整跑完的 7 组为 23/23；第 5、6 组连接失败；第 7 组前段连接失败，完成 14/23。有用量记录的轮次，首步缓存是 98.97%。第 1、2 组主要用 grep，未触发压缩，结束时分别是 39 511 和 29 987 token。第 4、9 组反复读全文，结束时分别是 285 535 和 281 515。GLM 图只展示插件实测；没有对应 stock 配对数据的地方不推断原版差值。
 
-![插件版对比](docs/slide-111-overview.jpg)
+![插件版对比](docs/slide-112-overview.jpg)
 
-![DS V4.1 Flash](docs/slide-111-ds.jpg)
+![DS V4.1 Flash](docs/slide-112-ds.jpg)
 
-![GLM 5.3 Flash](docs/slide-111-glm.jpg)
+![GLM 5.3 Flash](docs/slide-112-glm.jpg)
 
 ## 1.0.9
 
@@ -307,12 +310,12 @@ npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
 
-旧版 1.1.1 的国内镜像安装命令：
+上不了 npm 时的镜像安装命令：
 
 ```sh
-dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.1.tgz
-dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.1.tgz
-npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.1.tgz"
+dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.2.tgz
+dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.2.tgz
+npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.2.tgz"
 dsh-live-compact --version
 ```
 

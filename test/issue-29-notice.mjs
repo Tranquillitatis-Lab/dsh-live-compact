@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import { Session } from "@deepseek-ai/dsh-session";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -134,6 +135,7 @@ for (const engineKind of ["local", "cloud"]) {
     test(`${engineKind} ${mode}: exact notices cross within one genuine turn and survive real maintenance/commit`, async (t) => {
       const x = setup(t, { engineKind, mode });
       const { f, engine } = x;
+      await setImmediate();
       // Real SessionStore publication has already captured every tool result.
       for (const seq of x.target) {
         const event = f.session.eventAt(seq);
@@ -305,6 +307,7 @@ test("real notice cuts fail closed on backup I/O, raw damage, or non-shrinking f
   for (const failure of ["backup", "raw", "shrink", "cancel"]) {
     await t.test(failure, async (t) => {
       const x = setup(t);
+      await setImmediate();
       let restore = () => {};
       if (failure === "backup") {
         const open = fs.openSync;

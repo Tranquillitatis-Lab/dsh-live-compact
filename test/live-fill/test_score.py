@@ -9,7 +9,7 @@ from pathlib import Path
 from contract import HERE, FILL, MANIFEST, read_json, sha, validate_contract
 from mkfx import build_log, write_workspace
 from rubric import fill_answer, fields, behavior
-from score import compare, normalize_usage, parse_turn, score_cell, ratios
+from score import compare, grep_matches, grep_proof, normalize_usage, parse_turn, score_cell, ratios
 from synthetic import RECALL, HIDDEN, STATUS, cell, events, write_events
 
 
@@ -254,9 +254,8 @@ class ParserTests(unittest.TestCase):
         call = next(x for x in items if x['type'] == 'tool_call')
         result = next(x for x in items if x['type'] == 'tool_result')
         call.update(tool='grep', input={'path': str(self.cwd/f'part{turn}.log'), 'pattern': pattern})
-        prefixes = ('WARN', 'NOTICE') if pattern == '(?i)warn|notice' else (pattern,)
         rows = [f'Line {n}: {line}' for n, line in enumerate(build_log(turn)[0].splitlines(), 1)
-                if line.startswith(prefixes)]
+                if grep_matches(pattern, line)]
         result['result'] = (f'Found {len(rows)} matches\n\npart{turn}.log\n' + '\n'.join(rows)
                             if rows else 'No matches found')
         return items, call, result
@@ -282,8 +281,8 @@ class ParserTests(unittest.TestCase):
     def test_builtin_grep_no_match_requires_nonempty_proof(self):
         items, _, _ = self.grep_events(pattern='NOTICE')
         parsed = self.parse_items(items)
-        self.assertFalse(parsed['expected_read'])
-        self.assertEqual(parsed['evidence_errors'], ['no successful correlated read of expected file'])
+        self.assertTrue(parsed['expected_read'])
+        self.assertEqual(parsed['evidence_errors'], [])
         self.assertEqual(parsed['quality_errors'], [])
         # Historical turn 2: WARN, absent NOTICE, then combined search.
         for pattern in ('WARN', '(?i)warn|notice'):
@@ -299,7 +298,9 @@ class ParserTests(unittest.TestCase):
                    dict(path=str(self.cwd.parent/'part2.log')),
                    dict(path=str(self.cwd)), dict(path=str(self.cwd/'part*.log')),
                    dict(path=None), dict(pattern=None), dict(pattern=['WARN']),
-                   dict(pattern='WARN|NOTICE'), dict(pattern='^(a+)+$'),
+                   dict(pattern='WARN|NOTICE|ERROR'), dict(pattern='(?i)WARN'),
+                   dict(pattern='^(WARN|NOTICE)  '), dict(pattern=r'\bNOTICE\b'),
+                   dict(pattern='^(a+)+$'),
                    dict(pattern=''), dict(include='*.log'), dict(context=1)]
         for changes in invalid:
             with self.subTest(changes=changes):
@@ -361,6 +362,48 @@ class ParserTests(unittest.TestCase):
             items, _, result = self.grep_events()
             result.update(result=prefix, truncated=True)
             self.assertFalse(self.parse_items(items)['expected_read'])
+
+    def test_builtin_grep_accepts_finite_equivalent_patterns_and_exact_empty(self):
+        cases = ((2, r'\bWARN\b'), (2, '^(WARN|NOTICE) '),
+                 (2, 'WARN|NOTICE'), (2, '(?i)notice'),
+                 (11, '^(WARN|NOTICE)'))
+        for turn, pattern in cases:
+            with self.subTest(turn=turn, pattern=pattern):
+                items, _, _ = self.grep_events(turn, pattern)
+                parsed = self.parse_items(items, turn)
+                self.assertEqual(parsed['evidence_errors'], [])
+                self.assertTrue(parsed['expected_read'])
+        items, _, result = self.grep_events(2, '(?i)notice')
+        result['result'] = 'No matches found\n'
+        self.assertTrue(self.parse_items(items, 2)['evidence_errors'])
+        items, _, result = self.grep_events(2, '(?i)notice')
+        result['truncated'] = True
+        self.assertTrue(self.parse_items(items, 2)['evidence_errors'])
+        items, _, result = self.grep_events(2, '(?i)notice')
+        result['truncated'] = 'false'
+        self.assertTrue(self.parse_items(items, 2)['evidence_errors'])
+        items, _, result = self.grep_events(4, '(?i)notice')
+        result['result'] = 'No matches found'
+        self.assertTrue(self.parse_items(items, 4)['evidence_errors'])
+
+    def test_grep_proof_uses_fixed_pattern_semantics(self):
+        lines = ['WARN x', 'NOTICE y', 'preWARNpost', 'WARNING', '_WARN_', 'WARN\tz']
+        expected = self.cwd/'part2.log'
+        cases = {
+            r'\bWARN\b': (1, 6),
+            '^(WARN|NOTICE)': (1, 2, 4, 6),
+            '^(WARN|NOTICE) ': (1, 2),
+            'WARN|NOTICE': (1, 2, 3, 4, 5, 6),
+            '(?i)notice': (2,),
+        }
+        for pattern, numbers in cases.items():
+            body = (f'Found {len(numbers)} matches\n\npart2.log\n' +
+                    '\n'.join(f'Line {n}: {lines[n-1]}' for n in numbers))
+            with self.subTest(pattern=pattern):
+                self.assertTrue(grep_proof({'path':str(expected), 'pattern':pattern},
+                                            body, expected, self.cwd, lines, False))
+        self.assertFalse(grep_proof({'path':str(expected), 'pattern':'WARN.*'},
+                                     'No matches found', expected, self.cwd, lines, False))
 
     def test_builtin_grep_keeps_pairing_and_infrastructure_failures(self):
         for change in ('unpaired', 'missing', 'duplicate', 'error', 'timeout', 'event', 'essential'):
@@ -585,13 +628,33 @@ class FullCellTests(unittest.TestCase):
                         self.assertIn('g1/t30: forbidden part log reread', report['quality_errors'])
 
     def test_turn29_import_aliases_cannot_hide_reads_in_complete_evidence(self):
+        commands = [(f"python3 -I -c 'from pathlib import Path as {alias}; "
+                     f'{alias}("part" + "14.log").read_text()' + "'")
+                    for alias in ('str', 'print', 'open', 'reader', 'read_text')]
+        self.assert_turn29_behavior_rejected(commands)
+
+    def test_turn29_pattern_bindings_cannot_hide_reads_in_complete_evidence(self):
+        self.assert_turn29_behavior_rejected([
+            "python3 -I -c 'match open:\n    case str:\n        print(str(\"part\" + \"14.log\").read())'",
+            "python3 -I -c 'from pathlib import Path\nmatch Path:\n    case str:\n        print(str(\"part\" + \"14.log\").read_text())'",
+            "python3 -I -c 'match {\"reader\": open}:\n    case {\"reader\": str}:\n        print(str(\"part\" + \"14.log\").read())'",
+        ])
+
+    def test_turn29_nonisolated_imports_are_hard_behavior_failures(self):
+        self.assert_turn29_behavior_rejected([
+            "python3 -c 'import csv'",
+            "python3 -c 'from pathlib import Path'",
+        ])
+
+    def test_turn29_outside_workspace_write_is_a_hard_failure(self):
+        self.assert_turn29_behavior_rejected(["printf safe > /tmp/lc112-audit-outside.txt"])
+
+    def assert_turn29_behavior_rejected(self, commands):
         group = self.root/'runs/spine-1'
         path = group/'t29.jsonl'
         original = [json.loads(x) for x in path.read_text().splitlines()]
-        for alias in ('str', 'print', 'open', 'reader', 'read_text'):
-            command = (f"python3 -c 'from pathlib import Path as {alias}; "
-                       f'{alias}("part" + "14.log").read_text()' + "'")
-            with self.subTest(alias=alias), contextlib.ExitStack() as logs:
+        for command in commands:
+            with self.subTest(command=command), contextlib.ExitStack() as logs:
                 items = copy.deepcopy(original)
                 items[3:3] = [dict(type='tool_call', callId='alias-read', tool='bash',
                                   input={'command':command, 'workdir':str(self.root/'work/spine-1')}),
@@ -610,6 +673,97 @@ class FullCellTests(unittest.TestCase):
                 self.assertFalse(report['gate_pass'])
                 self.assertTrue(any(x.startswith('g1/t29: unauditable tool behavior;')
                                     for x in report['tool_behavior_errors']))
+
+    @contextlib.contextmanager
+    def injected_turn(self, turn, calls, written_files=None):
+        group=self.root/'runs/spine-1';path=group/f't{turn}.jsonl'
+        items=[json.loads(x) for x in path.read_text().splitlines()]
+        extra=[]
+        for index,call in enumerate(calls):
+            extra += [dict(type='tool_call',callId=f'policy-{index}',**call),
+                      dict(type='tool_result',callId=f'policy-{index}',status='completed',result='[exit code: 0]')]
+        position=next(i for i,item in enumerate(items) if item.get('type')=='status' and item.get('phase')=='step_end')
+        items[position:position]=extra
+        with contextlib.ExitStack() as changes:
+            data=''.join(json.dumps(x)+chr(10) for x in items).encode();changes.enter_context(self.changed(path,data))
+            for suffix in ('.meta.json','.process.json'):
+                target=path.with_suffix(suffix);meta=read_json(target);meta['stdout_sha256']=sha(data)
+                changes.enter_context(self.changed(target,json.dumps(meta).encode()))
+            if written_files:
+                for later in range(turn,32):
+                    target=group/f't{later}.snapshot.json';snap=read_json(target)
+                    for name,text in written_files.items():snap['texts'][name]=text;snap['files'][name]=sha(text.encode())
+                    raw=json.dumps(snap).encode();changes.enter_context(self.changed(target,raw))
+                    target=group/f't{later}.meta.json';meta=read_json(target);meta['snapshot_sha256']=sha(raw)
+                    changes.enter_context(self.changed(target,json.dumps(meta).encode()))
+            yield score_cell(self.root)
+
+    def test_normalized_protected_paths_cannot_modify_then_restore(self):
+        original=(self.root/'work/spine-1/conf/settings.toml').read_text()
+        for alias in ('conf/./settings.toml','conf//settings.toml'):
+            calls=[dict(tool='write',input={'file_path':alias,'content':text}) for text in ('port = 1',original)]
+            with self.subTest(alias=alias),self.injected_turn(14,calls) as report:
+                self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+                self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+                self.assertFalse(report['hard_quality_pass'])
+                self.assertFalse(report['gate_pass'])
+                self.assertIn('g1/t14: forbidden protected path write',report['tool_behavior_errors'])
+
+    def test_dotted_directory_rg_is_rejected_in_complete_cell(self):
+        text='a,b'+chr(10)+'1,2'+chr(10)
+        calls=[dict(tool='bash',input={'command':'mkdir -p inputs.d'}),
+               dict(tool='write',input={'file_path':'inputs.d/sample.csv','content':text}),
+               dict(tool='bash',input={'command':"rg -o '^[^,]+' inputs.d"})]
+        with self.injected_turn(14,calls,{'inputs.d/sample.csv':text}) as report:
+            self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+            self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+            self.assertFalse(report['hard_quality_pass'])
+            self.assertFalse(report['gate_pass'])
+
+    def test_shell_continuation_cannot_modify_and_restore_protected_file(self):
+        import shlex
+        old=(self.root/'work/spine-1/conf/settings.toml').read_text()
+        target='conf/set'+chr(92)+chr(10)+'tings.toml'
+        command="printf '%s' 'port = 1' > "+target+"; printf '%s' "+shlex.quote(old)+' > '+target
+        with self.injected_turn(14,[dict(tool='bash',input={'command':command})]) as report:
+            self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+            self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+            self.assertFalse(report['hard_quality_pass'])
+
+    def test_quoted_operator_filename_cannot_hide_csv_input(self):
+        csv='a,b'+chr(10)+'1,2'+chr(10)
+        calls=[dict(tool='write',input={'file_path':'>','content':''}),
+               dict(tool='write',input={'file_path':'sample.csv','content':csv}),
+               dict(tool='bash',input={'command':"rg -o '^[^,]+' '>' sample.csv part14.log"})]
+        with self.injected_turn(14,calls,{'>':'','sample.csv':csv}) as report:
+            self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+            self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+            self.assertFalse(report['hard_quality_pass'])
+
+    def test_augmented_path_division_hard_fails_with_correct_finals(self):
+        command="python3 -I -c 'from pathlib import Path; p = Path(\".\"); p /= \"pa\" + \"rt14.log\"; print(p.read_text())'"
+        with self.injected_turn(29,[dict(tool='bash',input={'command':command})]) as report:
+            self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+            self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+            self.assertFalse(report['hard_quality_pass'])
+
+    def test_zsh_dialect_bypasses_hard_fail_correct_cell(self):
+        import shlex
+        for command in ['head -c 1 =cat | wc -c','cat < sample.csv < plain.txt | grep ","']:
+            with self.subTest(command=command),self.injected_turn(14,[dict(tool='bash',input={'command':'zsh -c '+shlex.quote(command)})])as report:
+                self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+                self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+                self.assertFalse(report['hard_quality_pass'])
+
+    def test_stderr_escape_hard_fails_correct_complete_cell(self):
+        from test_shell_semantics import stderr_commands
+        text='a,b'+chr(10)+'1,2'+chr(10)
+        for command in stderr_commands()[:3]:
+            calls=[dict(tool='write',input={'file_path':'sample.csv','content':text}),dict(tool='bash',input={'command':command})]
+            with self.subTest(command=command),self.injected_turn(14,calls,{'sample.csv':text})as report:
+                self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+                self.assertEqual((report['warn_correct'],report['notice_correct']),(230,230))
+                self.assertFalse(report['hard_quality_pass'])
 
     def test_candidate_wrong_nonzero_stock_wrong_reported(self):
         for root in (self.root,self.stock):

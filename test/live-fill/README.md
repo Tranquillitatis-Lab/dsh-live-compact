@@ -31,8 +31,8 @@ comparison budgets.
 
 ## Frozen inputs and fixture correction
 
-`prompts.json` remains byte-for-byte unchanged:
-`6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29`.
+`prompts.json` adds an isolated-Python invocation instruction to turn 1 before any collection. Turns 2–31 and all business facts remain unchanged. Both arms receive the same new prompt bytes:
+`be488564396d7758c76851d4876f1008ab0fe122132d6e40479cb60a664bc886`. The v1 hash was `6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29`; v1 attempts cannot be relabeled as v2.
 The runner reads it and verifies its hash; it never invokes `prompts.py` or
 rewrites repository inputs. `prompts.py` is retained only as historical source.
 
@@ -124,6 +124,15 @@ answers or contradictory NONE/NOTICE fail. NOTICE text must match the unique
 entire expected original line, with no suffix. Clearly historical named-part
 sequences are context; explicit current labels override that exemption.
 Supplemental citations cannot add false NOTICE lines or conflicting counts.
+Supplemental counts audit the whole signed/decimal/exponent token rather than
+its trailing digits. WARN and NOTICE share the scanner; malformed numeric-looking
+tokens and signed/worded alternatives fail instead of being silently skipped.
+Numeric commas are retained inside tokens. NOTICE count annotations use bounded read/verification
+phrases; words such as `actually one` cannot override a verified zero. Accepted
+NOTICE presence/absence sentences include their `not` polarity; Chinese 没有一条
+is consumed as an absence claim, without reusing the internal 有一条 substring. The special
+read summary names only the current `partN.log`, verifies its 520-line fixture
+and total matches, and cannot consume unrelated current assertions in a prefix.
 An unrelated tool does not prove
 a read: the scorer pairs real `callId`s, validates the requested and returned
 path, successful result and numbered fixture text. Built-in `read`, an exact
@@ -143,7 +152,15 @@ listed there, with presentation-only synonyms in `rubric.py`. Fields use
 `label: value`, labeled lists, two-column tables or a field heading followed by
 its value, one unique assertion per field. Supporting prose supplies no missing
 facts; explicit contradictions still fail. Combined error-code/shard fields
-must contain E1729 and 0x3F; exit 3 never implies E1729. Conflicting values,
+must match a complete E1729/0x3F pair or the exact original diagnostic;
+finding those tokens somewhere in a longer contradictory field is insufficient.
+An outstanding combined-field heading cannot exempt an unrelated labeled line;
+only a bare diagnostic or an explicit 报错原文 label supplies the original diagnostic.
+Presence alternatives (`存在或不存在`, `present or absent`) and uncertainty
+anywhere in a current NOTICE sentence are rejected. A numeric phrase inside a
+negative `没有 1 条 NOTICE` claim is treated as the same absence assertion,
+not as a second positive count.
+Exit 3 never implies E1729. Conflicting values,
 missing facts and uncertainty fail. The example
 answers in `synthetic.py` document accepted formatting, not alternate prompts.
 
@@ -184,7 +201,7 @@ pandas/tenacity imports/use, CSV regex/split parsing, Makefile use and attempted
 protected-path writes fail. Literal cat/head/tail/wc/grep/rg reads, print-only sed,
 the literal awk program `{print $1}` (with optional horizontal whitespace),
 sort with only `-n`/`-r`/`-rn`/`-nr`, and uniq with optional `-c` have bounded
-support. Uniq accepts at most one input filename: its second filename writes
+support. `rg` and the built-in grep require a regular-file operand proven by the trusted per-turn snapshot; dotted directory names and unknown file types remain opaque. The scorer uses the historical snapshot, not the final workspace after archival moves. Protection rules check normalized and canonical paths, including `conf/./settings.toml` and `conf//settings.toml`; restoring a changed file before the snapshot does not excuse the write. Uniq accepts at most one input filename: its second filename writes
 output and is rejected. Awk options, assignments, other programs and CSV parsing
 receive no exception. Simple input redirections and pipes carry audited source
 paths into consumers, so CSV filters still fail through stdin; unknown stdin
@@ -194,13 +211,36 @@ forms (`-v`, `%n`) fail. Status expansion is limited to output-only printf and
 moves with unproven executable identity remain opaque outside the verified
 archive exception, as does command resolution outside trusted system paths.
 Read-only standard-library Python/CSV and structured read/grep/write/edit remain
-supported. Bash accepts optional nonblank string `description` as UI metadata
+supported only through exact `python3 -I -c` or `python -I -c` shell forms. `-I` excludes workspace/user-site module shadowing; a module named `csv` in the workspace is not trusted as the standard library. Ordinary non-isolated `-c` is rejected. Python imports cannot rename members to another recognized builtin
+or reader name. Pattern matching, exception-handler bindings and type aliases
+are outside this small language and require command review. Binding checks must
+also pass on Python 3.10+; a Python 3.9 syntax rejection alone is not evidence
+that a newer grammar cannot bypass the audit.
+Path construction using `/` or `/=` is rejected; the audit accepts literal
+reader paths and does not infer paths after arithmetic or augmented assignment.
+Bash accepts optional nonblank string `description` as UI metadata
 only; it grants no execution permission. Unknown or unsupported input keys fail.
 Dynamic expansion, arbitrary scripts/interpreters, unsupported
 options/code/tool schemas and ambiguous behavior hard-fail as requiring command
 review. Finals-only semantic receipts cannot waive that failure; no review
 override is implemented. This is an accepted language, not a general shell
 sandbox or proof about arbitrary generated programs.
+
+The bounded shell tokenizer preserves the distinction between words and control
+operators. Backslash-newline continuations, unquoted comments, control characters
+and operator-shaped literal arguments (for example a quoted `>`) are rejected.
+Native `zsh -c/-lc` wrappers are rejected: its default EQUALS and MULTIOS
+semantics are outside this grammar. The pinned DSH local bash executor invokes
+`bash -c`; a terminal's default shell does not select the tool's interpreter.
+Only an unquoted numeric word immediately adjacent to a redirection is an I/O
+descriptor; quoting it or separating it with whitespace leaves an ordinary
+argument. Protected paths are compared case-insensitively as a conservative rule
+on case-insensitive filesystems. Real Bash argv and filesystem regressions cover
+these distinctions, including modify-and-restore attempts before a snapshot.
+The general branch rejects descriptor copies and explicit stderr redirects,
+including `>&2`, `2>&1` and `2>file`: it tracks stdout sources, not a second stderr
+stream through nested wrappers. The separately verified one-shot `check.sh`
+receipt path still supports its bounded stdout/stderr capture forms.
 
 DSH glob accepts `pattern` and optional `path`. It enumerates names through
 fixed `rg --files` argv; it never provides content-read evidence. The bounded

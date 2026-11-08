@@ -1,9 +1,9 @@
 {
-  "version": "live-fill-1.1.2-v1",
+  "version": "live-fill-1.1.2-v2-isolated-python",
   "groups": 10,
   "rounds": 31,
   "fill_per_cell": 230,
-  "prompts_sha256": "6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29",
+  "prompts_sha256": "be488564396d7758c76851d4876f1008ab0fe122132d6e40479cb60a664bc886",
   "fill_turns": [
     2,
     3,

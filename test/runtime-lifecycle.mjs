@@ -400,6 +400,23 @@ test("raw corruption after selection is rechecked before any cut or backup claim
   assert.equal(readdirSync(sessionDir(h.root, f.session.id)).some((name) => name.startsWith("cut-")), false);
 });
 
+test("#34 defers tool-result shadow capture and coalesces duplicate events", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine();
+  const event = f.session.snapshotEvents().find((item) => item.type === "tool/result");
+  assert.ok(event);
+  let calls = 0;
+  engine.captureOne = () => { calls++; };
+
+  ctx.emit("session/event", f.session, event);
+  ctx.emit("session/event", f.session, event);
+  assert.equal(calls, 0, "session/event must return before shadow I/O");
+
+  await setImmediate();
+  assert.equal(calls, 1, "one tool result must have one deferred capture");
+});
+
 test("permission errors in actual event/idle hooks and guarded prune do not escape or poison the next session", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
@@ -415,6 +432,7 @@ test("permission errors in actual event/idle hooks and guarded prune do not esca
   } };
   engine.captureOne = (session, event) => capture(session, event, access);
   for (const event of f.session.snapshotEvents()) assert.doesNotThrow(() => ctx.emit("session/event", f.session, event));
+  await setImmediate();
   const refused = engine.rawSeen.get(engine.rawKey(f.session, "long"));
   assert.equal(pointerFor(refused), "无完整备份 [long]");
   engine.ensurePruneGuard();

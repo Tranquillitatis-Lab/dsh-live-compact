@@ -15,6 +15,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
@@ -459,6 +460,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   rawSeen = new Map();
   callIndex = new Map();
   captureCursor = new Map();
+  pendingCaptures = new Set();
+  pendingCaptureKeys = new Set();
   pruneGuarded = false;
 
   constructor(ctx, config, resolvedConfig) {
@@ -470,13 +473,35 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     try {
       const pendingCuts = new Set();
       ctx.effect(() => async () => {
-        await Promise.allSettled(pendingCuts);
+        await Promise.allSettled([...pendingCuts, ...this.pendingCaptures]);
       });
       ctx.on("session/event", (session, event) => {
         try {
           this.noteEvent(session, event);
           if (event?.type !== "tool/result") return;
-          this.captureOne(session, event);
+          const id = event.data?.message?.toolCallId;
+          if (!id) return;
+          const key = this.rawKey(session, id);
+          const cached = this.rawSeen.get(key);
+          if (cached && !cached.retryable) return;
+          if (this.pendingCaptureKeys.has(key)) return;
+          this.pendingCaptureKeys.add(key);
+          let job;
+          job = new Promise((resolve) => {
+            scheduleImmediate(() => {
+              try {
+                const current = this.rawSeen.get(key);
+                if (!current || current.retryable) this.captureOne(session, event);
+              } catch (error) {
+                noteShadowWarning(ctx.logger, error);
+              } finally {
+                this.pendingCaptureKeys.delete(key);
+                this.pendingCaptures.delete(job);
+                resolve();
+              }
+            });
+          });
+          this.pendingCaptures.add(job);
         } catch (error) {
           noteShadowWarning(ctx.logger, error);
         }
@@ -550,6 +575,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const state = this.stateFor(agent);
     const signal = AbortSignal.timeout(30000);
     const ev = events || agent.session.snapshotEvents();
+    await this.flushPendingCaptures();
     this.captureNew(agent.session, ev, settings);
     const jobs = collectJobs(ev);
     const calls = indexToolCalls(ev);
@@ -650,6 +676,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     } finally {
       state.localOnly = false;
     }
+  }
+
+  async flushPendingCaptures() {
+    if (!this.pendingCaptures?.size) return;
+    await Promise.allSettled([...this.pendingCaptures]);
   }
 
   async commitSelectedSpan(agent, chunk, signal) {

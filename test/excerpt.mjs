@@ -102,6 +102,43 @@ const hugeError = toolExcerpt([
 ]);
 assert.equal(hugeError.text.includes("ValueError: kept-tail"), true);
 assert.equal(hugeError.text.length <= 2400, true);
+const middleFailureText = [
+  "Error: build failed",
+  ...Array.from({ length: 8 }, (_, index) => `    at setup (file.js:${index + 1}:1)`),
+  "ROOT_CAUSE_ONLY_HERE=missing config key",
+  ...Array.from({ length: 8 }, (_, index) => `    at run (file.js:${index + 20}:1)`),
+  "last context",
+  "final context",
+  "[exit code: 23]",
+].join("\n");
+const middleFailure = buildCard("", "", [{ role: "tool", text: middleFailureText, isError: true }]);
+assert.equal(middleFailure.ok, true);
+assert.equal(middleFailure.text.includes("ROOT_CAUSE_ONLY_HERE=missing config key"), true);
+assert.equal(middleFailure.text.includes("[exit code: 23]"), true);
+assert.equal(middleFailure.text.includes("这是当时的报错原文"), true);
+const dualFailureText = JSON.stringify({
+  exitCode: 23,
+  stdout: { text: "STDOUT_CAUSE=missing setting\nstdout tail" },
+  stderr: { text: "STDERR_CAUSE=wrapper failed\nROOT_CAUSE=missing key" },
+});
+const dualFailure = buildCard("", "", [{ role: "tool", text: dualFailureText, isError: false }]);
+assert.equal(dualFailure.text.includes("STDOUT_CAUSE=missing setting"), true);
+assert.equal(dualFailure.text.includes("STDERR_CAUSE=wrapper failed"), true);
+assert.equal(dualFailure.text.includes("ROOT_CAUSE=missing key"), true);
+assert.equal(dualFailure.text.includes("[exit code: 23]"), true);
+assert.equal(dualFailure.text.includes("Done successfully"), false);
+const budgetFailure = toolExcerpt([
+  { role: "tool", text: JSON.stringify({
+    exitCode: 23,
+    stdout: { text: `${"stdout progress ".repeat(220)}\nSTDOUT_CAUSE=missing setting\nstdout tail` },
+    stderr: { text: `${"stderr progress ".repeat(220)}\nSTDERR_CAUSE=wrapper failed\nROOT_CAUSE=missing key` },
+  }), isError: false },
+]);
+assert.equal(budgetFailure.text.length <= 2400, true);
+assert.equal(budgetFailure.text.includes("STDOUT_CAUSE=missing setting"), true);
+assert.equal(budgetFailure.text.includes("STDERR_CAUSE=wrapper failed"), true);
+assert.equal(budgetFailure.text.includes("ROOT_CAUSE=missing key"), true);
+assert.equal(budgetFailure.text.includes("[exit code: 23]"), true);
 assert.equal(fitFailure("abcdef", 0), "");
 assert.equal(fitFailure("abcdef", 3), "def");
 assert.equal(fitFailure("abcdef", 4).length <= 4, true);
@@ -142,7 +179,7 @@ assert.equal(isToolFailure(stderr, false), true);
 assert.equal(failed.text.includes("│ Traceback (most recent call last):"), true);
 assert.equal(failed.text.includes("│ ValueError: ledger total negative: -42.17"), true);
 assert.equal(failed.text.includes("│ File \"broken.py\", line 3"), true);
-assert.equal(failed.text.includes("NOISE-MIDDLE"), false);
+assert.equal(failed.text.includes("NOISE-MIDDLE"), true);
 assert.equal(failed.text.includes("这是当时的报错原文"), true);
 const oldHome = process.env.DSH_HOME;
 process.env.DSH_HOME = "/tmp/dsh-home";

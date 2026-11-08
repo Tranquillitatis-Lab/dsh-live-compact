@@ -92,9 +92,12 @@ invented, and no historical artifact completeness or cache claim follows.
 
 ## Frozen boundary and offline verification
 
-`manifest.json`, `prompts.json`, `prompts.py`, `mkfx.py`, `contract.py` and
-`synthetic.py` are unchanged. The prompt SHA remains
-`6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29`.
+Before collection, contract v2 adds the isolated Python invocation rule to turn 1.
+Turns 2–31 and all task facts/answers are unchanged. `prompts.py` remains the
+historical generator; do not regenerate v2 from it. The current prompt SHA is
+`be488564396d7758c76851d4876f1008ab0fe122132d6e40479cb60a664bc886` (v1 was `6b7e1d54d72af05533505905419b3b92940eae27faad52e899a1eb85a69e7d29`).
+The accepted Python shell forms are exactly `python3 -I -c` / `python -I -c`;
+non-isolated imports cannot establish trusted module identity.
 The independent original-fixture inventory test remains unchanged. Dimensions
 remain 10 × 31 / 230 FILL; cache formulas, budgets and expected values remain
 unchanged. Existing attempt fingerprints intentionally become stale when scorer

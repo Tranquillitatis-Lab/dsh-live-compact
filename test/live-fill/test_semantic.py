@@ -213,7 +213,7 @@ class SemanticTests(unittest.TestCase):
                     result = dict(type='tool_result', callId='bad', status='completed', result='[exit code: 9]')
                     commands = {'forbidden-behavior': 'rm scratch', 'quoted-rm': '"rm" scratch',
                                 'wrapped-rm': 'sh -c "rm scratch"',
-                                'forbidden-import': 'python -c "import pandas, tenacity"',
+                                'forbidden-import': 'python -I -c "import pandas, tenacity"',
                                 'opaque-command': 'eval "$PAYLOAD"'}
                     if kind in commands:
                         # Audit inert log strings only; never execute these.
@@ -254,19 +254,125 @@ class SemanticTests(unittest.TestCase):
                         verify(self.policy, self.packet, self.mapping, self.receipts)
 
     def test_turn29_import_alias_rereads_are_nonwaivable(self):
+        commands = [(f"python3 -I -c 'from pathlib import Path as {alias}; "
+                     f'{alias}("part" + "14.log").read_text()' + "'")
+                    for alias in ('str', 'print', 'open', 'reader', 'read_text')]
+        self.assert_turn29_behavior_nonwaivable(commands)
+
+    def test_turn29_pattern_capture_rereads_are_nonwaivable(self):
+        self.assert_turn29_behavior_nonwaivable([
+            "python3 -I -c 'match open:\n    case str:\n        print(str(\"part\" + \"14.log\").read())'",
+            "python3 -I -c 'from pathlib import Path\nmatch Path:\n    case str:\n        print(str(\"part\" + \"14.log\").read_text())'",
+            "python3 -I -c 'match {\"reader\": open}:\n    case {\"reader\": str}:\n        print(str(\"part\" + \"14.log\").read())'",
+        ])
+
+    def test_turn29_nonisolated_imports_are_nonwaivable(self):
+        self.assert_turn29_behavior_nonwaivable([
+            "python3 -c 'import csv'",
+            "python3 -c 'from pathlib import Path'",
+        ])
+
+    def test_turn29_outside_workspace_write_is_nonwaivable(self):
+        self.assert_turn29_behavior_nonwaivable(["printf safe > /tmp/lc112-audit-outside.txt"])
+
+    def assert_turn29_behavior_nonwaivable(self, commands):
         path = self.roots['ds/candidate'] / 'runs/spine-1/t29.jsonl'
         original = [json.loads(x) for x in path.read_text().splitlines()]
-        for alias in ('str', 'print', 'open', 'reader', 'read_text'):
-            command = (f"python3 -c 'from pathlib import Path as {alias}; "
-                       f'{alias}("part" + "14.log").read_text()' + "'")
+        for command in commands:
             items = copy.deepcopy(original)
             items[3:3] = [dict(type='tool_call', callId='alias-reread', tool='bash',
                               input={'command':command}),
                           dict(type='tool_result', callId='alias-reread', status='completed',
                                result='[exit code: 0]')]
-            with self.subTest(alias=alias), self.changed_events(path, items):
+            with self.subTest(command=command), self.changed_events(path, items):
                 with self.assertRaisesRegex(ValueError, 'hard evidence/tool/behavior failure'):
                     verify(self.policy, self.packet, self.mapping, self.receipts)
+
+    def test_normalized_protected_writes_and_directory_rg_are_nonwaivable(self):
+        path=self.roots['ds/candidate']/'runs/spine-1/t14.jsonl'
+        original=[json.loads(x) for x in path.read_text().splitlines()]
+        cfg=(self.roots['ds/candidate']/'work/spine-1/conf/settings.toml').read_text()
+        variants=[[dict(tool='write',input={'file_path':alias,'content':text}) for text in ('port = 1',cfg)]
+                  for alias in ('conf/./settings.toml','conf//settings.toml')]
+        variants.append([dict(tool='bash',input={'command':'mkdir -p inputs.d'}),
+                         dict(tool='write',input={'file_path':'inputs.d/sample.csv','content':'a,b'+chr(10)+'1,2'}),
+                         dict(tool='bash',input={'command':"rg -o '^[^,]+' inputs.d"})])
+        for calls in variants:
+            items=copy.deepcopy(original);extra=[]
+            for index,call in enumerate(calls):
+                extra += [dict(type='tool_call',callId=f'policy-{index}',**call),
+                          dict(type='tool_result',callId=f'policy-{index}',status='completed',result='[exit code: 0]')]
+            items[5:5]=extra
+            with self.subTest(calls=calls),self.changed_events(path,items):
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):
+                    verify(self.policy,self.packet,self.mapping,self.receipts)
+
+    def test_shell_lexical_bypasses_remain_nonwaivable(self):
+        import shlex
+        path=self.roots['ds/candidate']/'runs/spine-1/t14.jsonl';original=[json.loads(x) for x in path.read_text().splitlines()]
+        old=(self.roots['ds/candidate']/'work/spine-1/conf/settings.toml').read_text()
+        target='conf/set'+chr(92)+chr(10)+'tings.toml'
+        command="printf '%s' 'port = 1' > "+target+"; printf '%s' "+shlex.quote(old)+' > '+target
+        variants=[[dict(tool='bash',input={'command':command})],
+                  [dict(tool='write',input={'file_path':'>','content':''}),
+                   dict(tool='write',input={'file_path':'sample.csv','content':'a,b'+chr(10)+'1,2'}),
+                   dict(tool='bash',input={'command':"rg -o '^[^,]+' '>' sample.csv part14.log"})]]
+        for calls in variants:
+            items=copy.deepcopy(original);extra=[]
+            for index,call in enumerate(calls):extra += [dict(type='tool_call',callId=f'lex-{index}',**call),dict(type='tool_result',callId=f'lex-{index}',status='completed',result='[exit code: 0]')]
+            items[5:5]=extra
+            with self.changed_events(path,items):
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):verify(self.policy,self.packet,self.mapping,self.receipts)
+
+    def test_augmented_path_reread_is_nonwaivable(self):
+        original=score_cell(self.roots['ds/candidate'])
+        verify(self.policy,self.packet,self.mapping,self.receipts)
+        path=self.roots['ds/candidate']/'runs/spine-1/t29.jsonl';items=[json.loads(x)for x in path.read_text().splitlines()]
+        command="python3 -I -c 'from pathlib import Path; p = Path(\".\"); p /= \"pa\" + \"rt14.log\"; print(p.read_text())'"
+        position=next(i for i,item in enumerate(items) if item.get('type')=='status' and item.get('phase')=='step_end')
+        items[position:position]=[dict(type='tool_call',callId='aug-path',tool='bash',input={'command':command}),dict(type='tool_result',callId='aug-path',status='completed',result='[exit code: 0]')]
+        with self.changed_events(path,items):
+            report=score_cell(self.roots['ds/candidate'])
+            self.assertTrue(report['evidence_pass'],report['evidence_errors'])
+            self.assertEqual((report['warn_correct'],report['notice_correct']),(original['warn_correct'],original['notice_correct']))
+            with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):
+                export(self.policy,self.blind/'augmented-packet.json',self.base/'augmented-map.json')
+            with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):verify(self.policy,self.packet,self.mapping,self.receipts)
+
+    def test_zsh_dialect_is_nonwaivable(self):
+        import shlex
+        path=self.roots['ds/candidate']/'runs/spine-1/t14.jsonl';original=[json.loads(x)for x in path.read_text().splitlines()]
+        baseline=score_cell(self.roots['ds/candidate']);verify(self.policy,self.packet,self.mapping,self.receipts)
+        for index,command in enumerate(['head -c 1 =cat | wc -c','cat < sample.csv < plain.txt | grep ","']):
+            items=copy.deepcopy(original);position=next(i for i,e in enumerate(items)if e.get('phase')=='step_end')
+            items[position:position]=[dict(type='tool_call',callId='dialect',tool='bash',input={'command':'zsh -c '+shlex.quote(command)}),dict(type='tool_result',callId='dialect',status='completed',result='[exit code: 0]')]
+            with self.subTest(command=command),self.changed_events(path,items):
+                report=score_cell(self.roots['ds/candidate']);self.assertTrue(report['evidence_pass'],report['evidence_errors']);self.assertEqual((report['warn_correct'],report['notice_correct']),(baseline['warn_correct'],baseline['notice_correct']))
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):export(self.policy,self.blind/f'zsh-packet-{index}.json',self.base/f'zsh-map-{index}.json')
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):verify(self.policy,self.packet,self.mapping,self.receipts)
+
+    def test_stderr_escape_is_nonwaivable(self):
+        from test_shell_semantics import stderr_commands
+        root=self.roots['ds/candidate'];path=root/'runs/spine-1/t14.jsonl';original=[json.loads(x)for x in path.read_text().splitlines()];text='a,b'+chr(10)+'1,2'+chr(10)
+        baseline=score_cell(root);verify(self.policy,self.packet,self.mapping,self.receipts)
+        @contextlib.contextmanager
+        def snapshots():
+            originals={}
+            try:
+                for turn in range(14,32):
+                    snap=root/f'runs/spine-1/t{turn}.snapshot.json';meta=root/f'runs/spine-1/t{turn}.meta.json';originals[snap]=snap.read_bytes();originals[meta]=meta.read_bytes()
+                    value=read_json(snap);value['files']['sample.csv']=sha(text.encode());value['texts']['sample.csv']=text;data=json.dumps(value).encode();snap.write_bytes(data)
+                    value=read_json(meta);value['snapshot_sha256']=sha(data);meta.write_text(json.dumps(value))
+                yield
+            finally:
+                for file,data in originals.items():file.write_bytes(data)
+        for index,command in enumerate(stderr_commands()[:3]):
+            items=copy.deepcopy(original);position=next(i for i,e in enumerate(items)if e.get('phase')=='step_end')
+            items[position:position]=[dict(type='tool_call',callId='stderr-write',tool='write',input={'file_path':'sample.csv','content':text}),dict(type='tool_result',callId='stderr-write',status='completed',result='[exit code: 0]'),dict(type='tool_call',callId='stderr-route',tool='bash',input={'command':command}),dict(type='tool_result',callId='stderr-route',status='completed',result='[exit code: 0]')]
+            with self.subTest(command=command),self.changed_events(path,items),snapshots():
+                report=score_cell(root);self.assertTrue(report['evidence_pass'],report['evidence_errors']);self.assertEqual((report['warn_correct'],report['notice_correct']),(baseline['warn_correct'],baseline['notice_correct']))
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):export(self.policy,self.blind/f'stderr-packet-{index}.json',self.base/f'stderr-map-{index}.json')
+                with self.assertRaisesRegex(ValueError,'hard evidence/tool/behavior failure'):verify(self.policy,self.packet,self.mapping,self.receipts)
 
     def test_absent_full_run_or_stale_run_rejected(self):
         path = self.extra_path

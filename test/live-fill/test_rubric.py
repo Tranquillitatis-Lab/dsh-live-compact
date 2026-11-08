@@ -3,17 +3,109 @@ import copy
 import json
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from contract import MANIFEST, NOTICE, sha
 from mkfx import write_workspace
-from rubric import behavior, check_activity, check_command, check_evidence, fields, fill_answer
-from command_audit import OPAQUE, tool_errors
-from score import parse_turn
+from rubric import (behavior, check_activity, check_command, check_evidence, fields,
+                    fill_answer, normal_fill_answer, normal_recall_errors)
+from command_audit import OPAQUE, tool_errors, bash_input_errors
+from score import parse_turn, recoverable_model_command
 from synthetic import CHECK, HIDDEN, RECALL, STATUS, events, write_events
 
 
 class AnswerGrammarTests(unittest.TestCase):
+    def test_normal_live_answer_accepts_model_markdown_and_history(self):
+        text = ('已读取 part4.log（共 520 行）。\n'
+                '**WARN 条数：7 条**\n'
+                '**NOTICE 原文行（1 条）：** 第 261 行：`NOTICE cache layer pinned to sqlite`\n'
+                '此前趋势另见 part3。')
+        self.assertEqual(normal_fill_answer(text, 4), [])
+        self.assertEqual(normal_fill_answer('WARN 条数：3\nNOTICE：NONE（全文件无 NOTICE 行）', 9), [])
+
+    def test_normal_live_answer_still_rejects_wrong_current_facts(self):
+        self.assertTrue(normal_fill_answer('WARN 条数：8\nNOTICE：NONE', 4))
+        self.assertTrue(normal_fill_answer('WARN 条数：7\nNOTICE：NONE', 4))
+        self.assertTrue(normal_fill_answer('WARN 条数：4\nNOTICE：NONE', 9))
+        self.assertTrue(normal_fill_answer('WARN 条数：7,000\nNOTICE：NOTICE cache layer pinned to sqlite', 4))
+        self.assertTrue(normal_fill_answer('WARN 条数：7\nNOTICE：NOTICE cache layer pinned to sqlite_disabled', 4))
+        self.assertTrue(normal_fill_answer('WARN 条数：3\nNOTICE：NONE\n更正：本轮有一条 NOTICE，原文为 NOTICE cache layer pinned to sqlite', 9))
+        self.assertTrue(normal_fill_answer('WARN: 7.5\nNOTICE cache layer pinned to sqlite', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE cache layer pinned to sqlite\nNOTICE cache layer pinned to sqlite_disabled', 4))
+        self.assertEqual(normal_fill_answer('WARN: 7（此前为 6）\nNOTICE cache layer pinned to sqlite', 4), [])
+        self.assertTrue(normal_fill_answer('WARN: 7\n当前 WARN: 8（此前为 6）\nNOTICE cache layer pinned to sqlite', 4))
+        self.assertEqual(normal_fill_answer('历史 WARN: 6；当前 WARN: 7\nNOTICE cache layer pinned to sqlite', 4), [])
+        self.assertTrue(normal_fill_answer('earlier WARN: 6. Now WARN: 8\nWARN: 7\nNOTICE cache layer pinned to sqlite', 4))
+        self.assertEqual(normal_fill_answer('历史（WARN: 6）\nWARN: 7\nNOTICE cache layer pinned to sqlite', 4), [])
+        for malformed in ('WARN: 7.5', 'WARN: 7e2', 'WARN: 7,', 'WARN: 7_000'):
+            self.assertTrue(normal_fill_answer(malformed + '\nNOTICE cache layer pinned to sqlite', 4))
+        for malformed in ('NOTICE cache layer pinned to sqlite_disabled', 'NOTICE 404 unexpected'):
+            self.assertTrue(normal_fill_answer('WARN: 7\n' + malformed, 4))
+        self.assertTrue(normal_fill_answer('WARN: 3\nNOTICE: NONE_extra', 9))
+        self.assertTrue(normal_fill_answer('WARN: 3\nNOTICE: NONE-extra', 9))
+        self.assertTrue(normal_fill_answer('WARN: 3\nNOTICE: NONE\nNOTICE 404 unexpected', 9))
+        self.assertTrue(normal_fill_answer('WARN: 7\n`NOTICE cache layer pinned to sqlite_`', 4))
+        self.assertEqual(normal_fill_answer('WARN: 7\nNOTICE: NOTICE cache layer pinned to sqlite', 4), [])
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: not `NOTICE cache layer pinned to sqlite`', 4))
+        self.assertTrue(normal_fill_answer('WARN: 3\nNOTICE: NONE\n查找已完成；当前 NOTICE 404 unexpected', 9))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: `NOTICE cache layer pinned to sqlite*`', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: `NOTICE cache layer pinned to sqlite**`', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\n当前原文不是 `NOTICE cache layer pinned to sqlite`', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\n当前原文不是 NOTICE cache layer pinned to sqlite', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\n``NOTICE cache layer pinned to sqlite**``', 4))
+        self.assertEqual(normal_fill_answer('WARN: 7\nNOTICE: ``NOTICE cache layer pinned to sqlite``', 4), [])
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: ``NOTICE cache layer pinned to sqlite`;**``', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE cache layer pinned to sqlite\n当前没有 NOTICE', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: ``NOTICE cache layer pinned to sqlite;**``', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: not ``NOTICE cache layer pinned to sqlite``', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: not NOTICE cache layer pinned to sqlite', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: ``NOTICE cache layer pinned to sqlite` ``', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE cache layer pinned to sqlite\n当前没有 ``NOTICE cache layer pinned to sqlite``', 4))
+        self.assertTrue(normal_fill_answer('WARN: 7\nNOTICE: ``NOTICE cache layer pinned to sqlite``` ``', 4))
+
+    def test_normal_live_recall_accepts_self_contained_prose(self):
+        text = ('缓存 SQLite；当前端口 9310（旧值 8642 已废弃）；限流 37/分钟；'
+                '告警阈值 0.875；失败的测试 tests/test_ledger.py；审核人 Okafor；'
+                '名字 Bluebird；金额格式 USD 两位小数；区域 eu-west-3；值班人 @mirela；'
+                '工单 LED-4471；成本上限 $412/月；报错码 E1729；分片 0x3F。')
+        self.assertEqual(normal_recall_errors(text), [])
+        self.assertTrue(normal_recall_errors(text.replace('37/分钟', '137/分钟')))
+        self.assertTrue(normal_recall_errors(text.replace('USD 两位小数', 'USDT 两位小数')))
+        self.assertTrue(normal_recall_errors(text.replace('金额格式 USD 两位小数', '金额格式 EUR 两位小数（USD 已停用）')))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310（旧值 8642 已废弃）', '当前端口 8642，旧值 9310 已废弃')))
+        split = text.replace('报错码 E1729；分片 0x3F。',
+                             '报错码：退出码 3，分片 0x3F，原文\nE1729 shard 0x3F (expected 9f2c71ab, got 9f2c71ae)')
+        self.assertEqual(normal_recall_errors(split), [])
+        self.assertTrue(normal_recall_errors(split.replace('报错码：退出码 3', '报错码：E1730')))
+        self.assertTrue(normal_recall_errors('报错码 未知（旧值 E1729）\n分片 0x3F'))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310（旧值 8642 已废弃）', '当前端口 8642；9310 为旧值')))
+        self.assertTrue(normal_recall_errors(text.replace('报错码 E1729', '报错码 E1730（旧值 E1729）')))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310（旧值 8642 已废弃）', '当前端口 8642，不是 9310')))
+        self.assertTrue(normal_recall_errors(text + '\n报错码 E1730'))
+        self.assertTrue(normal_recall_errors(text.replace('37/分钟', '0.37 per minute')))
+        self.assertTrue(normal_recall_errors(text.replace('告警阈值 0.875', '告警阈值 -0.875')))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310（旧值 8642 已废弃）', '当前端口 9310（旧值，当前为 8642）')))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310（旧值 8642 已废弃）', '当前端口 8642（9310 为旧值）')))
+        self.assertTrue(normal_recall_errors(text.replace('缓存 SQLite', '缓存 Redis（旧值 SQLite）')))
+        self.assertTrue(normal_recall_errors(text.replace('$412/月', '-$412/月')))
+        self.assertTrue(normal_recall_errors(text.replace('报错码 E1729', '报错码 未知（旧值 E1729）')))
+        self.assertTrue(normal_recall_errors(text.replace('当前端口 9310', '当前端口 -9310')))
+        self.assertTrue(normal_recall_errors(text.replace('报错码 E1729', '报错码 E1729（旧值）')))
+    def test_normal_read_explanations_do_not_change_the_primary_answer(self):
+        text = ('**WARN 条数：6**（行号 181、188、195、202、209、216）\n'
+                '**NOTICE：NONE**（已按大小写不敏感复核，文件中无 notice 字样）')
+        self.assertEqual(fill_answer(text, 3), [])
+
+    def test_explanatory_warn_citations_still_match_the_fixture(self):
+        self.assertTrue(fill_answer('WARN 条数：6（行号 9999）\nNOTICE：NONE', 3))
+        self.assertTrue(fill_answer('WARN 条数：6，例如 WARN ledger drift turn=999 n=1\nNOTICE：NONE', 3))
+        self.assertTrue(fill_answer('WARN 条数：6（行号 181）（行号 9999）\nNOTICE：NONE', 3))
+        self.assertTrue(fill_answer('WARN 条数：6（行号 ９９９９）\nNOTICE：NONE', 3))
+        self.assertTrue(fill_answer('WARN 条数：6\n行号（181，（９９９９））\nNOTICE：NONE', 3))
+        self.assertEqual(fill_answer('WARN 条数：6\n行号（181）；之前共有 180 行\nNOTICE：NONE', 3), [])
+        self.assertTrue(fill_answer('WARN 条数：6\n行号：9999\nNOTICE：NONE', 3))
+        self.assertEqual(fill_answer('WARN 条数：6\n行号：181\nNOTICE：NONE', 3), [])
+
     def test_supporting_prose_and_markdown(self):
         for text in (
             '已读取文件，结果如下。\n- **WARN 条数：5**\n- **NOTICE 原文行：NONE**\n文件其余内容为 INFO 心跳。',
@@ -258,6 +350,98 @@ class AnswerGrammarTests(unittest.TestCase):
         self.assertTrue(fill_answer('WARN: 7\n'+NOTICE[4]+'.', 4))
         self.assertTrue(fill_answer('WARN: 7\nNOTICE 原文行（2 条）：\n'+NOTICE[4], 4))
 
+    def test_warn_count_never_uses_a_numeric_substring(self):
+        for turn in (2, 4, 14):
+            count = 3 + turn % 9
+            base = f'WARN: {count}\nNOTICE: {NOTICE.get(turn, "NONE")}'
+            for number in (f'-{count}', f'+{count}', f'1.{count}', f'1e{count}',
+                           f'1e+{count}', f'1,{count}', f'−{count}'):
+                for extra in (f'本轮共有 {number} 条 WARN。',
+                              f'There are {number} WARN lines.'):
+                    with self.subTest(turn=turn, extra=extra):
+                        errors = fill_answer(base+'\n'+extra, turn)
+                        self.assertTrue(any(x.startswith('WARN ') for x in errors))
+            self.assertEqual(fill_answer(base+f'\n共有 {count} 条 WARN。', turn), [])
+
+    def test_warn_alternatives_and_numeric_tokens_are_complete(self):
+        base = 'WARN: 8\nNOTICE: NONE'
+        for extra in ('本轮共有 8 条 WARN，或 -9。', 'There are 8 WARN lines, or +9.',
+                      '共有 8 条 WARN / −9。', '共有 8 条 WARN，或者 nine。',
+                      '本轮共有 1e−8 条 WARN。', '共有 0x8 条 WARN。',
+                      '共有 8. 条 WARN。', '共有 8foo 条 WARN。'):
+            with self.subTest(extra=extra):
+                self.assertTrue(fill_answer(base+'\n'+extra, 14))
+
+    def test_notice_numeric_tokens_cannot_donate_integer_suffixes(self):
+        base = f'WARN: 7\nNOTICE: {NOTICE[4]}'
+        for number in ('1e+1', '−1', '1e−1', '0x1', '1foo', '1.0', '+1', '1,1'):
+            with self.subTest(number=number):
+                self.assertTrue(fill_answer(base+f'\n本轮共有 {number} 条 NOTICE。', 4))
+
+    def test_chinese_notice_absence_cannot_supply_positive_substring(self):
+        for turn in (2, 4):
+            base = f'WARN: {3+turn%9}\nNOTICE: {NOTICE.get(turn, "NONE")}'
+            for absent in ('本轮没有一条 NOTICE。', '本轮没有任何一条 NOTICE。',
+                           '本轮无一条 NOTICE。', '本轮不存在 NOTICE。'):
+                with self.subTest(turn=turn, absent=absent):
+                    self.assertEqual(not fill_answer(base+'\n'+absent, turn), turn not in NOTICE)
+            for present in ('本轮有一条 NOTICE。', 'NOTICE 存在。'):
+                self.assertEqual(not fill_answer(base+'\n'+present, turn), turn in NOTICE)
+
+    def test_combined_heading_does_not_exempt_an_unrelated_label(self):
+        for name, sample in (('recall', RECALL), ('status', STATUS)):
+            for label in ('当前端口为 8642', 'The port is 8642', 'reviewer is Other'):
+                with self.subTest(name=name, label=label):
+                    self.assertTrue(fields(sample+'\n## 报错码与分片\n'+label+': '+CHECK, name))
+            base = sample.replace('code: E1729\nshard: 0x3F\n', '')
+            self.assertEqual(fields(base+'\n## 报错码与分片\n'+CHECK, name), [])
+            self.assertEqual(fields(base+'\n## 报错码与分片\n报错原文: '+CHECK, name), [])
+
+    def test_notice_annotations_cannot_reverse_count_in_words(self):
+        for turn in (2, 4):
+            count, other = int(turn in NOTICE), 'zero' if turn in NOTICE else 'one'
+            base = f'WARN: {3+turn%9}\nNOTICE: {NOTICE.get(turn, "NONE")}'
+            for suffix in (f'(actually {other})', f'(fixture verified (actually {other}))',
+                           f'(in fact {other})', '(actually none)', '(实际为一条)'):
+                with self.subTest(turn=turn, suffix=suffix):
+                    errors = fill_answer(base+f'\nNOTICE count: {count} {suffix}', turn)
+                    self.assertTrue(any(x.startswith('NOTICE ') for x in errors))
+
+    def test_notice_existence_negation_has_polarity(self):
+        for turn in (2, 4):
+            base = f'WARN: {3+turn%9}\nNOTICE: {NOTICE.get(turn, "NONE")}'
+            correct = 'NOTICE is not absent.' if turn in NOTICE else 'NOTICE is not present.'
+            wrong = 'NOTICE is not present.' if turn in NOTICE else 'NOTICE is not absent.'
+            with self.subTest(turn=turn):
+                self.assertTrue(fill_answer(base+'\n'+wrong, turn))
+                self.assertEqual(fill_answer(base+'\n'+correct, turn), [])
+
+    def test_read_summary_cannot_hide_a_current_answer(self):
+        for turn in (2, 4, 14):
+            count, n = 3+turn%9, int(turn in NOTICE)
+            base = f'WARN: {count}\nNOTICE: {NOTICE.get(turn, "NONE")}'
+            suffix = (f'（520 行，已做大小写不敏感复核，{count+n} 处匹配 = '
+                      f'{count} 条 WARN + {n} 条 NOTICE）：')
+            for prefix in (f'已读取 part{turn}.log；当前 WARN: {count+1}',
+                           f'已读取 part{turn}.log；NOTICE is not '+('present' if n else 'absent')):
+                with self.subTest(turn=turn, prefix=prefix):
+                    self.assertTrue(fill_answer(base+'\n'+prefix+suffix, turn))
+            self.assertEqual(fill_answer(base+f'\n已读取 part{turn}.log'+suffix, turn), [])
+            for wrong in (suffix.replace('520 行', '20 行'),
+                          suffix.replace(f'{count+n} 处', f'{count+n+1} 处')):
+                self.assertTrue(fill_answer(base+f'\n已读取 part{turn}.log'+wrong, turn))
+
+    def test_combined_fields_cannot_hide_conflicting_assertions(self):
+        for name, sample in (('recall', RECALL), ('status', STATUS)):
+            base = sample.replace('code: E1729\nshard: 0x3F\n', '')
+            for value in ('E1729 / 0x3F；code: NONE；shard: NONE',
+                          'E1729 / 0x3F (actually no error)',
+                          'E1729 / 0x3F；错误码为 NONE',
+                          'E1729 / 0x3F；port: 8642'):
+                with self.subTest(name=name, value=value):
+                    self.assertTrue(fields(base+'报错码与分片: '+value, name))
+            self.assertEqual(fields(base+'报错码与分片: E1729 / 0x3F', name), [])
+
     def test_labeled_fields_tables_lists_and_headings(self):
         for name, sample in (('recall', RECALL), ('hidden', HIDDEN), ('status', STATUS)):
             rows = [x.split(': ', 1) for x in sample.splitlines() if ': ' in x]
@@ -315,9 +499,142 @@ class ToolEvidenceTests(unittest.TestCase):
         self.path = Path(self.tmp.name)/'turn.jsonl'
         self.snapshot = {'files': self.initial, 'texts': {}, 'python_headers': {}}
 
-    def parsed(self, items, turn):
+    def parsed(self, items, turn, normal=False):
         write_events(self.path, items)
-        return parse_turn(self.path, turn, self.cwd, 'sid')
+        return parse_turn(self.path, turn, self.cwd, 'sid', normal)
+
+    def test_normal_mode_keeps_recovered_model_command_failure_as_tool_note(self):
+        items = events(2, self.cwd, 'sid')
+        call = dict(type='tool_call', callId='cat-a', tool='bash',
+                    input={'command': 'grep -F WARN missing.log | cat -A', 'workdir': str(self.cwd)})
+        result = dict(type='tool_result', callId='cat-a', status='completed',
+                      result='[stderr]\ncat: illegal option -- A\n[exit code: 1]')
+        items[5:5] = [call, result]
+        parsed = self.parsed(items, 2, normal=True)
+        self.assertEqual(parsed['evidence_errors'], [])
+        self.assertTrue(parsed['expected_read'])
+        self.assertIn('model command failed:', parsed['tool_quality_errors'][0])
+
+    def test_read_only_command_whitelist_is_whole_command(self):
+        self.assertTrue(recoverable_model_command('cat part2.log; grep WARN part2.log'))
+        self.assertFalse(recoverable_model_command('cat part2.log; definitely_unknown'))
+        self.assertFalse(recoverable_model_command('sed -i s/x/y/ part2.log'))
+        self.assertFalse(recoverable_model_command("sed -n 'w /tmp/review-marker' part2.log missing.log"))
+        self.assertFalse(recoverable_model_command('awk -f diagnostic.awk part2.log'))
+        self.assertTrue(recoverable_model_command("grep -E 'WARN|NOTICE' missing.log"))
+        self.assertFalse(recoverable_model_command("awk '/WARN|NOTICE/ {print}' missing.log"))
+        self.assertFalse(recoverable_model_command("sed -n '$p' missing.log"))
+        self.assertFalse(recoverable_model_command("cat missing || sh -c 'touch /tmp/review-marker; exit 1'"))
+        self.assertFalse(recoverable_model_command('cat missing# || sh -c "touch /tmp/review-marker"'))
+
+    def test_normal_mode_unknown_command_failure_stays_hard(self):
+        items = events(2, self.cwd, 'sid')
+        call = dict(type='tool_call', callId='curl', tool='bash',
+                    input={'command': 'curl https://example.invalid', 'workdir': str(self.cwd)})
+        result = dict(type='tool_result', callId='curl', status='completed',
+                      result='curl: failed\n[exit code: 1]')
+        items[5:5] = [call, result]
+        parsed = self.parsed(items, 2, normal=True)
+        self.assertIn('tool command failed', parsed['evidence_errors'])
+
+    def test_normal_mode_still_rejects_missing_read_and_bad_once_only_check(self):
+        items = events(2, self.cwd, 'sid')
+        items = [x for x in items if x.get('type') not in ('tool_call', 'tool_result')]
+        parsed = self.parsed(items, 2, normal=True)
+        self.assertIn('no successful correlated read of expected file', parsed['evidence_errors'])
+        items = events(1, self.cwd, 'sid')
+        next(x for x in items if x.get('type') == 'tool_call' and x.get('tool') == 'bash')['input']['command'] = 'echo check'
+        parsed = self.parsed(items, 1, normal=True)
+        self.assertTrue(any('check execution' in x for x in parsed['evidence_errors']))
+
+    def test_answer_contradictions_reach_the_turn_quality_score(self):
+        for turn in (2, 4, 14):
+            w, n = 3+turn%9, int(turn in NOTICE)
+            claims = (
+                (f'共有 -{w} 条 WARN。', 'WARN'),
+                (f'共有 1.{w} 条 WARN。', 'WARN'),
+                (f'共有 {w} 条 WARN，或 -{w+1}。', 'WARN'),
+                (f'共有 1e−{w} 条 WARN。', 'WARN'),
+                (f'NOTICE count: {n} (actually '+('zero' if n else 'one')+')', 'NOTICE'),
+                (f'共有 1e+{n} 条 NOTICE。', 'NOTICE'),
+                (f'共有 −{n} 条 NOTICE。', 'NOTICE'),
+                ('本轮'+('没有' if n else '有')+'一条 NOTICE。', 'NOTICE'),
+                ('NOTICE is not '+('present' if n else 'absent')+'.', 'NOTICE'),
+                (f'已读取 part{turn}.log；当前 WARN: {w+1}'
+                 f'（520 行，已做大小写不敏感复核，{w+n} 处匹配 = {w} 条 WARN + {n} 条 NOTICE）：', 'WARN'),
+            )
+            for claim, kind in claims:
+                with self.subTest(turn=turn, claim=claim):
+                    items = events(turn, self.cwd, 'sid')
+                    items[-1]['text'] += '\n'+claim
+                    parsed = self.parsed(items, turn)
+                    self.assertEqual(parsed['evidence_errors'], [])
+                    self.assertTrue(parsed['expected_read'])
+                    self.assertFalse(parsed[kind.lower()+'_correct'])
+                    self.assertTrue(parsed['quality_errors'])
+                    self.assertEqual(len(parsed['usage']), 2)
+
+    def test_combined_heading_conflict_reaches_real_recall_quality(self):
+        items = events(28, self.cwd, 'sid')
+        items[-1]['text'] += '\n## 报错码与分片\n当前端口为 8642: '+CHECK
+        parsed = self.parsed(items, 28)
+        self.assertEqual(parsed['evidence_errors'], [])
+        self.assertTrue(any(x.startswith('recall:') for x in parsed['quality_errors']))
+
+    def test_second_order_numeric_and_notice_polarity_bypasses_are_rejected(self):
+        cases = (
+            (14, '本轮共有 --8 条 WARN。'),
+            (4, '本轮共有 --1 条 NOTICE。'),
+            (14, '本轮共有 9WARN条。'),
+            (4, '本轮共有 1. 条 NOTICE。'),
+            (14, '共有 nine 或 8 条 WARN。'),
+            (14, '共有 8 或 nine 条 WARN。'),
+            (4, '本轮共有 1 条 NOTICE，−1。'),
+            (4, 'NOTICE 存在或不存在。'),
+            (2, 'NOTICE 不存在或存在。'),
+            (2, '已完整读取文件。本轮可能没有 NOTICE。'),
+        )
+        for turn, extra in cases:
+            with self.subTest(turn=turn, extra=extra):
+                base=f'WARN: {3+turn%9}\n'+(NOTICE.get(turn) or 'NONE')
+                self.assertTrue(fill_answer(base+'\n'+extra, turn))
+
+    def test_third_order_numeric_and_presence_bypasses_are_rejected(self):
+        cases = (
+            (2, '本轮没有 1 条 NOTICE。'),
+            (2, '本轮没有 NOTICE；NOTICE count is 5。'),
+            (4, 'NOTICE 存在/不存在。'),
+            (4, 'NOTICE is present/absent。'),
+            (4, '本轮共有 zero 或者 1 条 NOTICE。'),
+            (14, '共有 nine 或者 8 条 WARN。'),
+            (14, '共有 8 或者 nine 条 WARN。'),
+            (14, '8 或者 nine 条 WARN。'),
+            (14, '8 / nine 条 WARN。'),
+            (2, '本轮没有 NOTICE；NOTICE lines count: 5。'),
+            (4, 'not NOTICE。'),
+            (4, 'without NOTICE。'),
+            (14, '共有 8 条 WARN；−−1。'),
+            (14, 'WARN--1。'),
+            (14, '共有 one / 8 条 WARN。'),
+            (4, '共有 1 或者 zero 条 NOTICE。'),
+            (4, '共有 one / 0 条 NOTICE。'),
+            (2, '本轮没有 NOTICE；共有 5 条 NOTICE。'),
+            (14, '共有 8 条 WARN，−−1。'),
+            (14, '共有 8 条 WARN，+-1。'),
+            (14, 'WARN--1条。'),
+            (14, 'WARN+-1条。'),
+            (14, 'nine WARN or 8。'),
+            (4, '本轮共有 NOTICE1条。'),
+            (14, '本轮共有 WARN8条。'),
+            (4, '本轮共有 1 条 NOTICE，−1。'),
+            (4, '本轮共有 −−1 条 NOTICE。'),
+            (4, '本轮共有 +-1 条 NOTICE。'),
+        )
+        for turn, extra in cases:
+            with self.subTest(turn=turn, extra=extra):
+                base=f'WARN: {3+turn%9}\n'+(NOTICE.get(turn) or 'NONE')
+                accepted = not fill_answer(base+'\n'+extra, turn)
+                self.assertEqual(accepted, turn == 2 and extra == '本轮没有 1 条 NOTICE。')
 
     def test_parser_rejects_contradiction_next_to_a_log_example(self):
         items = events(2, self.cwd, 'sid')
@@ -329,6 +646,13 @@ class ToolEvidenceTests(unittest.TestCase):
         self.assertFalse(parsed['warn_correct'])
         self.assertTrue(parsed['notice_correct'])
         self.assertIn('WARN contradictory supplemental count', parsed['quality_errors'])
+
+    def test_bounded_timeout_metadata_is_observable_but_not_a_tool_error(self):
+        args = {'command': './check.sh', 'description': 'run once', 'workdir': str(self.cwd), 'timeoutMs': 120000}
+        self.assertEqual(bash_input_errors(args, self.cwd), [])
+        for value in (0, -1, 180001, 1.5, '120000'):
+            bad = dict(args, timeoutMs=value)
+            self.assertIn('unauditable tool behavior; independent command review required', bash_input_errors(bad, self.cwd))
 
     def test_cited_warn_count_conflict_is_quality_failure(self):
         items = events(2, self.cwd, 'sid')
@@ -572,6 +896,40 @@ class ToolEvidenceTests(unittest.TestCase):
             calls = [{'tool':'bash', 'input':{'command':c}} for c in commands]
             self.assertIn('repeated or unauditable check.sh execution', behavior(turn, calls, self.snapshot, self.initial))
 
+    def test_noncanonical_execution_is_reported_without_calling_it_missing(self):
+        items = events(1, self.cwd, 'sid')
+        call = next(x for x in items if x['type'] == 'tool_call')
+        result = next(x for x in items if x['type'] == 'tool_result')
+        call['input']['command'] = './check.sh; echo "exit=$?"'
+        result['result'] = CHECK + '\nexit=3'
+        parsed = self.parsed(items, 1)
+        self.assertIn('noncanonical once-only check execution', parsed['evidence_errors'])
+        self.assertNotIn('missing once-only check execution', parsed['evidence_errors'])
+
+    def test_two_observed_checks_remain_a_hard_failure(self):
+        items = events(1, self.cwd, 'sid')
+        first_call = next(x for x in items if x['type'] == 'tool_call')
+        first_result = next(x for x in items if x['type'] == 'tool_result')
+        first_call['input']['command'] = './check.sh'
+        first_result['result'] = CHECK + '\n[exit code: 3]'
+        second_call = copy.deepcopy(first_call)
+        second_result = copy.deepcopy(first_result)
+        second_call['callId'] = second_result['callId'] = 'check-2'
+        items[5:5] = [second_call, second_result]
+        parsed = self.parsed(items, 1)
+        self.assertIn('missing once-only check execution', parsed['evidence_errors'])
+        self.assertIn('repeated check.sh execution', parsed['quality_errors'])
+
+    def test_malformed_check_command_is_rejected_without_reading_stdin(self):
+        for value in (None, 7, ['.','/check.sh']):
+            with self.subTest(value=value):
+                items = events(1, self.cwd, 'sid')
+                call = next(x for x in items if x['type'] == 'tool_call')
+                call['input']['command'] = value
+                parsed = self.parsed(items, 1)
+                self.assertIn('missing once-only check execution', parsed['evidence_errors'])
+                self.assertNotIn('noncanonical once-only check execution', parsed['evidence_errors'])
+
     def test_check_evidence_requires_exact_error_and_status(self):
         for command, body in (('./check.sh', CHECK+'\n[exit code: 0]'),
                               ('./check.sh', CHECK+'\n[exit code: 7]'),
@@ -614,6 +972,43 @@ class ToolEvidenceTests(unittest.TestCase):
             self.assertEqual(parsed['model_tool_errors'], 1)
             self.assertEqual(len(parsed['usage']), 2)
 
+    def test_model_validation_error_allows_replace_all_metadata(self):
+        items, call, _ = self.validation_events()
+        call['input']['replace_all'] = True
+        parsed = self.parsed(items, 2)
+        self.assertEqual(parsed['evidence_errors'], [])
+        self.assertEqual(parsed['quality_errors'], ['model tool validation error: file not read'])
+        self.assertEqual(parsed['model_tool_errors'], 1)
+
+    def test_replace_all_does_not_hide_missing_edit_field(self):
+        items, call, _ = self.validation_events()
+        call['input'].pop('new_string')
+        call['input']['replace_all'] = True
+        parsed = self.parsed(items, 2)
+        self.assertIn('tool infrastructure failure', parsed['evidence_errors'])
+        self.assertEqual(parsed['model_tool_errors'], 0)
+
+    def test_non_repository_git_status_is_a_soft_diagnostic(self):
+        items = events(2, self.cwd, 'sid')
+        call = dict(type='tool_call', callId='git-status', tool='bash',
+                    input={'command': 'git status --short --branch', 'workdir': str(self.cwd)})
+        result = dict(type='tool_result', callId='git-status', status='completed',
+                      result='[stderr]\nfatal: not a git repository (or any of the parent directories): .git\n[exit code: 128]')
+        items[3:3] = [call, result]
+        parsed = self.parsed(items, 2)
+        self.assertEqual(parsed['evidence_errors'], [])
+        self.assertIn('model diagnostic command failed: git status outside repository', parsed['quality_errors'])
+
+    def test_git_status_soft_diagnostic_rejects_extra_failure(self):
+        items = events(2, self.cwd, 'sid')
+        call = dict(type='tool_call', callId='git-status', tool='bash',
+                    input={'command': 'git status --short --branch', 'workdir': str(self.cwd)})
+        result = dict(type='tool_result', callId='git-status', status='completed',
+                      result='fatal: not a git repository (or any of the parent directories): .git\nSegmentation fault\n[exit code: 139]')
+        items[3:3] = [call, result]
+        parsed = self.parsed(items, 2)
+        self.assertIn('tool command failed', parsed['evidence_errors'])
+
     def test_unknown_errors_and_transport_failures_are_not_excused(self):
         for change in ('path', 'tool', 'suffix', 'truncated', 'input', 'transport', 'timeout'):
             items, call, result = self.validation_events()
@@ -646,22 +1041,23 @@ class ToolEvidenceTests(unittest.TestCase):
                 ('"rm" scratch', 'forbidden rm command'),
                 ('sh -c "rm scratch"', 'forbidden rm command'),
                 ('printf safe & "rm" scratch', 'forbidden rm command'),
-                ('python -c "import pandas, tenacity"', 'forbidden package use: pandas'),
+                ('printf safe;\n"rm" scratch', 'forbidden rm command'),
+                ('python -I -c "import pandas, tenacity"', 'forbidden package use: pandas'),
                 ("env command /bin/'rm' scratch", 'forbidden rm command'),
                 ("bash -lc 'sh -c \"rm scratch\"'", 'forbidden rm command'),
-                ("python3 -c 'from tenacity import retry as again'", 'forbidden package use: tenacity')):
+                ("python3 -I -c 'from tenacity import retry as again'", 'forbidden package use: tenacity')):
             with self.subTest(command=command):
                 calls = [{'tool': 'bash', 'input': {'command': command}}]
                 self.assertIn(error, behavior(14, calls, self.snapshot, self.initial))
 
     def test_opaque_execution_cannot_silently_pass(self):
         for command in ("x=rm; $x scratch", 'eval "rm scratch"', 'sh script.sh',
-                        "python3 -c '__import__(\"pandas\")'", 'python3 helper.py',
-                        "python3 -c 'print = open; print(\".env\").read()'",
-                        "python3 -c 'from pathlib import Path; print((Path(\".\") / \".env\").read_text())'",
-                        "python3 -c 'from pathlib import Path; print(Path(\"safe\", \".env\").read_text())'",
+                        "python3 -I -c '__import__(\"pandas\")'", 'python3 helper.py',
+                        "python3 -I -c 'print = open; print(\".env\").read()'",
+                        "python3 -I -c 'from pathlib import Path; print((Path(\".\") / \".env\").read_text())'",
+                        "python3 -I -c 'from pathlib import Path; print(Path(\"safe\", \".env\").read_text())'",
                         'sed -n -e 1p -e "1e rm scratch" part14.log',
-                        'printf safe;\n"rm" scratch', 'echo hi <(rm scratch)',
+                        'echo hi <(rm scratch)',
                         'printf safe <> ".en""v"', 'cat <<EOF\nplain data\nEOF',
                         'env PATH=/tmp cat part14.log', 'cat $(printf .env)',
                         'cp --target-directory=vendor scratch', "rg WARN ."):
@@ -681,8 +1077,8 @@ class ToolEvidenceTests(unittest.TestCase):
             (14, {'tool':'bash', 'input':{'command':'printf old > conf/settings.toml; printf old > conf/settings.toml'}}, 'forbidden protected path write'),
             (1, {'tool':'bash', 'input':{'command':'./check.sh > vendor/check.out'}}, 'forbidden protected path write'),
             (14, {'tool':'write', 'input':{'file_path':'parser.py', 'content':'# owner: team-kestrel\nimport pandas as pd\n'}}, 'forbidden package use: pandas'),
-            (14, {'tool':'bash', 'input':{'command':"python3 -c 'print(open(\"ledger.csv\").read().split(\",\"))'"}}, 'unauditable CSV regex/split parsing'),
-            (14, {'tool':'bash', 'input':{'command':"python3 -c 'import re; print(re.findall(\"x\", open(\"ledger.csv\").read()))'"}}, OPAQUE),
+            (14, {'tool':'bash', 'input':{'command':"python3 -I -c 'print(open(\"ledger.csv\").read().split(\",\"))'"}}, 'unauditable CSV regex/split parsing'),
+            (14, {'tool':'bash', 'input':{'command':"python3 -I -c 'import re; print(re.findall(\"x\", open(\"ledger.csv\").read()))'"}}, OPAQUE),
             (14, {'tool':'bash', 'input':{'command':"sed -n '/,/p' ledger.csv"}}, 'unauditable CSV regex/split parsing'),
             (14, {'tool':'write', 'input':{'file_path':'helper.py', 'content':'print(1)'}}, 'new Python file missing owner header'),
         ]
@@ -696,9 +1092,9 @@ class ToolEvidenceTests(unittest.TestCase):
                         "grep -nE 'WARN|NOTICE' part14.log", "rg -n 'WARN|NOTICE' part14.log",
                         "sed -n '1,240p' part14.log", "sed -n -e '/WARN/p' part14.log",
                         "printf '%s\\n' 'rm pandas tenacity'; cat check.sh",
-                        "python3 -c 'from pathlib import Path; print(Path(\"part14.log\").read_text())'",
-                        "python3 -c 'text = open(\"part14.log\").read(); print(sum(line.startswith(\"WARN \") for line in text.splitlines()))'",
-                        "python3 -c 'import csv; print(list(csv.reader(open(\"ledger.csv\"))))'"):
+                        "python3 -I -c 'from pathlib import Path; print(Path(\"part14.log\").read_text())'",
+                        "python3 -I -c 'text = open(\"part14.log\").read(); print(sum(line.startswith(\"WARN \") for line in text.splitlines()))'",
+                        "python3 -I -c 'import csv; print(list(csv.reader(open(\"ledger.csv\"))))'"):
             with self.subTest(command=command):
                 self.assertEqual(behavior(14, [{'tool':'bash', 'input':{'command':command}}],
                                           self.snapshot, self.initial), [])
@@ -748,7 +1144,7 @@ class ToolEvidenceTests(unittest.TestCase):
                             commands, written_files={'scratch.txt':'a,b\n1,2\n'}))
         # A filename alongside the reader must not silently erase known/opaque
         # pipeline input. The bounded audit may conservatively retain it.
-        for producer in ('cat sample.csv', "python3 -c 'print(\"a,b\")'"):
+        for producer in ('cat sample.csv', "python3 -I -c 'print(\"a,b\")'"):
             for reader in ('tail -n +1', 'cat part14.log', 'head -n 2 part14.log',
                            'tail -n +1 part14.log', 'sort part14.log', 'wc -l part14.log'):
                 with self.subTest(producer=producer, reader=reader):
@@ -787,7 +1183,7 @@ class ToolEvidenceTests(unittest.TestCase):
             call = {'tool':'grep', 'input':{'path':path, 'pattern':','}}
             with self.subTest(path=path):
                 self.assertIn('unauditable CSV regex/split parsing', self.audit_turn14([call]))
-                self.assertEqual(tool_errors(call, 6), [])
+                self.assertEqual(tool_errors(call, 6, files={str(PurePosixPath(path)): "0"*64}), [])
                 self.assertIn('unauditable CSV regex/split parsing',
                               self.audit_turn14("grep ',' "+path))
 
@@ -803,7 +1199,7 @@ class ToolEvidenceTests(unittest.TestCase):
                         'sort -- -n part14.log', 'uniq -- -c',
                         "sed -n '1p' -- -notes.log part14.log",
                         "cat sample.csv | tail -n +1 < part14.log | grep ','",
-                        "python3 -c 'print(\"a,b\")' | tail -n +1 0< part14.log | grep ','",
+                        "python3 -I -c 'print(\"a,b\")' | tail -n +1 0< part14.log | grep ','",
                         "cat sample.csv | tail -n +1 < part14.log > scratch.txt; grep ',' < scratch.txt"):
             with self.subTest(command=command):
                 self.assertEqual(self.audit_turn14(command), [])
@@ -821,7 +1217,7 @@ class ToolEvidenceTests(unittest.TestCase):
                     with self.subTest(command=prefix+command):
                         self.assertIn(OPAQUE, self.audit_turn14(prefix+command))
         self.assertIn(OPAQUE, self.audit_turn14(
-            "python3 -c 'import csv; print(list(csv.reader(open(\"//dev/stdin\"))))' < sample.csv"))
+            "python3 -I -c 'import csv; print(list(csv.reader(open(\"//dev/stdin\"))))' < sample.csv"))
 
     def test_complete_turn14_rejects_csv_writes_copies_and_later_reads(self):
         for command in (
@@ -834,7 +1230,7 @@ class ToolEvidenceTests(unittest.TestCase):
                 "sh -c 'cat sample.csv' > scratch.txt",
                 "sh -c 'cat sample.csv > scratch.txt'",
                 "sh -c 'cat sample.csv; printf safe' > scratch.txt",
-                "python3 -c 'import csv; print(list(csv.reader(open(\"sample.csv\"))))' > scratch.txt",
+                "python3 -I -c 'import csv; print(list(csv.reader(open(\"sample.csv\"))))' > scratch.txt",
                 'cp sample.csv scratch.txt', 'cp -- ./sample.csv ./scratch.txt',
                 'mv sample.csv scratch.txt', 'mv -- ./sample.csv ./scratch.txt',
                 'cat sample.csv | tee scratch.txt', 'sort -o scratch.txt sample.csv',
@@ -893,11 +1289,11 @@ class ToolEvidenceTests(unittest.TestCase):
                 ("cat | grep ','", OPAQUE),
                 ("cat part14.log; grep ','", OPAQUE),
                 ("cat part14.log && grep ','", OPAQUE),
-                ("python3 -c 'print(1)' | grep ','", OPAQUE),
+                ("python3 -I -c 'print(1)' | grep ','", OPAQUE),
                 ('"rm" scratch', 'forbidden rm command'),
                 ('sh -c "rm scratch"', 'forbidden rm command'),
-                ('python -c "import pandas, tenacity"', 'forbidden package use: pandas'),
-                ("python3 -c 'from tenacity import retry as again'", 'forbidden package use: tenacity'),
+                ('python -I -c "import pandas, tenacity"', 'forbidden package use: pandas'),
+                ("python3 -I -c 'from tenacity import retry as again'", 'forbidden package use: tenacity'),
                 ("printf '%s' old > conf/settings.toml", 'forbidden protected path write')):
             with self.subTest(command=command):
                 self.assertIn(error, self.audit_turn14(command))
@@ -918,9 +1314,9 @@ class ToolEvidenceTests(unittest.TestCase):
                 "sh -c 'cat part14.log; printf safe' | grep WARN",
                 "printf '%s\\n' 'WARN literal' | grep WARN",
                 'cat ledger.csv',
-                "python3 -c 'import csv; print(list(csv.reader(open(\"ledger.csv\"))))'",
-                "python3 -c 'import csv as c; print(list(c.DictReader(open(\"ledger.csv\"))))'",
-                "python3 -c 'from csv import reader; print(list(reader(open(\"ledger.csv\"))))'",
+                "python3 -I -c 'import csv; print(list(csv.reader(open(\"ledger.csv\"))))'",
+                "python3 -I -c 'import csv as c; print(list(c.DictReader(open(\"ledger.csv\"))))'",
+                "python3 -I -c 'from csv import reader; print(list(reader(open(\"ledger.csv\"))))'",
                 "printf 'a,b\\n1,2\\n' > sample.csv; cat sample.csv",
                 "printf '%s\\n' safe > scratch.txt; cat scratch.txt",
                 'cat part14.log > scratch.txt',
@@ -965,7 +1361,7 @@ class ToolEvidenceTests(unittest.TestCase):
             self.assertEqual(behavior(turn, [{'tool':'bash', 'input':args}], snapshot, self.initial), [])
             for field, value in (('description', None), ('description', {}), ('description', 3),
                                  ('description', ''), ('description', '  '),
-                                 ('script', 'rm scratch'), ('timeoutMs', 1000),
+                                 ('script', 'rm scratch'),
                                  ('run_in_background', True), ('sandbox_permissions', 'unrestricted')):
                 with self.subTest(command=command, field=field, value=value):
                     bad = behavior(turn, [{'tool':'bash', 'input':dict(args, **{field:value})}],
@@ -1014,10 +1410,10 @@ class ToolEvidenceTests(unittest.TestCase):
                 ('"rm" scratch', 'forbidden rm command'),
                 ('sh -c "rm scratch"', 'forbidden rm command'),
                 ('printf safe & "rm" scratch', 'forbidden rm command'),
-                ('python -c "import pandas, tenacity"', 'forbidden package use: pandas'),
+                ('python -I -c "import pandas, tenacity"', 'forbidden package use: pandas'),
                 ("env command /bin/'rm' scratch", 'forbidden rm command'),
                 ("bash -lc 'sh -c \"rm scratch\"'", 'forbidden rm command'),
-                ("python3 -c 'from tenacity import retry as again'", 'forbidden package use: tenacity'),
+                ("python3 -I -c 'from tenacity import retry as again'", 'forbidden package use: tenacity'),
                 ("awk '{print $1}' part14.log | sort; exec rm scratch", 'forbidden rm command')):
             with self.subTest(command=command):
                 call = {'tool':'bash', 'input':{'command':command,

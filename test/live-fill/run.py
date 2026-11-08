@@ -210,7 +210,8 @@ def run_group(root, rid, executable='dsh', timeout=None):
             snap = snapshot(cwd)
             write_json(prefix.with_suffix('.snapshot.json'), snap)
             meta['snapshot_sha256'] = sha(prefix.with_suffix('.snapshot.json').read_bytes())
-            result = parse_turn(prefix.with_suffix('.jsonl'), turn, cwd, sid)
+            result = parse_turn(prefix.with_suffix('.jsonl'), turn, cwd, sid,
+                                spec.get('model') != 'synthetic-only')
             meta['observed_session'] = result['session_id']
             meta['turn_end_reason'] = result['reason']
             meta['usage_steps'] = result['usage']
