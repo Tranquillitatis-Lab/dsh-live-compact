@@ -164,7 +164,7 @@ try {
   }
   if (longMode) {
     current = 'long-session';
-    const sessionId = 'issue34-long-session';
+    const sessionId = 'a0000000-0000-4000-8000-000000000034';
     const turns = [];
     for (let turn = 1; turn <= 29; turn++) {
       const stage = `long-${String(turn).padStart(2, '0')}`;

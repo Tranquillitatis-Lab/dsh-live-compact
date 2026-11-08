@@ -104,9 +104,12 @@ try {
     $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
     if ($child.ExitCode -ne 0 -or $result.status -ne 'PASS') {
         $failed = $result.stages.PSObject.Properties | Where-Object { $_.Value.status -eq 'FAIL' } | Select-Object -First 1
-        if ($failed -and $failed.Name -in @('install','plugin-install','fixture','before','denied','new-session','restart','native-rotation')) {
+        if ($failed -and $failed.Name -in @('install','plugin-install','fixture','before','denied','new-session','restart','native-rotation','long-session')) {
             $log = Join-Path $run "$($failed.Name).stderr.log"
             if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 24 }
+            if ($failed.Name -eq 'long-session') {
+                Get-ChildItem -LiteralPath $run -Filter 'long-*.stderr.log' -File | Select-Object -Last 2 | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 32 }
+            }
         }
         throw "Runtime probe failed: exit=$($child.ExitCode), status=$($result.status)"
     }
