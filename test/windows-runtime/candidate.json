@@ -1,10 +1,10 @@
 {
-  "base": "00abdda86c68b0a367264a6df6d63b08e1f0a279",
+  "base": "350d151d20171021fb500184f0d88150d048748d",
   "name": "dsh-live-compact",
-  "version": "1.1.2",
-  "filename": "dsh-live-compact-1.1.2.tgz",
-  "bytes": 77869,
-  "sha256": "965545d13f24ecf0f34f8eda9d30ac1a039d3623260ef6e50cecac97036dab2e",
+  "version": "1.1.3",
+  "filename": "dsh-live-compact-1.1.3.tgz",
+  "bytes": 78231,
+  "sha256": "c1aae90dfbcf91f6251246a56e4fd0a92a8ebe283b4b125ff536e4e3e465b923",
   "files": [
     {
       "path": "LICENSE",
@@ -12,9 +12,19 @@
       "sha256": "ddf10faf1fd9a5aec6cf1d8c136d034951df25358ad276d2becd1bc59d39d9a9"
     },
     {
+      "path": "README.md",
+      "bytes": 35015,
+      "sha256": "891960f1892c833233df7fe0acb1328cfacd458b91b37792be2a294e0beb65a5"
+    },
+    {
       "path": "adapter.js",
       "bytes": 707,
       "sha256": "96b431c710188aca6c65775af82c42931ed65fb46da1274fdb91fd6c80eb1f7a"
+    },
+    {
+      "path": "bin/dsh-live-compact.js",
+      "bytes": 1256,
+      "sha256": "634ecd94dbe9e45476f520e7286764fb682b3f73b37c50edcca0e2d273786d27"
     },
     {
       "path": "client.js",
@@ -27,9 +37,9 @@
       "sha256": "fc9ec57d4547cf86bcc86e267ac3411343db2d7f0a938b4aa0a89f80864569fb"
     },
     {
-      "path": "bin/dsh-live-compact.js",
-      "bytes": 1256,
-      "sha256": "634ecd94dbe9e45476f520e7286764fb682b3f73b37c50edcca0e2d273786d27"
+      "path": "cordis.patch.yml",
+      "bytes": 537,
+      "sha256": "fd31d42522b14d879a14bbc8575d4043581d23bc405ef4da1162ef34ff8ba4a5"
     },
     {
       "path": "gate.js",
@@ -40,6 +50,11 @@
       "path": "index.js",
       "bytes": 49814,
       "sha256": "e816381bd6542e399a9bb34ce036c9d64574c51dfbb023daafeec62845fa293e"
+    },
+    {
+      "path": "package.json",
+      "bytes": 2703,
+      "sha256": "04313d4aac7e66f367f160b417591d5d68d42ddff5c4bc47d033bdf7fbc7aa77"
     },
     {
       "path": "plan.js",
@@ -75,21 +90,6 @@
       "path": "thunder.js",
       "bytes": 2146,
       "sha256": "47c696e820d25696c42ff96ce3ee5a356aaf44b79f9c27292413837c475221ac"
-    },
-    {
-      "path": "package.json",
-      "bytes": 2703,
-      "sha256": "9dc53d5f8922288606f7f9f0b0805662035236f32a62918b7fea2cd32063220e"
-    },
-    {
-      "path": "README.md",
-      "bytes": 34301,
-      "sha256": "ee83a9cca08aaf5f686ed48ff38481c070adef07ddb273192dcd1974aacda985"
-    },
-    {
-      "path": "cordis.patch.yml",
-      "bytes": 537,
-      "sha256": "fd31d42522b14d879a14bbc8575d4043581d23bc405ef4da1162ef34ff8ba4a5"
     }
   ]
 }
