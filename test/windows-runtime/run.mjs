@@ -174,7 +174,7 @@ try {
       save(script, replayEntries(stage));
       writeFileSync(patch, overlay(replay, fixture, script));
       writeFileSync(events, '');
-      const stageEnv = { ...env, SPINE_SHADOW_DIR: healthyShadow, PROBE_STAGE: stage, PROBE_DENIED: '0', PROBE_EVENTS: events, PROBE_INSTALLED: installed, PROBE_PIN: join(here, 'candidate.json'), PROBE_DSH_ANCHOR: dshAnchor };
+      const stageEnv = { ...env, SPINE_SHADOW_DIR: healthyShadow, PROBE_STAGE: stage, PROBE_DENIED: '0', PROBE_EVENTS: events, PROBE_INSTALLED: installed, PROBE_PIN: join(here, 'candidate.json'), PROBE_DSH_ANCHOR: dshAnchor, ...(expectedSid ? { PROBE_EXPECTED_SID: expectedSid } : {}) };
       const output = await command(stage, ['--import', pathToFileURL(join(here, 'observe.mjs')).href, dsh, '--profile', 'headless', '--patch', patch, '--json', '--session-id', sessionId, `Issue 34 long-session turn ${turn}`], { root, cwd: workspace, env: stageEnv, timeout: 120000 });
       const rows = readFileSync(events, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
       const projected = output.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
