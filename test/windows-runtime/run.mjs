@@ -10,8 +10,10 @@ import { overlay, replayEntries, writeInputs } from './scenario.mjs';
 import { verifyStage } from './verify.mjs';
 
 const args = process.argv.slice(2);
-assert.ok(args.length === 0 || (args.length === 2 && args[0] === '--root'), 'usage: node test/windows-runtime/run.mjs [--root NEW_EMPTY_DIRECTORY]');
-const root = args.length ? resolve(args[1]) : mkdtempSync(join(realpathSync(tmpdir()), 'dsh112-runtime-'));
+const longMode = args.includes('--long');
+const rootArg = args.indexOf('--root');
+assert.ok(rootArg === -1 || (rootArg === 0 && args.length >= 2 && args[1] && args.slice(2).every((arg) => arg === '--long')), 'usage: node test/windows-runtime/run.mjs [--root NEW_EMPTY_DIRECTORY] [--long]');
+const root = rootArg === -1 ? mkdtempSync(join(realpathSync(tmpdir()), 'dsh113-runtime-')) : resolve(args[1]);
 assert.ok(['darwin', 'win32'].includes(process.platform), 'only native macOS and Windows are supported');
 if (process.platform === 'darwin') assert.notEqual(process.geteuid(), 0, 'run the macOS probe as a non-root user');
 mkdirSync(root, { recursive: true });
@@ -25,7 +27,7 @@ const runtime = join(root, 'runtime');
 mkdirSync(workspace);
 if (!preinstalled) mkdirSync(runtime);
 writeInputs(workspace);
-const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart'].map((name) => [name, { status: 'NOT_RUN' }])) };
+const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart', 'long-session'].map((name) => [name, { status: 'NOT_RUN' }])) };
 console.log(`EVIDENCE_ROOT ${root}`);
 let current = 'candidate';
 try {
@@ -159,6 +161,33 @@ try {
     results.stages[current] = { status: 'PASS', checks: checks.length, finalBytes: 440 };
     console.log(`PASS ${current} ${checks.length} independent-process checks at 440 bytes`);
     results.windowsAcceptance = 'PASS';
+  }
+  if (longMode) {
+    current = 'long-session';
+    const sessionId = 'issue34-long-session';
+    const turns = [];
+    for (let turn = 1; turn <= 29; turn++) {
+      const stage = `long-${String(turn).padStart(2, '0')}`;
+      const script = join(root, `${stage}.replay.json`);
+      const patch = join(root, `${stage}.patch.yml`);
+      const events = join(root, `${stage}.events.jsonl`);
+      save(script, replayEntries(stage));
+      writeFileSync(patch, overlay(replay, fixture, script));
+      writeFileSync(events, '');
+      const stageEnv = { ...env, SPINE_SHADOW_DIR: healthyShadow, PROBE_STAGE: stage, PROBE_DENIED: '0', PROBE_EVENTS: events, PROBE_INSTALLED: installed, PROBE_PIN: join(here, 'candidate.json'), PROBE_DSH_ANCHOR: dshAnchor };
+      const output = await command(stage, ['--import', pathToFileURL(join(here, 'observe.mjs')).href, dsh, '--profile', 'headless', '--patch', patch, '--json', '--session-id', sessionId, `Issue 34 long-session turn ${turn}`], { root, cwd: workspace, env: stageEnv, timeout: 120000 });
+      const rows = readFileSync(events, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      const projected = output.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      assert.equal(projected.at(-1)?.type, 'final', `long turn ${turn} final event`);
+      assert.ok(JSON.stringify(projected.at(-1)).includes(`SYNTHETIC_FINAL_${stage}`), `long turn ${turn} replay completion`);
+      assert.ok(projected.filter((event) => event.type === 'tool_result').length >= 2, `long turn ${turn} tool results`);
+      assert.equal(rows.some((row) => ['unhandledRejection', 'uncaughtException', 'finishTurn-throw'].includes(row.kind)), false, `long turn ${turn} no unhandled failure`);
+      const captures = rows.filter((row) => row.kind === 'capture' && row.ok && row.callId?.startsWith(`${stage}-`));
+      assert.ok(captures.length >= 2, `long turn ${turn} captured tool results`);
+      turns.push({ turn, processRestartBoundary: turn === 21, captures: captures.length });
+      console.log(`PASS ${stage} persistedSession=${sessionId} captures=${captures.length}`);
+    }
+    results.stages[current] = { status: 'PASS', turns: turns.length, persistedSession: sessionId, restartBoundary: 21, processes: turns.length, captures: turns.reduce((sum, item) => sum + item.captures, 0) };
   }
   results.status = 'PASS';
 } catch (error) {

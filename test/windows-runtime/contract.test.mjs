@@ -45,8 +45,8 @@ test('runtime environment is allowlisted with fresh HOME and empty npm configs',
 
 test('only an opt-in push on one validation branch can schedule native Windows jobs', () => {
   const workflow = readFileSync(join(repository, '.github/workflows/windows-112-runtime.yml'), 'utf8');
-  assert.match(workflow, /push:\s+branches: \[validation\/113-windows-candidate\]/);
-  assert.match(workflow, /github.ref == 'refs\/heads\/validation\/113-windows-candidate' && contains\(github.event.head_commit.message, '\[windows-runtime\]'\)/);
+  assert.match(workflow, /push:\s+branches: \[validation\/112-windows-runtime\]/);
+  assert.match(workflow, /github.ref == 'refs\/heads\/validation\/112-windows-runtime' && contains\(github.event.head_commit.message, '\[windows-runtime\]'\)/);
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /runner: windows-11-arm/);

@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Requires a disposable GitHub Actions VM.' }
-if ($env:GITHUB_REF -ne 'refs/heads/validation/113-windows-candidate') { throw 'Wrong validation branch.' }
+if ($env:GITHUB_REF -ne 'refs/heads/validation/113-windows-long-session') { throw 'Wrong validation branch.' }
 $root = Join-Path "$($env:SystemDrive)\" ('dsh112-runtime-' + [Guid]::NewGuid().ToString('N'))
 $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
 if (-not $node) { throw 'Could not resolve the pinned Node application.' }
@@ -89,7 +89,7 @@ try {
     if ($setup.ExitCode -ne 0) { Get-Content -LiteralPath $setupErr -Tail 20; throw "Official runtime setup exited $($setup.ExitCode)." }
     $stdoutFile = Join-Path $root 'standard-user.stdout.log'
     $stderrFile = Join-Path $root 'standard-user.stderr.log'
-    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run)
+    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run, '--long)
     $child = Start-Process -FilePath $node -ArgumentList $arguments -Credential ([pscredential]::new($account,$password)) -LoadUserProfile -WorkingDirectory $work -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru
     Write-Host "STANDARD_USER_PID $($child.Id)"
     $deadline = [DateTime]::UtcNow.AddMinutes(12)
@@ -110,7 +110,7 @@ try {
         }
         throw "Runtime probe failed: exit=$($child.ExitCode), status=$($result.status)"
     }
-    foreach ($stage in @('before','denied','new-session','restart','native-rotation')) {
+    foreach ($stage in @('before','denied','new-session','restart','native-rotation','long-session')) {
         if ($result.stages.$stage.status -ne 'PASS') { throw "Missing stage PASS: $stage" }
     }
 } finally {

@@ -1,12 +1,12 @@
-name: Disposable Windows 1.1.3 runtime verification
+name: Disposable Windows 1.1.2 runtime verification
 on:
   push:
-    branches: [validation/113-windows-candidate]
+    branches: [validation/112-windows-runtime]
 permissions:
   contents: read
 jobs:
   core_gate:
-    if: github.ref == 'refs/heads/validation/113-windows-candidate' && contains(github.event.head_commit.message, '[windows-runtime]')
+    if: github.ref == 'refs/heads/validation/112-windows-runtime' && contains(github.event.head_commit.message, '[windows-runtime]')
     strategy:
       fail-fast: false
       matrix:
@@ -40,7 +40,7 @@ jobs:
       - name: Full Node release gate
         run: npm run test:gate
   runtime:
-    if: github.ref == 'refs/heads/validation/113-windows-candidate' && contains(github.event.head_commit.message, '[windows-runtime]')
+    if: github.ref == 'refs/heads/validation/112-windows-runtime' && contains(github.event.head_commit.message, '[windows-runtime]')
     strategy:
       fail-fast: false
       matrix:
