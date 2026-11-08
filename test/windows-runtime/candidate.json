@@ -1,0 +1,95 @@
+{
+  "base": "350d151d20171021fb500184f0d88150d048748d",
+  "name": "dsh-live-compact",
+  "version": "1.1.3",
+  "filename": "dsh-live-compact-1.1.3.tgz",
+  "bytes": 78231,
+  "sha256": "c1aae90dfbcf91f6251246a56e4fd0a92a8ebe283b4b125ff536e4e3e465b923",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1064,
+      "sha256": "ddf10faf1fd9a5aec6cf1d8c136d034951df25358ad276d2becd1bc59d39d9a9"
+    },
+    {
+      "path": "README.md",
+      "bytes": 35015,
+      "sha256": "891960f1892c833233df7fe0acb1328cfacd458b91b37792be2a294e0beb65a5"
+    },
+    {
+      "path": "adapter.js",
+      "bytes": 707,
+      "sha256": "96b431c710188aca6c65775af82c42931ed65fb46da1274fdb91fd6c80eb1f7a"
+    },
+    {
+      "path": "bin/dsh-live-compact.js",
+      "bytes": 1256,
+      "sha256": "634ecd94dbe9e45476f520e7286764fb682b3f73b37c50edcca0e2d273786d27"
+    },
+    {
+      "path": "client.js",
+      "bytes": 6028,
+      "sha256": "7d94b8c923b69828b71388519b98aa6f29125fda26ad284176c049d36436cc69"
+    },
+    {
+      "path": "cooldown.js",
+      "bytes": 5789,
+      "sha256": "fc9ec57d4547cf86bcc86e267ac3411343db2d7f0a938b4aa0a89f80864569fb"
+    },
+    {
+      "path": "cordis.patch.yml",
+      "bytes": 537,
+      "sha256": "fd31d42522b14d879a14bbc8575d4043581d23bc405ef4da1162ef34ff8ba4a5"
+    },
+    {
+      "path": "gate.js",
+      "bytes": 5997,
+      "sha256": "a12df2d3694f1be520f54ea8ec38f43993239ff6affa12924ad2ac318d3f3f79"
+    },
+    {
+      "path": "index.js",
+      "bytes": 49814,
+      "sha256": "e816381bd6542e399a9bb34ce036c9d64574c51dfbb023daafeec62845fa293e"
+    },
+    {
+      "path": "package.json",
+      "bytes": 2703,
+      "sha256": "04313d4aac7e66f367f160b417591d5d68d42ddff5c4bc47d033bdf7fbc7aa77"
+    },
+    {
+      "path": "plan.js",
+      "bytes": 57040,
+      "sha256": "7e420a488953b1ee57b0f008ec04701f96b6545dc2a15f3a1a535ae4a8bbb0aa"
+    },
+    {
+      "path": "raw.js",
+      "bytes": 8827,
+      "sha256": "62cb7cb1b2f45b421d63a61305c630995445b9c674b2e88477fe026fca34181c"
+    },
+    {
+      "path": "settings.js",
+      "bytes": 5542,
+      "sha256": "a2a05ca41bb56e9eb9aa4a524871f1784b38518fa52dc3009853858fdaa5d2ab"
+    },
+    {
+      "path": "shadow-search.js",
+      "bytes": 6155,
+      "sha256": "35ec551a4d433769685c59146f5d9c94c0b86bbfc237de14cf27aec64fa087d4"
+    },
+    {
+      "path": "shadow.js",
+      "bytes": 43448,
+      "sha256": "d04669f6fe20fc6feea41db7dfabda5b3f3522545316067167327d721c92a53b"
+    },
+    {
+      "path": "shell.js",
+      "bytes": 5055,
+      "sha256": "57ba46ae70c52aca6dcdcdb61ade3ac2621be37c5fcdc811aa1ed89e1f1970d1"
+    },
+    {
+      "path": "thunder.js",
+      "bytes": 2146,
+      "sha256": "47c696e820d25696c42ff96ce3ee5a356aaf44b79f9c27292413837c475221ac"
+    }
+  ]
+}
