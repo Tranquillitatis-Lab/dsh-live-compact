@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Requires a disposable GitHub Actions VM.' }
-if ($env:GITHUB_REF -ne 'refs/heads/validation/112-windows-runtime') { throw 'Wrong validation branch.' }
+if ($env:GITHUB_REF -ne 'refs/heads/validation/113-windows-candidate') { throw 'Wrong validation branch.' }
 $root = Join-Path "$($env:SystemDrive)\" ('dsh112-runtime-' + [Guid]::NewGuid().ToString('N'))
 $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
 if (-not $node) { throw 'Could not resolve the pinned Node application.' }
