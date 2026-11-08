@@ -89,7 +89,7 @@ try {
     if ($setup.ExitCode -ne 0) { Get-Content -LiteralPath $setupErr -Tail 20; throw "Official runtime setup exited $($setup.ExitCode)." }
     $stdoutFile = Join-Path $root 'standard-user.stdout.log'
     $stderrFile = Join-Path $root 'standard-user.stderr.log'
-    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run, '--long)
+    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run, '--long')
     $child = Start-Process -FilePath $node -ArgumentList $arguments -Credential ([pscredential]::new($account,$password)) -LoadUserProfile -WorkingDirectory $work -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru
     Write-Host "STANDARD_USER_PID $($child.Id)"
     $deadline = [DateTime]::UtcNow.AddMinutes(12)
