@@ -195,7 +195,7 @@ try {
     results.stages[current] = { status: 'PASS', turns: turns.length, persistedSession: sessionId, restartBoundary: 21, processes: turns.length, captures: turns.reduce((sum, item) => sum + item.captures, 0) };
     current = 'issue34-15k';
     const issue34Evidence = join(root, 'issue34-15k.json');
-    const issue34Output = await command(current, [process.execPath, join(here, 'issue34-long.mjs')], {
+    const issue34Output = await command(current, [join(here, 'issue34-long.mjs')], {
       root,
       cwd: workspace,
       env: { ...env, SPINE_SHADOW_DIR: join(root, 'run', 'issue34-shadow'), PROBE_ISSUE34_EVIDENCE: issue34Evidence },
