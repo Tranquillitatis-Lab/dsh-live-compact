@@ -14,13 +14,13 @@
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.3
+dsh plugin --profile headless add dsh-live-compact@1.1.4
 ```
 
 网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.3
+dsh plugin --profile web add dsh-live-compact@1.1.4
 ```
 
 想先装到本机看版本：
@@ -29,6 +29,12 @@ dsh plugin --profile web add dsh-live-compact@1.1.3
 npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
+
+## 1.1.4
+
+- 修复 #34：空闲维护的大段 catch-up 改为分批让出事件循环；Windows 阴影文件短暂忙时按 8 次上限和退避自动重试，永久失败保持 fail-closed，不阻塞轮次结束返回。
+- 游标和 retryable 结果按会话缓存，避免长历史重复扫描；工具结果、raw/meta 字节与 SHA256 在重启恢复后继续校验。
+- 本地门禁 `npm run test:gate` 通过 508/508；Windows 2022 x64 与 Windows 11 ARM 的标准用户长会话验收均通过，含 29 轮、进程重启边界和 15,001 事件/356 个工具结果的双阶段捕获恢复。
 
 ## 1.1.3
 
@@ -307,8 +313,8 @@ GLM 5.3 Flash 用了同一个插件、同一套题。完整跑完的 7 组为 23
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.3
-dsh plugin --profile web add dsh-live-compact@1.1.3
+dsh plugin --profile headless add dsh-live-compact@1.1.4
+dsh plugin --profile web add dsh-live-compact@1.1.4
 ```
 
 想先装到本机看版本：
@@ -321,9 +327,9 @@ dsh-live-compact --version
 上不了 npm 时的镜像安装命令：
 
 ```sh
-dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.3.tgz
-dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.3.tgz
-npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.3.tgz"
+dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz
+dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz
+npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz"
 dsh-live-compact --version
 ```
 

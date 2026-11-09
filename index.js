@@ -56,6 +56,7 @@ const DEFAULT_KEY = "__default__";
 const CAPTURE_EVENT_BATCH = 128;
 const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
+const CAPTURE_RETRY_LIMIT = 8;
 
 function eventContent(session, seq) {
   const event = session.eventAt(seq);
@@ -469,6 +470,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   pendingCatchups = new Map();
   pendingCatchupJobs = new Set();
   pendingCuts = new Set();
+  captureRetryStats = new Map();
+  retryableCaptureSeqs = new Map();
+  retryableCaptureSeeded = new Set();
   pruneGuarded = false;
 
   constructor(ctx, config, resolvedConfig) {
@@ -497,7 +501,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             scheduleImmediate(() => {
               try {
                 const current = this.rawSeen.get(key);
-                if (!current || current.retryable) this.captureOne(session, event);
+                if (!current || current.retryable) {
+                  const record = this.captureOne(session, event);
+                  this.noteCaptureResult(session, event, record);
+                }
               } catch (error) {
                 noteShadowWarning(ctx.logger, error);
               } finally {
@@ -605,6 +612,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       visibleIds: null,
       scheduled: false,
       retryRequested: false,
+      captureRetryAttempts: 0,
       progressed: false,
       eventTail: Number.isInteger(events?.at?.(-1)?.seq) ? events.at(-1).seq : -1,
       surfaceTail: agent.session.surface?.nodes?.at?.(-1) ?? -1,
@@ -615,6 +623,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchupJobs.add(promise);
     this.queueCaptureCatchup(task);
     return task;
+  }
+
+  queueCaptureRetry(task) {
+    if (!task || task.finished || task.scheduled) return;
+    task.scheduled = true;
+    const delay = Math.min(250, 10 * (2 ** Math.max(0, task.captureRetryAttempts - 1)));
+    setTimeout(() => {
+      task.scheduled = false;
+      if (!task.finished) this.queueCaptureCatchup(task);
+    }, delay);
   }
 
   queueCaptureCatchup(task) {
@@ -651,9 +669,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           task.eventIndex = result.nextIndex;
           task.progressed ||= result.progressed;
           if (result.retryable) {
-            this.finishCaptureCatchup(task);
+            task.captureRetryAttempts += 1;
+            const previousMax = this.captureRetryStats?.get(task.key) || 0;
+            if (task.captureRetryAttempts > previousMax) this.captureRetryStats.set(task.key, task.captureRetryAttempts);
+            if (task.captureRetryAttempts >= CAPTURE_RETRY_LIMIT) {
+              this.finishCaptureCatchup(task);
+              return;
+            }
+            this.queueCaptureRetry(task);
             return;
           }
+          if (result.progressed) task.captureRetryAttempts = 0;
           if (!result.done) {
             this.queueCaptureCatchup(task);
             return;
@@ -1145,18 +1171,42 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     }
   }
 
+  noteCaptureResult(session, event, record) {
+    const key = session?.id || DEFAULT_KEY;
+    this.retryableCaptureSeqs ||= new Map();
+    this.retryableCaptureSeeded ||= new Set();
+    let seqs = this.retryableCaptureSeqs.get(key);
+    if (!seqs) {
+      seqs = new Set();
+      this.retryableCaptureSeqs.set(key, seqs);
+    }
+    const seq = Number.isInteger(event?.seq) ? event.seq : null;
+    if (seq === null) return;
+    if (record?.retryable) seqs.add(seq);
+    else seqs.delete(seq);
+  }
+
   captureCursorStart(session, events, settings) {
     const key = session?.id || DEFAULT_KEY;
     let cursor = this.captureCursor.has(key) ? this.captureCursor.get(key) : this.readCaptureCursor(key);
     if (cursor == null) cursor = restartCaptureCursor(events, settings.keepRounds);
     if (!Number.isSafeInteger(cursor) || cursor < 0 || events.length < cursor) cursor = restartCaptureCursor(events, settings.keepRounds);
-    // A live event callback may have failed before the recent-three restart
-    // boundary. Keep those visible originals eligible without replaying history.
-    for (const seq of session?.surface?.nodes || []) {
-      const event = session.eventAt?.(seq);
-      const id = event?.type === "tool/result" && event.data?.message?.toolCallId;
-      if (id && this.rawSeen.get(this.rawKey(session, id))?.retryable) cursor = Math.min(cursor, seq);
+    this.retryableCaptureSeqs ||= new Map();
+    this.retryableCaptureSeeded ||= new Set();
+    let retryable = this.retryableCaptureSeqs.get(key);
+    if (!retryable) {
+      retryable = new Set();
+      this.retryableCaptureSeqs.set(key, retryable);
     }
+    if (!this.retryableCaptureSeeded.has(key)) {
+      for (const seq of session?.surface?.nodes || []) {
+        const event = session.eventAt?.(seq);
+        const id = event?.type === "tool/result" && event.data?.message?.toolCallId;
+        if (id && this.rawSeen.get(this.rawKey(session, id))?.retryable) retryable.add(seq);
+      }
+      this.retryableCaptureSeeded.add(key);
+    }
+    if (retryable.size) cursor = Math.min(cursor, Math.min(...retryable));
     return cursor;
   }
 
@@ -1194,6 +1244,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             if (record?.ok) progressed = true;
             captures += 1;
           }
+          this.noteCaptureResult(session, event, record);
           if (record?.retryable && retry === null) retry = seq;
         }
       }
@@ -1236,6 +1287,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           seen.add(id);
           const cached = this.rawSeen.get(this.rawKey(session, id));
           const record = cached && !cached.retryable ? cached : this.captureOne(session, event);
+          this.noteCaptureResult(session, event, record);
           if (record?.retryable && retry === null) retry = seq;
         }
       }

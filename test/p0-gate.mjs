@@ -759,8 +759,8 @@ check("p0-15 importing index never resolves shadow-search.js", () => {
   assert.equal(/shadow-search/.test(resolved), false);
 });
 
-check("p0-15 package version is 1.1.3", () => {
-  assert.equal(packageJson.version, "1.1.3");
+check("p0-15 package version is 1.1.4", () => {
+  assert.equal(packageJson.version, "1.1.4");
 });
 
 check("p0-15 README drops obsolete backup limits", () => {

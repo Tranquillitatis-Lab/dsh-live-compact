@@ -22,6 +22,44 @@ test("#34 idle maintenance defers full catch-up to the event loop", async (t) =>
   assert.equal(batches, 1, "catch-up must run after the idle maintenance turn yields");
 });
 
+test("#34 retries a transient raw lock without leaving catch-up retryable", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let attempts = 0;
+  engine.captureNewBatch = () => {
+    attempts += 1;
+    return attempts === 1
+      ? { done: false, progressed: false, retryable: true, seen: new Set(), nextIndex: 0 }
+      : { done: true, progressed: true, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(attempts, 2, "a transient busy capture is retried after yielding");
+  assert.equal(engine.pendingCatchups.size, 0, "retryable catch-up settles after the retry succeeds");
+});
+
+test("#34 bounds a permanent raw lock and leaves it fail-closed", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let attempts = 0;
+  engine.captureNewBatch = () => {
+    attempts += 1;
+    return { done: false, progressed: false, retryable: true, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  assert.equal(engine.pendingCatchups.size, 0, "permanent busy capture does not leave a live task");
+  assert.equal(attempts, 8, "permanent busy capture is bounded");
+});
+
 test("#34 keeps the cursor at the first retryable catch-up result", () => {
   const engine = Object.create(Spine.prototype);
   engine.rawSeen = new Map();
@@ -70,7 +108,9 @@ test("#34 rewinds the batch index when an older visible raw becomes retryable", 
 
   const first = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: 0 });
   assert.equal(first.nextIndex, 128);
-  engine.rawSeen.set(engine.rawKey(session, "id-10"), { ok: false, retryable: true, toolCallId: "id-10" });
+  const retryable = { ok: false, retryable: true, toolCallId: "id-10" };
+  engine.rawSeen.set(engine.rawKey(session, "id-10"), retryable);
+  engine.noteCaptureResult(session, events[10], retryable);
   const second = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: first.nextIndex });
   assert.equal(captured.includes(10), true, "a retryable older result must be revisited");
   assert.equal(engine.captureCursor.get("s"), 138);
