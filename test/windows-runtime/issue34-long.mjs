@@ -18,8 +18,12 @@ mkdirSync(shadow, { recursive: true });
 process.env.SPINE_SHADOW_DIR = shadow;
 const { default: Spine } = await import('../../index.js');
 
+const surfaceEventTypes = new Set(['system/message', 'user/message', 'assistant/message', 'tool/result']);
+
 function append(session, type, data) {
-  return session.append(type, data, { surfaceOp: 'append' });
+  return surfaceEventTypes.has(type)
+    ? session.append(type, data, { surfaceOp: 'append' })
+    : session.append(type, data);
 }
 
 function makeSession() {
