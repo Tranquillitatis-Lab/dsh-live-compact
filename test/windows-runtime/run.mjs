@@ -27,7 +27,7 @@ const runtime = join(root, 'runtime');
 mkdirSync(workspace);
 if (!preinstalled) mkdirSync(runtime);
 writeInputs(workspace);
-const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart', 'long-session'].map((name) => [name, { status: 'NOT_RUN' }])) };
+const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart', 'long-session', 'issue34-15k'].map((name) => [name, { status: 'NOT_RUN' }])) };
 console.log(`EVIDENCE_ROOT ${root}`);
 let current = 'candidate';
 try {
@@ -193,6 +193,17 @@ try {
       console.log(`PASS ${stage} persistedSession=${sessionId} captures=${captures.length}`);
     }
     results.stages[current] = { status: 'PASS', turns: turns.length, persistedSession: sessionId, restartBoundary: 21, processes: turns.length, captures: turns.reduce((sum, item) => sum + item.captures, 0) };
+    current = 'issue34-15k';
+    const issue34Evidence = join(root, 'issue34-15k.json');
+    const issue34Output = await command(current, [process.execPath, join(here, 'issue34-long.mjs')], {
+      root,
+      cwd: workspace,
+      env: { ...env, SPINE_SHADOW_DIR: join(root, 'run', 'issue34-shadow'), PROBE_ISSUE34_EVIDENCE: issue34Evidence },
+      timeout: 1500000,
+    });
+    const issue34Result = JSON.parse(issue34Output.trim().split(/\r?\n/).at(-1));
+    assert.equal(issue34Result.status, 'PASS', 'issue34 15k stage');
+    results.stages[current] = issue34Result;
   }
   results.status = 'PASS';
 } catch (error) {

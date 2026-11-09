@@ -70,7 +70,9 @@ test("#34 rewinds the batch index when an older visible raw becomes retryable", 
 
   const first = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: 0 });
   assert.equal(first.nextIndex, 128);
-  engine.rawSeen.set(engine.rawKey(session, "id-10"), { ok: false, retryable: true, toolCallId: "id-10" });
+  const retryable = { ok: false, retryable: true, toolCallId: "id-10" };
+  engine.rawSeen.set(engine.rawKey(session, "id-10"), retryable);
+  engine.noteCaptureResult(session, events[10], retryable);
   const second = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: first.nextIndex });
   assert.equal(captured.includes(10), true, "a retryable older result must be revisited");
   assert.equal(engine.captureCursor.get("s"), 138);

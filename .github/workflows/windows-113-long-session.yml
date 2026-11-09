@@ -45,3 +45,10 @@ jobs:
           } else {
             'NOT_RUN_OR_SETUP_FAILED: no long-session result.json' >> $env:GITHUB_STEP_SUMMARY
           }
+          $issue34 = 'test/windows-runtime/.local/windows-evidence/issue34-15k.json'
+          if (Test-Path -LiteralPath $issue34) {
+            '--- issue34-15k evidence ---' >> $env:GITHUB_STEP_SUMMARY
+            Get-Content -LiteralPath $issue34 -Raw >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            'NOT_RUN: no issue34-15k evidence.json' >> $env:GITHUB_STEP_SUMMARY
+          }

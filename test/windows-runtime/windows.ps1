@@ -44,7 +44,7 @@ try {
     }
     $harness = Join-Path $work 'test\windows-runtime'
     New-Item -ItemType Directory -Path $harness -Force | Out-Null
-    foreach ($file in @('common.mjs','scenario.mjs','verify.mjs','run.mjs','observe.mjs','network-guard.mjs','fixture.mjs','candidate.json')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $harness }
+    foreach ($file in @('common.mjs','scenario.mjs','verify.mjs','run.mjs','issue34-long.mjs','observe.mjs','network-guard.mjs','fixture.mjs','candidate.json')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $harness }
     New-Item -ItemType Directory -Path (Join-Path $harness 'fixtures') | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "fixtures\$($pin.filename)") -Destination (Join-Path $harness 'fixtures')
     $nativeFixtures = Join-Path $work 'test\fixtures'

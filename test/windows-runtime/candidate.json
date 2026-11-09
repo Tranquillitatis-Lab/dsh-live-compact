@@ -1,10 +1,10 @@
 {
-  "base": "ec860155bac9a6f1672162910df96f4c4d0119ca",
+  "base": "d2e0ee2820856aa08f77f8c44e24b753dcdf5d9b",
   "name": "dsh-live-compact",
   "version": "1.1.3",
   "filename": "dsh-live-compact-1.1.3.tgz",
-  "bytes": 80133,
-  "sha256": "3fbb72c164bba9e9c14a6bbfdac864dc9b19d48f3bdf84d282dc13835859db65",
+  "bytes": 80252,
+  "sha256": "359b78d4b981873b2b9232929464891b6313c7de82c8cc3f3a3f6c6794e70ee8",
   "files": [
     {
       "path": "LICENSE",
@@ -48,8 +48,8 @@
     },
     {
       "path": "index.js",
-      "bytes": 59672,
-      "sha256": "fc66b25ad1339e7c5156587a1a10e9b6fa31a6d3bcec2470437d54659713f60a"
+      "bytes": 60749,
+      "sha256": "c22697960af364997207b11732eb1d5399fabda40ccfab08c2d92f202901872e"
     },
     {
       "path": "package.json",
