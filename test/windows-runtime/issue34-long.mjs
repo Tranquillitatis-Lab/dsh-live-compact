@@ -98,13 +98,16 @@ function inspectRaw(engine, session, toolResults) {
   const cursorPath = engine.captureCursorFile(session.id);
   const cursor = engine.readCaptureCursor(session.id);
   const cursorJson = JSON.parse(readFileSync(cursorPath, 'utf8'));
-  const retryable = [...engine.rawSeen.entries()]
-    .filter(([key, record]) => key.startsWith(`${session.id}\0`) && record?.retryable).length;
+  const retryableEntries = [...engine.rawSeen.entries()]
+    .filter(([key, record]) => key.startsWith(`${session.id}\0`) && record?.retryable);
+  const retryable = retryableEntries.length;
   return {
     rawOk,
     metaOk,
     hashOk,
     retryable,
+    retryableIds: retryableEntries.map(([key]) => key.slice(session.id.length + 1)),
+    maxCaptureRetryAttempts: engine.captureRetryStats?.get(session.id) || 0,
     cursor,
     cursorKeyMatches: cursorJson.key === session.id,
     cursorFilePresent: existsSync(cursorPath),
@@ -159,14 +162,14 @@ async function runPhase(label, engine, ctx, session, toolResults, cursor) {
   assert.equal(phase.rawOk, toolResults, `${label}: all raw bodies readable`);
   assert.equal(phase.metaOk, toolResults, `${label}: all raw metadata readable`);
   assert.equal(phase.hashOk, toolResults, `${label}: raw hashes and bytes`);
-  assert.equal(phase.retryable, 0, `${label}: no retryable captures remain`);
+  assert.equal(phase.retryable, 0, `${label}: retryable captures remain: ${phase.retryableIds.join(',')}`);
   assert.equal(phase.cursor, phase.eventCount, `${label}: cursor reaches event tail`);
   assert.equal(phase.cursorKeyMatches, true, `${label}: cursor key`);
   assert.equal(phase.cursorFilePresent, true, `${label}: cursor file`);
   assert.ok(phase.turnEndToMaintenanceMs < 5000, `${label}: maintenance entered too slowly: ${phase.turnEndToMaintenanceMs}ms`);
   assert.ok(phase.finishTurnReturnMs < 5000, `${label}: finishTurn returned too slowly: ${phase.finishTurnReturnMs}ms`);
   assert.ok(phase.maxEventLoopGapMs < 5000, `${label}: event loop blocked too long: ${phase.maxEventLoopGapMs}ms`);
-  assert.ok(phase.catchupMs < 10 * 60 * 1000, `${label}: catch-up exceeded 10 minutes: ${phase.catchupMs}ms`);
+  assert.ok(phase.catchupMs < 30 * 1000, `${label}: catch-up exceeded 30 seconds: ${phase.catchupMs}ms`);
   return phase;
 }
 

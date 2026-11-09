@@ -51,4 +51,9 @@ jobs:
             Get-Content -LiteralPath $issue34 -Raw >> $env:GITHUB_STEP_SUMMARY
           } else {
             'NOT_RUN: no issue34-15k evidence.json' >> $env:GITHUB_STEP_SUMMARY
+            $issue34Log = 'test/windows-runtime/.local/windows-evidence/issue34-15k.stderr.log'
+            if (Test-Path -LiteralPath $issue34Log) {
+              '--- issue34-15k stderr tail ---' >> $env:GITHUB_STEP_SUMMARY
+              Get-Content -LiteralPath $issue34Log -Tail 80 >> $env:GITHUB_STEP_SUMMARY
+            }
           }

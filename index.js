@@ -56,6 +56,7 @@ const DEFAULT_KEY = "__default__";
 const CAPTURE_EVENT_BATCH = 128;
 const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
+const CAPTURE_RETRY_LIMIT = 8;
 
 function eventContent(session, seq) {
   const event = session.eventAt(seq);
@@ -469,6 +470,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   pendingCatchups = new Map();
   pendingCatchupJobs = new Set();
   pendingCuts = new Set();
+  captureRetryStats = new Map();
   retryableCaptureSeqs = new Map();
   retryableCaptureSeeded = new Set();
   pruneGuarded = false;
@@ -610,6 +612,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       visibleIds: null,
       scheduled: false,
       retryRequested: false,
+      captureRetryAttempts: 0,
       progressed: false,
       eventTail: Number.isInteger(events?.at?.(-1)?.seq) ? events.at(-1).seq : -1,
       surfaceTail: agent.session.surface?.nodes?.at?.(-1) ?? -1,
@@ -620,6 +623,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchupJobs.add(promise);
     this.queueCaptureCatchup(task);
     return task;
+  }
+
+  queueCaptureRetry(task) {
+    if (!task || task.finished || task.scheduled) return;
+    task.scheduled = true;
+    const delay = Math.min(250, 10 * (2 ** Math.max(0, task.captureRetryAttempts - 1)));
+    setTimeout(() => {
+      task.scheduled = false;
+      if (!task.finished) this.queueCaptureCatchup(task);
+    }, delay);
   }
 
   queueCaptureCatchup(task) {
@@ -656,9 +669,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           task.eventIndex = result.nextIndex;
           task.progressed ||= result.progressed;
           if (result.retryable) {
-            this.finishCaptureCatchup(task);
+            task.captureRetryAttempts += 1;
+            const previousMax = this.captureRetryStats?.get(task.key) || 0;
+            if (task.captureRetryAttempts > previousMax) this.captureRetryStats.set(task.key, task.captureRetryAttempts);
+            if (task.captureRetryAttempts >= CAPTURE_RETRY_LIMIT) {
+              this.finishCaptureCatchup(task);
+              return;
+            }
+            this.queueCaptureRetry(task);
             return;
           }
+          if (result.progressed) task.captureRetryAttempts = 0;
           if (!result.done) {
             this.queueCaptureCatchup(task);
             return;
