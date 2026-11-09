@@ -54,6 +54,16 @@ test('only an opt-in push on one validation branch can schedule native Windows j
   assert.doesNotMatch(workflow, /\b(pull_request|schedule|secrets|id-token|write-all):/);
 });
 
+test('issue 34 15k latency stage is wired into the standard-user harness', () => {
+  const workflow = readFileSync(join(repository, '.github/workflows/windows-113-long-session.yml'), 'utf8');
+  const windows = readFileSync(join(repository, 'test/windows-runtime/windows.ps1'), 'utf8');
+  const run = readFileSync(join(repository, 'test/windows-runtime/run.mjs'), 'utf8');
+  assert.match(workflow, /issue34-15k evidence/);
+  assert.match(windows, /issue34-long\.mjs/);
+  assert.match(run, /issue34-15k/);
+  assert.match(run, /PROBE_ISSUE34_EVIDENCE/);
+});
+
 test('replay requests only two synthetic reads and a final marker', () => {
   const script = replayEntries('contract');
   assert.equal(script.length, 3);
