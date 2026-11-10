@@ -1,6 +1,6 @@
-# 下一版本规划：语义归档索引与冷会话恢复
+# 版本规划：语义归档索引与冷会话恢复
 
-这份规划建立在 1.1.4 当前实现之上。公开的 #27 和 #34 仍未关闭；在它们的真实 Windows 长会话复测通过前，不把本 RFC 接入默认收尾路径，也不以受控小夹具的通过代替现场复测。
+这份规划建立在 1.1.4 当前实现之上，已列入当前版本规划，但只记录设计、开关和验收边界。公开的 #27 和 #34 仍未关闭；在它们的真实 Windows 长会话复测通过前，不把本 RFC 接入默认收尾路径，也不以受控小夹具的通过代替现场复测。
 
 ## 当前版本必须先完成
 
@@ -9,7 +9,7 @@
 3. **异步轮换与统一写路径**：rotation、raw/meta/cursor/card 写入和旧文件 ACL 修复使用可恢复、可分片的 root writer；raw 写不得绕过容量 reservation。
 4. **真实验收**：默认 shared root，11k 文件和 9,430/5,079、15k-event 长会话，Windows x64/ARM，冷热重启、并发 writer、旧 writer、外部 create/delete/overwrite/rename 及阶段强杀。必须记录 finishTurn 延迟、event-loop stall、capture lag、full-scan 次数、bytes/hash 和误删/超额计量。
 
-## 下一版本 RFC：语义归档索引
+## Windows 稳定后的实现条目：语义归档索引
 
 ### 目标
 
@@ -65,4 +65,4 @@
 4. 冷会话 lazy hydrate 的重启、重复消费、乱序和旧 schema；不得产生重复真实事件、错误计费或错误 cooldown。
 5. 多进程 shared-root 与账本/rotation 同时运行；语义索引不可绕过 reservation、ACL 或 fail-closed 规则。
 
-该 RFC 在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具。
+该条目在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具，不改变当前版本默认行为。
