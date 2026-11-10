@@ -89,6 +89,21 @@ test("legacy raw and meta files each require replacement even under a confirmed 
   assert.equal(readFileSync(unrelated, "utf8"), "leave alone");
 });
 
+test("read-only recovery can skip repeated ACL tightening while retaining raw/meta verification", (t) => {
+  const f = fixture(t);
+  ensureShadowDir(f.dir, f.access);
+  f.actions.length = 0;
+  const toolCallId = "recovery";
+  const file = join(f.dir, rawName(toolCallId));
+  const text = "synthetic recovery backup";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const result = readRawToolResult({ dir: f.dir, toolCallId, access: f.access, tighten: false });
+  assert.equal(result.ok, true);
+  assert.equal(f.actions.length, 0, "read-only recovery must not spawn per-file ACL work");
+  assert.equal(result.sha256, contentHash(text));
+});
+
 test("fresh exclusive and replacement writes use inherited allowlist without file children or traversal", (t) => {
   const f = fixture(t);
   ensureShadowDir(f.dir, f.access);

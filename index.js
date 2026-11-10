@@ -1357,7 +1357,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const mapKey = this.rawKey(session, id);
       if (this.rawSeen.has(mapKey)) continue;
       try {
-        this.rawSeen.set(mapKey, readRawToolResult({ dir, toolCallId: id, access }));
+        this.rawSeen.set(mapKey, readRawToolResult({ dir, toolCallId: id, access, tighten: false }));
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
         this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id });
@@ -1376,7 +1376,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const mapKey = this.rawKey(session, id);
       if (this.rawSeen.has(mapKey)) continue;
       try {
-        const record = readRawToolResult({ dir, toolCallId: id, access });
+        const record = readRawToolResult({ dir, toolCallId: id, access, tighten: false });
         this.rawSeen.set(mapKey, record);
         progressed ||= Boolean(record?.ok);
       } catch (error) {

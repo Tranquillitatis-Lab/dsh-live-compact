@@ -62,12 +62,14 @@ function readExisting(file, toolCallId) {
 
 // Restart recovery is read-only: never manufacture an original from the surface.
 // Resolve only the requested ID, with the same permissions/meta checks as capture.
-export function readRawToolResult({ dir, toolCallId, access = {} }) {
+export function readRawToolResult({ dir, toolCallId, access = {}, tighten = true }) {
   const file = join(dir, rawName(toolCallId));
   if (!existsSync(file)) return { ok: false, reason: "missing-file", toolCallId };
-  ensureShadowDir(dir, access);
-  tightenShadow(file, "file", access);
-  if (existsSync(`${file}.meta.json`)) tightenShadow(`${file}.meta.json`, "file", access);
+  if (tighten) {
+    ensureShadowDir(dir, access);
+    tightenShadow(file, "file", access);
+    if (existsSync(`${file}.meta.json`)) tightenShadow(`${file}.meta.json`, "file", access);
+  }
   return readExisting(file, toolCallId);
 }
 
