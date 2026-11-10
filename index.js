@@ -587,7 +587,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     return planMessages(messages);
   }
 
-  scheduleCaptureCatchup(agent, events, settings) {
+  scheduleCaptureCatchup(agent, events, settings, options = {}) {
     this.pendingCatchups ||= new Map();
     this.pendingCatchupJobs ||= new Set();
     this.pendingCuts ||= new Set();
@@ -598,6 +598,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       task.session = agent.session;
       task.events = events;
       task.settings = settings;
+      task.freezeSnapshot ||= options.freezeSnapshot === true;
       return task;
     }
     let resolve;
@@ -618,6 +619,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       progressed: false,
       eventTail: Number.isInteger(events?.at?.(-1)?.seq) ? events.at(-1).seq : -1,
       surfaceTail: agent.session.surface?.nodes?.at?.(-1) ?? -1,
+      freezeSnapshot: options.freezeSnapshot === true,
       resolve,
       promise,
     };
@@ -643,7 +645,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     scheduleImmediate(() => {
       task.scheduled = false;
       try {
-        const latest = task.session.snapshotEvents?.();
+        const latest = task.freezeSnapshot ? null : task.session.snapshotEvents?.();
         const latestTail = Number.isInteger(latest?.at?.(-1)?.seq) ? latest.at(-1).seq : -1;
         const latestSurfaceTail = task.session.surface?.nodes?.at?.(-1) ?? -1;
         if (Array.isArray(latest) && (latestTail !== task.eventTail || latest.length !== task.events.length)) {
@@ -741,12 +743,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const signal = AbortSignal.timeout(30000);
     const ev = events || agent.session.snapshotEvents();
     const deferCapture = options.deferCapture === true;
-    const catchup = deferCapture
-      ? this.scheduleCaptureCatchup(agent, ev, settings)
-      : { finished: true, progressed: false, retryRequested: false };
+    const catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: !deferCapture });
     if (!deferCapture) {
       await this.flushPendingCaptures();
-      this.captureNew(agent.session, ev, settings);
+      await catchup.promise;
     }
     const jobs = collectJobs(ev);
     const calls = indexToolCalls(ev);
@@ -1355,7 +1355,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
 
   recoverVisibleRaw(session, access = {}) {
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
-    for (const id of new Set(this.surfaceToolIds(session))) {
+    const ids = [...new Set(this.surfaceToolIds(session))];
+    if (ids.length && existsSync(dir)) ensureShadowDir(dir, access);
+    for (const id of ids) {
       const mapKey = this.rawKey(session, id);
       if (this.rawSeen.has(mapKey)) continue;
       try {
@@ -1370,6 +1372,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   recoverVisibleRawBatch(session, access = {}, startIndex = 0, limit = RECOVER_RAW_BATCH, visibleIds = null) {
     const ids = visibleIds || [...new Set(this.surfaceToolIds(session))];
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
+    if (ids.length && startIndex === 0 && existsSync(dir)) ensureShadowDir(dir, access);
     let index = Math.max(0, startIndex);
     let processed = 0;
     let progressed = false;

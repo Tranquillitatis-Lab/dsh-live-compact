@@ -22,6 +22,22 @@ test("#34 idle maintenance defers full catch-up to the event loop", async (t) =>
   assert.equal(batches, 1, "catch-up must run after the idle maintenance turn yields");
 });
 
+test("#34 turn-end maintenance also batches capture before compaction", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let batches = 0;
+  engine.captureNew = () => { throw new Error("turn-end must not use synchronous captureNew"); };
+  engine.captureNewBatch = () => {
+    batches += 1;
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  assert.equal(batches, 1, "turn-end capture is queued as one bounded batch");
+});
+
 test("#34 retries a transient raw lock without leaving catch-up retryable", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());

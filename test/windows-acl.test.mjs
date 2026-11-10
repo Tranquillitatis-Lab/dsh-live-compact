@@ -7,9 +7,10 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import Spine from "../index.js";
 import { contentHash, rawName, readRawToolResult } from "../raw.js";
 import {
-  ensureShadowDir, resetShadowAccessState, shadowAccessFused, shadowAccessPlan,
+  ensureShadowDir, resetShadowAccessState, sessionDir, shadowAccessFused, shadowAccessPlan,
   tightenShadow, win32Tool, writeShadowFile,
 } from "../shadow.js";
 import { windowsAclCall } from "./helpers/windows-acl.mjs";
@@ -102,6 +103,30 @@ test("read-only recovery can skip repeated ACL tightening while retaining raw/me
   assert.equal(result.ok, true);
   assert.equal(f.actions.length, 0, "read-only recovery must not spawn per-file ACL work");
   assert.equal(result.sha256, contentHash(text));
+});
+
+test("recovery entry secures the existing session directory once, not each raw file", (t) => {
+  const f = fixture(t);
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = f.dir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+  });
+  const session = { id: "recovery-session" };
+  const dir = sessionDir(f.dir, session.id);
+  mkdirSync(dir);
+  const toolCallId = "recovery-entry";
+  const file = join(dir, rawName(toolCallId));
+  const text = "existing recovery payload";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.surfaceToolIds = () => [toolCallId];
+  engine.recoverVisibleRaw(session, f.access);
+  assert.equal(engine.rawSeen.get(`${session.id}\0${toolCallId}`).ok, true);
+  assert.deepEqual(f.actions.map(({ kind }) => kind), ["dir"], "recovery should recheck only the session directory ACL");
 });
 
 test("fresh exclusive and replacement writes use inherited allowlist without file children or traversal", (t) => {
