@@ -65,4 +65,14 @@
 4. 冷会话 lazy hydrate 的重启、重复消费、乱序和旧 schema；不得产生重复真实事件、错误计费或错误 cooldown。
 5. 多进程 shared-root 与账本/rotation 同时运行；语义索引不可绕过 reservation、ACL 或 fail-closed 规则。
 
+### 副作用硬门禁
+
+- **旁路零污染**：索引只能写 shadow 旁路文件；不得 `session.append` user/assistant/turn/compaction 事件，不得把索引 seq 放入 `sourceEventSeqs`，不得影响 checkpoint、prefix cache、官方 compaction 或 cooldown。开关 on/off 时 event hash、surface nodes、prefix fingerprint、压缩数量和 cooldown 状态必须一致。
+- **可信归因**：只解析同一 assistant message 中紧邻父调用前的单行 marker；user/tool/result 文本里的 marker、重复/跨调用/歧义 marker 全部忽略。意图只表示声明，`status/exitCode/error` 必须来自可信 tool metadata 和已校验 raw；marker 不能触发工具、路径、命令、压缩或召回。
+- **最小泄露面**：索引不保存 arguments、环境变量、headers、token、绝对路径或 raw 正文；摘要限长并按策略脱敏，archive 只用 opaque id。raw 召回仍走 ACL/hash/bytes 校验，损坏或缺失返回 `unavailable`，不回退表面文本；thinking 默认拒绝。
+- **绑定与配额**：主键使用可信 `(sessionId, parentCallId/assistantSeq, generated intentKey)`；recall 必须绑定当前 session/agent capability，拒绝跨会话、跨 agent 和同 ref 猜测。每条记录、每 session 和全局设置字节/条数上限；超额或 Windows I/O stall 时只禁用当前 session 索引，现有 raw/compaction 继续。
+- **崩溃与重放**：raw 成功且 hash/meta 验证后才写语义行；版本化 checksum + temp/fsync/rename 或 journal，幂等键包含 session、父调用、toolCallId 和 resultSeq。强杀、重启、并发 writer 和旧 schema 只能丢索引，不能误报成功、重复映射或改 transcript。
+- **关闭零差异**：`SPINE_INTENT_INDEX=0` 时不解析 marker、不创建索引文件、不新增 I/O 或事件；旧卡片缺少新字段时照旧读取。宿主没有 recall API 时返回 `unavailable`，不能崩溃或阻塞。
+- **冷会话边界**：只做内部 lazy hydrate/first-real-event hook；禁止状态重构消息系列、synthetic turn1、synthetic user/assistant/tool 事件，以及把 raw/result/thinking 自动注入上下文。
+
 该条目在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具，不改变当前版本默认行为。
