@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const [root, countText = "320"] = process.argv.slice(2);
+const [root, countText = "320", summaryPath] = process.argv.slice(2);
 if (!root) throw new Error("usage: external-writer.mjs ROOT [COUNT]");
 const count = Number.parseInt(countText, 10);
 if (!Number.isInteger(count) || count < 1) throw new Error("invalid mutation count");
@@ -41,4 +41,5 @@ for (let index = 0; index < count; index += 1) {
   }
   await pause();
 }
+if (summaryPath) writeFileSync(summaryPath, JSON.stringify(stats) + "\n");
 console.log(JSON.stringify(stats));

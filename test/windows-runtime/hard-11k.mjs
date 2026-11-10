@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
@@ -109,14 +109,11 @@ const workerPercentile = (ratio) => workerSorted[Math.min(workerSorted.length - 
 assert.equal(results.length, passes);
 assert.equal(results.reduce((sum, row) => sum + row.stat, 0) > fileCount, true);
 
-const externalWriter = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "external-writer.mjs"), shadowRoot, "320"], {
-  stdio: ["ignore", "pipe", "pipe"],
+const externalSummaryFile = join(shadowRoot, "external-writer-summary.json");
+const externalWriter = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "external-writer.mjs"), shadowRoot, "320", externalSummaryFile], {
+  stdio: ["ignore", "ignore", "ignore"],
   windowsHide: true,
 });
-let externalStdout = "";
-let externalStderr = "";
-externalWriter.stdout.on("data", (data) => { externalStdout += data; });
-externalWriter.stderr.on("data", (data) => { externalStderr += data; });
 let externalMaxGapMs = 0;
 let externalPrevious = Date.now();
 const externalWatchdog = setInterval(() => {
@@ -147,22 +144,30 @@ for (let pass = 0; pass < passes; pass += 1) {
   await yieldImmediate();
 }
 clearInterval(externalWatchdog);
-const externalExit = await new Promise((resolve, reject) => {
-  let settled = false;
-  const finish = (code) => {
-    if (settled) return;
-    settled = true;
-    resolve(code);
+const externalWait = await new Promise((resolve) => {
+  const started = Date.now();
+  const poll = () => {
+    if (existsSync(externalSummaryFile)) {
+      try {
+        const summary = JSON.parse(readFileSync(externalSummaryFile, "utf8"));
+        resolve({ summary, code: externalWriter.exitCode, signal: externalWriter.signalCode, timedOut: false });
+        return;
+      } catch {}
+    }
+    if (externalWriter.exitCode !== null || externalWriter.signalCode || Date.now() - started >= 30000) {
+      resolve({ summary: null, code: externalWriter.exitCode, signal: externalWriter.signalCode, timedOut: Date.now() - started >= 30000 });
+      return;
+    }
+    setTimeout(poll, 10);
   };
-  externalWriter.once("error", reject);
-  // Windows ARM can close one stdio pipe without delivering the child's
-  // `close` event before Node decides an unresolved top-level await is exit 13.
-  // The process `exit` event is sufficient here because stdout/stderr are
-  // bounded diagnostics and are already drained by the listeners above.
-  externalWriter.once("exit", (code) => finish(code));
+  externalWriter.once("error", (error) => resolve({ summary: null, code: null, signal: null, error, timedOut: false }));
+  poll();
 });
-assert.equal(externalExit, 0, `external writer exited ${externalExit}: ${externalStderr}`);
-const externalSummary = JSON.parse(externalStdout.trim().split(/\r?\n/).at(-1));
+assert.equal(externalWait.error, undefined, `external writer failed: ${externalWait.error?.message ?? "unknown error"}`);
+assert.equal(externalWait.timedOut, false, "external writer summary timed out");
+assert.equal(externalWait.code === 0 || externalWait.code === null, true, `external writer exited ${externalWait.code}`);
+const externalSummary = externalWait.summary;
+assert.ok(externalSummary, "external writer summary");
 assert.equal(externalSummary.status, "PASS");
 const invalidFiles = [];
 const walk = (dir) => {
