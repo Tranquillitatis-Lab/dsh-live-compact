@@ -272,6 +272,15 @@ test("stock → spine → stock uses genuine transactions; cooldown is once per 
   assert.equal(skipLiveOfficialCompaction(f.session), false, "the second stock card was consumed independently");
 });
 
+test("an empty host summary is reported and leaves the span untouched", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 60000 }));
+  const { engine } = h.engine({}, "cloud");
+  t.mock.method(BasicCompactionEngine.prototype, "summarize", async () => ({ summary: [], provider: "foreign", model: "foreign" }));
+  await assert.rejects(() => engine.summarize({ messages: [{ role: "user", content: "old history" }] }, f.agent(), new AbortController().signal), /no usable summary/);
+  assert.ok(h.warnings.some((line) => line.includes("official summarizer returned no usable summary")));
+});
+
 test("three repeated production stock/spine cycles preserve factual inputs across restart without idle recompression", async (t) => {
   const facts = ["部署区域是 cn-north-7。", "禁止发布未经过测试的版本。", "提交状态尚未核实，必须读取仓库确认。"];
   const requests = [];
