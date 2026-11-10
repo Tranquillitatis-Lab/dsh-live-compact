@@ -41,6 +41,26 @@ test("#34 turn-end maintenance returns before a large capture catch-up drains", 
   assert.equal(batches, 1, "large capture catch-up must run after the turn yields");
 });
 
+test("#34 pre-recovers visible raw before scanning capture events", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  const order = [];
+  engine.recoverVisibleRawBatch = () => {
+    order.push("recover");
+    return { done: true, nextIndex: 0, progressed: false };
+  };
+  engine.captureNewBatch = () => {
+    order.push("capture");
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await setImmediate();
+  assert.deepEqual(order, ["recover", "capture", "recover"], "existing raw is recovered before capture and then checked after capture");
+});
+
 test("#34 large turn-end capture does not wait for unrelated pending raw work", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
@@ -224,4 +244,15 @@ test("#34 recovers a large visible-ID snapshot without rebuilding it per batch",
   const result = engine.recoverVisibleRawBatch({ id: "s" }, {}, 0, 1, ids);
   assert.equal(result.done, true);
   assert.equal(result.nextIndex, ids.length);
+});
+
+test("#34 recovery failures remain retryable for cursor rewind", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const result = engine.recoverVisibleRawBatch(f.session, {}, 0, 1, ["missing-after-restart"]);
+  assert.equal(result.done, true);
+  const record = engine.rawSeen.get(engine.rawKey(f.session, "missing-after-restart"));
+  assert.equal(record.ok, false);
+  assert.equal(record.retryable, true, "a missing recovered raw must be revisited by captureNewBatch");
 });

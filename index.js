@@ -609,10 +609,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       session: agent.session,
       events,
       settings,
-      phase: "events",
+      phase: "previsible",
       eventIndex: 0,
       recoverIndex: 0,
-      visibleIds: null,
+      visibleIds: [...new Set(this.surfaceToolIds(agent.session))],
       scheduled: false,
       retryRequested: false,
       captureRetryAttempts: 0,
@@ -651,7 +651,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (Array.isArray(latest) && (latestTail !== task.eventTail || latest.length !== task.events.length)) {
           task.events = latest;
           task.eventTail = latestTail;
-          if (task.phase === "visible") {
+          if (task.phase === "previsible" || task.phase === "visible") {
             task.phase = "events";
             task.visibleIds = null;
             task.recoverIndex = 0;
@@ -659,10 +659,21 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         if (latestSurfaceTail !== task.surfaceTail) {
           task.surfaceTail = latestSurfaceTail;
-          if (task.phase === "visible") {
+          if (task.phase === "previsible" || task.phase === "visible") {
             task.visibleIds = [...new Set(this.surfaceToolIds(task.session))];
             task.recoverIndex = 0;
           }
+        }
+        if (task.phase === "previsible") {
+          const recovered = this.recoverVisibleRawBatch(task.session, {}, task.recoverIndex, RECOVER_RAW_BATCH, task.visibleIds);
+          task.progressed ||= recovered.progressed;
+          task.recoverIndex = recovered.nextIndex;
+          if (!recovered.done) {
+            this.queueCaptureCatchup(task);
+            return;
+          }
+          task.phase = "events";
+          task.eventIndex = 0;
         }
         if (task.phase === "events") {
           const result = this.captureNewBatch(task.session, task.events, task.settings, {
@@ -1371,10 +1382,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const mapKey = this.rawKey(session, id);
       if (this.rawSeen.has(mapKey)) continue;
       try {
-        this.rawSeen.set(mapKey, readRawToolResult({ dir, toolCallId: id, access, tighten: false }));
+        const record = readRawToolResult({ dir, toolCallId: id, access, tighten: false });
+        this.rawSeen.set(mapKey, record?.ok ? record : { ...record, retryable: true, recovered: true });
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
-        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id });
+        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true });
       }
     }
   }
@@ -1392,11 +1404,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (this.rawSeen.has(mapKey)) continue;
       try {
         const record = readRawToolResult({ dir, toolCallId: id, access, tighten: false });
-        this.rawSeen.set(mapKey, record);
+        this.rawSeen.set(mapKey, record?.ok ? record : { ...record, retryable: true, recovered: true });
         progressed ||= Boolean(record?.ok);
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
-        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id });
+        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true });
       }
       processed += 1;
     }
