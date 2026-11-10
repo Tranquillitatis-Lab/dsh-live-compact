@@ -1,10 +1,10 @@
 {
-  "base": "b048b70c6b696f4b140facd8a0b4da3ef762a137",
+  "base": "7a97463b9750b897bebabcb1528628035120b39b",
   "name": "dsh-live-compact",
   "version": "1.1.4",
   "filename": "dsh-live-compact-1.1.4.tgz",
-  "bytes": 84621,
-  "sha256": "f368420926b6ca8c8e42c6746072609985b145267a2d82a4bf6782a258478c9d",
+  "bytes": 84884,
+  "sha256": "e69ea869a87d900b2ce2775d0d65708490323cf488597607f96b419135b1d2b9",
   "files": [
     {
       "path": "LICENSE",
@@ -38,8 +38,8 @@
     },
     {
       "path": "index.js",
-      "bytes": 70802,
-      "sha256": "fd81922c3ca45f3d74f00b45e955a806ef55dc4d1fdcea1c9b65a31f48990c14"
+      "bytes": 71370,
+      "sha256": "72d522ed87df5093c4d948f44982053bdd1ef1266f4527e23daf9551171fe9d4"
     },
     {
       "path": "plan.js",
@@ -93,8 +93,8 @@
     },
     {
       "path": "shadow-save-worker.mjs",
-      "bytes": 419,
-      "sha256": "b1cec0f7fd3a28dd23c559b9cffd2b0be2becbb1babc2d1298be6d3e31c14371"
+      "bytes": 636,
+      "sha256": "fa2848968e040f9dcedcf0c663da8412e5a72bd637df14feff999f5bd35938bb"
     },
     {
       "path": "cordis.patch.yml",
