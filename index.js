@@ -76,9 +76,14 @@ function shadowWorkerFor(root) {
   };
   entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
+    if (entry.idleTimer) {
+      clearTimeout(entry.idleTimer);
+      entry.idleTimer = null;
+    }
     for (const { reject } of entry.pending.values()) reject(error);
     entry.pending.clear();
     shadowWorkers.delete(key);
+    worker.terminate().catch(() => {});
   };
   worker.on("message", (message) => {
     const task = entry.pending.get(message?.id);
@@ -96,7 +101,7 @@ function shadowWorkerFor(root) {
   });
   worker.on("error", (error) => fail(error));
   worker.on("exit", (code) => {
-    if (code !== 0) fail(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
+    if (entry.pending.size || code !== 0) fail(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
   });
   shadowWorkers.set(key, entry);
   return entry;
@@ -111,7 +116,13 @@ function runShadowWorker(payload) {
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
     entry.pending.set(id, { resolve, reject });
-    entry.worker.postMessage({ id, payload });
+    try {
+      entry.worker.postMessage({ id, payload });
+    } catch (error) {
+      entry.pending.delete(id);
+      reject(error);
+      scheduleIdleExit();
+    }
   });
 }
 
