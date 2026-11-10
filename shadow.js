@@ -1207,6 +1207,65 @@ export function rotateShadow(options) {
   return withShadowRoot(options.dir, () => rotateShadowLocked(options));
 }
 
+// Complete backup transaction used by both the synchronous compatibility API
+// and the optional root-writer worker. The rotation lock stays held from the
+// full reconcile through ACL-protected body publication; callers must not move
+// only the scan to a worker and release the lock before the write.
+export function saveShadowTransaction({
+  shadow,
+  file,
+  body,
+  required = false,
+  protectPaths = [],
+  sessionKey = "default",
+  cap,
+  access = {},
+  rotationIO = {},
+} = {}) {
+  ensureShadowDir(shadow, access);
+  const dir = sessionDir(shadow, sessionKey);
+  ensureShadowDir(dir, access);
+  return withShadowRoot(shadow, () => {
+    const owner = join(dir, "owner");
+    const ownerExisted = existsSync(owner);
+    let ownerWritten = false;
+    try {
+      writeShadowOwner(dir, access, shadow);
+      ownerWritten = true;
+      const incoming = Buffer.byteLength(body);
+      const rotation = rotateShadow({
+        ...rotationIO,
+        dir: shadow,
+        incomingBytes: incoming,
+        protectPath: file,
+        protectPaths,
+        sessionKey,
+        cap,
+      });
+      if (!rotation.ok) {
+        if (rotation.reason) {
+          const incomplete = rotation.reason === "scan-incomplete";
+          const error = Object.assign(new Error(incomplete
+            ? "spine: shadow capacity scan is incomplete; backup refused; leaving the span"
+            : "spine: shadow capacity measurement is invalid; backup refused; leaving the span"), {
+            code: incomplete ? "ESHADOWSCAN" : "ESHADOWMETER",
+          });
+          if (required) throw error;
+          return { ok: false, skipped: true, reason: rotation.reason, rotation };
+        }
+        if (required) throw new Error("spine: shadow backup is full; leaving the span");
+        return { ok: false, skipped: true, reason: "full", rotation };
+      }
+      writeShadowFile(file, body, access, { root: shadow });
+      if (!existsSync(file)) throw new Error("spine: shadow backup was not written");
+      return { ok: true, file, rotation };
+    } catch (error) {
+      if (ownerWritten && !ownerExisted) discardShadowFiles([owner], error);
+      throw error;
+    }
+  });
+}
+
 function rotationTime(now) {
   try {
     const value = now();
