@@ -241,6 +241,8 @@ function failureBody(text) {
   if (raw.startsWith("{")) {
     try {
       const parsed = JSON.parse(raw);
+      // A bounded failed result keeps every field, not only the two streams.
+      if (raw.length <= TOOL_BUDGET) return raw;
       const streams = [];
       for (const [label, value] of [["stderr", parsed?.stderr?.text], ["stdout", parsed?.stdout?.text]]) {
         if (typeof value === "string" && value.trim()) {
@@ -257,7 +259,7 @@ function failureBody(text) {
 
 export function failureKeptLines(text) {
   const useful = usefulLines(failureBody(text));
-  if (useful.join("\n").length <= TOOL_BUDGET) return useful.map(shorten);
+  if (useful.join("\n").length <= TOOL_BUDGET) return useful;
   const markedLines = useful.filter((line) => FAILURE_LINE.test(line));
   const marked = (markedLines.length > 8 ? [markedLines[0], ...markedLines.slice(-7)] : markedLines).map(shorten);
   const causes = useful.filter((line) => /(?:root|stderr|stdout)[ _-]*cause\b|CAUSE\b/i.test(line)).slice(-4).map(shorten);
@@ -950,7 +952,7 @@ export function pointerOnlyText(pieces) {
   const lines = tools.map((piece) => {
     const cmd = piece.command || piece.name || "tool";
     const call = Number.isInteger(piece.callSeq) ? piece.callSeq : "?";
-    const flag = piece.isError ? " error" : "";
+    const flag = isToolFailure(piece.text, piece.isError) ? " error" : "";
     return `* ${piece.name || "tool"} "${cmd}" (seq ${call} -> result ${piece.seq}${flag})`;
   });
   const userBlock = users.length
@@ -1036,9 +1038,15 @@ function toolBlock(span) {
   if (command) prefix.push(command);
   const exitCode = failed ? exitCodeOf(text) : null;
   if (exitCode !== null) prefix.push(`[exit code: ${exitCode}]`);
-  if (small) return { block: [...prefix, ...lines.map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: false, hardLines, ordinaryLines };
-  if (failed) return { block: [...prefix, ...failureKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, hardLines, ordinaryLines };
-  return { block: [...prefix, ...unknownKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, needsBackup: true, hardLines, ordinaryLines };
+  if (small) return { block: [...prefix, ...lines.map((line) => `│ ${line}`)].join("\n"), failed, failureDiagnosticsComplete: true, needsBackup: false, hardLines, ordinaryLines };
+  if (failed) {
+    const original = text.trim();
+    const diagnostic = usefulLines(original.startsWith("{") ? original : failureBody(text));
+    const kept = failureKeptLines(text);
+    const failureDiagnosticsComplete = diagnostic.length === kept.length && diagnostic.every((line, index) => line === kept[index]);
+    return { block: [...prefix, ...kept.map((line) => `│ ${line}`)].join("\n"), failed, failureDiagnosticsComplete, needsBackup: true, hardLines, ordinaryLines };
+  }
+  return { block: [...prefix, ...unknownKeptLines(text).map((line) => `│ ${line}`)].join("\n"), failed, failureDiagnosticsComplete: true, needsBackup: true, hardLines, ordinaryLines };
 }
 
 export function fitFailure(block, budget) {
@@ -1054,7 +1062,7 @@ export function fitFailure(block, budget) {
 
 export function toolExcerpt(spans, backupId = "") {
   const tools = (spans || []).filter((span) => sourceRole(span.role) === "tool" && String(span.text || "").trim().length > 0);
-  if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false, excerpts: [], stats: [] };
+  if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false, failureDiagnosticsComplete: true, incompleteFailures: [], excerpts: [], stats: [] };
   let lastFailure = -1;
   tools.forEach((span, index) => {
     if (isToolFailure(span.text, span.isError)) lastFailure = index;
@@ -1070,15 +1078,22 @@ export function toolExcerpt(spans, backupId = "") {
   });
   const chosen = [];
   const stats = [];
+  const incompleteFailures = new Map();
   let used = 0;
   let needsBackup = false;
   for (const item of ranked) {
     const built = toolBlock(item.span);
+    const incomplete = (reason) => {
+      if (built.failed && !incompleteFailures.has(item.index)) incompleteFailures.set(item.index, { sourceId: item.span.id, reason });
+    };
+    if (!built.failureDiagnosticsComplete) incomplete("failed-tool-lines-truncated");
     let block = built.block;
     if (item.index === lastFailure && used + block.length > TOOL_BUDGET) {
+      incomplete("failed-tool-budget-truncated");
       block = fitFailure(block, Math.max(0, TOOL_BUDGET - used));
     }
     if (used + block.length > TOOL_BUDGET) {
+      incomplete("failed-tool-budget-omitted");
       needsBackup = true;
       stats.push({ sourceId: item.span.id, hardLines: built.hardLines, omittedOrdinaryToolLines: built.ordinaryLines.length });
       continue;
@@ -1110,6 +1125,8 @@ export function toolExcerpt(spans, backupId = "") {
     text: parts.join("\n"),
     omitted: skipped,
     needsBackup,
+    failureDiagnosticsComplete: incompleteFailures.size === 0,
+    incompleteFailures: [...incompleteFailures.values()],
     excerpts: chosen.map(({ sourceId, text }) => ({ sourceId, text })),
     stats,
   };
@@ -1154,7 +1171,7 @@ function pointerLines(spans) {
     if (Number.isInteger(span.seq)) {
       const cmd = span.command || span.name || "tool";
       const call = Number.isInteger(span.callSeq) ? span.callSeq : "?";
-      const flag = span.isError ? " error" : "";
+      const flag = isToolFailure(span.text, span.isError) ? " error" : "";
       lines.push(`* ${span.name || "tool"} "${cmd}" (seq ${call} -> result ${span.seq}${flag})`);
       continue;
     }
@@ -1284,6 +1301,15 @@ export function buildCard(
     requiredLines: hard,
     keptLines: kept.map((item) => ({ sourceId: item.sourceId, text: item.line })),
   });
+  const incompleteFailures = tools.incompleteFailures.filter((item) => sourceById.has(item.sourceId));
+  for (const item of incompleteFailures) {
+    coverage.ok = false;
+    coverage.missing.push({
+      sourceId: item.sourceId,
+      text: `failed-tool-diagnostics-not-retained (seq ${sourceById.get(item.sourceId).seq ?? "?"})`,
+      reason: "failed-tool-diagnostics-not-retained",
+    });
+  }
 
   // 保留既有助手决策否决；助手正文既不进 Kept，也不能为其他来源提供证据。
   for (const source of sources) {
@@ -1344,6 +1370,7 @@ export function buildCard(
 
   return {
     ok: coverage.ok,
+    failureDiagnosticsComplete: incompleteFailures.length === 0,
     scope: TRUNK_SCOPE,
     hardLines: hard.map((item) => item.line),
     hardCount: hard.length,

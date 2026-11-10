@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
-import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
+import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, isToolFailure, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
 import { captureOwnedToolResult, contentHash, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
   ensureShadowDir,
@@ -420,7 +420,6 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
     }
     return pieces;
   };
-  const spanText = (spanStart, spanEnd) => spanPieces(spanStart, spanEnd).map((piece) => piece.text).join("\n");
   const liveText = (spanStart, spanEnd) => {
     const bits = [];
     for (let index = 0; index < nodes.length; index += 1) {
@@ -492,9 +491,11 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   const start = picked.start;
   end = picked.end;
   const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
+  const pieces = spanPieces(start, end);
+  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) return null;
   let card = picked.pointerOnly
-    ? { ok: true, text: pointerOnlyText(spanPieces(start, end)), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
-    : buildCard(spanText(start, end), liveText(start, end), spanPieces(start, end), extras);
+    ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
+    : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, end), pieces, extras);
   if (card.ok !== true) return null;
   card = attachBackupHint(card, freshShadowFile("cut", key));
   if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
