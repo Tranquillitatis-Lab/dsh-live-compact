@@ -38,7 +38,7 @@ const PLUGIN_NAME = /^(?:(?:cut|official|shadow)-\d+-[0-9a-f]{8}|raw-[0-9a-f]{16
 let cachedSid = "";
 const lockedDirs = new Map();
 const lockedFiles = new Map();
-let shadowFuse = false;
+let shadowFuseState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const shadowWarnings = new Set();
 
 // No shared byte ledger. A positively dead holder leaves an immutable fence:
@@ -487,16 +487,31 @@ export function resetShadowAccessState() {
   cachedSid = "";
   lockedDirs.clear();
   lockedFiles.clear();
-  shadowFuse = false;
+  // Test/restart helper only: callers must have no in-flight workers. Keep the
+  // same shared buffer so idle worker retirement never creates a new fuse domain.
+  Atomics.store(shadowFuseState, 0, 0);
   shadowWarnings.clear();
 }
 
 export function shadowAccessFused() {
-  return shadowFuse;
+  return Atomics.load(shadowFuseState, 0) !== 0;
+}
+
+export function shadowAccessFuseBuffer() {
+  return shadowFuseState.buffer;
+}
+
+export function attachShadowAccessFuse(buffer) {
+  if (!(buffer instanceof SharedArrayBuffer) || buffer.byteLength !== Int32Array.BYTES_PER_ELEMENT) {
+    throw new TypeError("spine: invalid shared shadow access fuse");
+  }
+  const alreadyFused = shadowAccessFused();
+  shadowFuseState = new Int32Array(buffer);
+  if (alreadyFused) Atomics.store(shadowFuseState, 0, 1);
 }
 
 function tripFuse() {
-  shadowFuse = true;
+  Atomics.store(shadowFuseState, 0, 1);
 }
 
 function envValue(env, name) {
@@ -833,7 +848,7 @@ export function defaultShadowAccessRunner({
     return true;
   }
 
-  if (shadowFuse) {
+  if (shadowAccessFused()) {
     const error = new Error("spine: shadow permission already failed");
     error.code = "ESHADOWACCESS";
     throw error;
@@ -913,7 +928,7 @@ export function defaultShadowAccessRunner({
 export function tightenShadow(path, kind = "dir", access = {}) {
   const platform = access.platform ?? process.platform;
   const windows = platform === "win32" && !access.runner;
-  if (windows && shadowFuse) {
+  if (windows && shadowAccessFused()) {
     const error = new Error("spine: shadow permission action failed; backup refused");
     error.code = "ESHADOWACCESS";
     throw error;
@@ -958,7 +973,7 @@ export function ensureShadowDir(dir, access = {}) {
 }
 
 export function tightenCreatedShadow(file, fd, access, { remember = true } = {}) {
-  if ((access.platform ?? process.platform) === "win32" && !access.runner && !shadowFuse) {
+  if ((access.platform ?? process.platform) === "win32" && !access.runner && !shadowAccessFused()) {
     try {
       if (shadowDirLocked(dirname(file))) {
         const entry = accessEntry(file, "file");
