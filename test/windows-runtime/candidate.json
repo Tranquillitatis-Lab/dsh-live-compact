@@ -1,10 +1,10 @@
 {
-  "base": "36afad9c6cf3f71b8eab47368fb37452aec5c83c",
+  "base": "c6df417fa39013026727f41bd4a27ae93140162c",
   "name": "dsh-live-compact",
   "version": "1.1.4",
   "filename": "dsh-live-compact-1.1.4.tgz",
-  "bytes": 82486,
-  "sha256": "53dbc7b75bf9e9eeb7bef25cf940b1d5975a2b36f5415d73019ec7ea3ac5356c",
+  "bytes": 83108,
+  "sha256": "635cbb1d8fefad0c98dc26a5ec9f74f78b46cf43a8efae3d5d3ba1c4fcdbf59e",
   "files": [
     {
       "path": "LICENSE",
@@ -38,8 +38,8 @@
     },
     {
       "path": "index.js",
-      "bytes": 68028,
-      "sha256": "045bfcf6593440c5a223ff673916f6b0945c57bf6bc4f3ddb2da9a6e8dac90ee"
+      "bytes": 68263,
+      "sha256": "08f1387ad8b0a26ee381cf77a1b1effcde68715c27ae10a70a2d86b4b7087e96"
     },
     {
       "path": "plan.js",
@@ -78,13 +78,18 @@
     },
     {
       "path": "package.json",
-      "bytes": 2721,
-      "sha256": "a6fddef69563b2cd75bf79a52738a6df131cc3ac1d98a21677000b3526d46c87"
+      "bytes": 2741,
+      "sha256": "78474b954466f984d3194e61f901a0e5355cafdde24c1fab960b2ed9e8d051a3"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 24098,
+      "sha256": "75e9d2d8e2ddd2d58399ae12cef78a4d896f0c924c6cb6f8a8c58bc402f3b33d"
     },
     {
       "path": "README.md",
-      "bytes": 36168,
-      "sha256": "b39b9812e41aca1f8db2b17a373c0fd92c72bb648d4454c621a6e1c942958c75"
+      "bytes": 22687,
+      "sha256": "7ab0c5bb327f157c01e3312919d774828b995538f9613e95db841775a2237107"
     },
     {
       "path": "cordis.patch.yml",
