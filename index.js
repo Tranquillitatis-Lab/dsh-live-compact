@@ -63,7 +63,18 @@ function shadowWorkerFor(root) {
   let entry = shadowWorkers.get(key);
   if (entry) return entry;
   const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url));
-  entry = { worker, nextId: 1, pending: new Map() };
+  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null };
+  const scheduleIdleExit = () => {
+    if (entry.pending.size || entry.idleTimer) return;
+    entry.idleTimer = setTimeout(() => {
+      entry.idleTimer = null;
+      if (entry.pending.size) return;
+      shadowWorkers.delete(key);
+      worker.terminate().catch(() => {});
+    }, 500);
+    entry.idleTimer.unref?.();
+  };
+  entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
     for (const { reject } of entry.pending.values()) reject(error);
     entry.pending.clear();
@@ -73,10 +84,15 @@ function shadowWorkerFor(root) {
     const task = entry.pending.get(message?.id);
     if (!task) return;
     entry.pending.delete(message.id);
-    if (message?.ok) return task.resolve(message.result);
+    if (message?.ok) {
+      task.resolve(message.result);
+      scheduleIdleExit();
+      return;
+    }
     const error = new Error(message?.error?.message || "spine: shadow worker failed");
     if (message?.error?.code) error.code = message.error.code;
     task.reject(error);
+    scheduleIdleExit();
   });
   worker.on("error", (error) => fail(error));
   worker.on("exit", (code) => {
@@ -88,6 +104,10 @@ function shadowWorkerFor(root) {
 
 function runShadowWorker(payload) {
   const entry = shadowWorkerFor(payload.shadow);
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+  }
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
     entry.pending.set(id, { resolve, reject });
