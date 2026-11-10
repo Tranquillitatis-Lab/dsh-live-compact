@@ -22,7 +22,7 @@ test("#34 idle maintenance defers full catch-up to the event loop", async (t) =>
   assert.equal(batches, 1, "catch-up must run after the idle maintenance turn yields");
 });
 
-test("#34 turn-end maintenance also batches capture before compaction", async (t) => {
+test("#34 turn-end maintenance returns before a large capture catch-up drains", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
   f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
@@ -36,7 +36,31 @@ test("#34 turn-end maintenance also batches capture before compaction", async (t
   };
   engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
   await engine.finishTurn(f.agent(), f.session.snapshotEvents());
-  assert.equal(batches, 1, "turn-end capture is queued as one bounded batch");
+  assert.equal(batches, 0, "turn-end must return before the large capture batch runs");
+  await setImmediate();
+  assert.equal(batches, 1, "large capture catch-up must run after the turn yields");
+});
+
+test("#34 large turn-end capture does not wait for unrelated pending raw work", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  engine.pendingCaptures.add(pending);
+  let batches = 0;
+  engine.captureNewBatch = () => {
+    batches += 1;
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  const done = engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  await done;
+  assert.equal(batches, 0, "large turn-end capture must not await unrelated pending work");
+  release();
+  await setImmediate();
+  assert.equal(batches, 1);
 });
 
 test("#34 small direct turns keep synchronous capture and wait pending captures", async (t) => {

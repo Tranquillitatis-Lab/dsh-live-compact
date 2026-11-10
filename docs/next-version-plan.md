@@ -13,7 +13,7 @@
 
 ### 目标
 
-让 codemode/PTC 小程序在调用工具前用固定注释写下“想做什么”，插件把这个意图和工具结果绑定到已有会话 `seq` 与备份编号。卡片默认只留短意图、结果状态和指针；需要时按 `seq` 召回工具结果，模型明确请求后才召回思考块。
+让 codemode/PTC 小程序在调用工具前用固定 marker 写下“想做什么”，插件把这个意图和工具结果绑定到已有会话 `seq` 与备份编号。卡片默认只留短意图、结果状态和指针；需要时通过显式 typed API 召回工具结果。
 
 ### 建议记录
 
@@ -21,33 +21,38 @@
 {
   "schema": 1,
   "seq": 1842,
+  "intentKey": "repo-status",
+  "ref": "repo-status",
   "intent": "查找并修复配置加载失败",
-  "toolCallId": "call_...",
+  "assistantSeq": 1842,
+  "parentCallId": "call_...",
+  "resultSeqs": [1847],
+  "toolCallIds": ["call_..."],
   "result": {
     "status": "ok",
     "exitCode": 0,
     "summary": "修改 2 个文件并通过测试"
   },
   "archive": "raw-...txt",
-  "thoughtArchive": null
+  "summaryHash": "sha256:..."
 }
 ```
 
-- 注释格式固定为 `# intent: ...`（后续可增加等价的语言注释），解析失败时退回现有体量/失败形态规则。
+- marker 固定为单行 `// spine-intent:v1 {"ref":"repo-status","summary":"inspect repository status"}`，只接受锚定在 PTC 调用前的 marker；正则识别 envelope 后必须用 `JSON.parse` 校验。`ref`、摘要长度和控制字符都要限额，解析失败、重复 marker 或跨调用歧义均忽略并退回现有规则。
 - `intent` 只是模型声明，不代表成功；卡片必须把意图、实际结果（状态、退出码、错误摘要）和 `seq`/备份编号分开。
-- 归档索引写入现有 shadow 根的会话目录，使用原子追加/替换和 root writer；索引损坏时只丢语义标签，不影响原始 raw 备份。
-- 默认只返回工具结果；思考块单独存放、显式请求才读，且不进入默认摘要或卡片。
-- 召回内容追加在当前消息尾部，不能改写已经缓存的前缀；召回响应必须带 `seq` 和结果状态，防止“想修复”被误读成“已修复”。
+- 索引只保存关联关系和摘要指针，工具正文继续由现有 raw 备份、哈希和 ACL 机制管理；使用原子追加/替换和 root writer，索引损坏时只丢语义标签，不影响原始 raw 备份。
+- 召回必须是显式 API，例如 `spine.recall({ intentRef, kind: "result", maxItems, maxBytes })`。默认不自动注入上下文，也不把结果重新写成 user/assistant 消息；跨会话、哈希不符、找不到或超限时返回 `unavailable`。
+- 原始 thinking/reasoning 不纳入下一版；若未来支持，必须是独立宿主策略、独立开关、明确用户请求、限额和脱敏。
 
 ### 冷会话点火与状态重构
 
-可取部分是把切片后的状态重构成一个可验证的恢复种子：保留 checkpoint、当前任务进度、工具调用/结果索引和来源 `seq`，让新会话从最小状态恢复，而不是重新读整段历史。
+可取部分是把切片后的状态重构成一个可验证的旁路索引：保留 checkpoint、当前任务进度、工具调用/结果索引和来源 `seq`，让引擎按需从最小状态恢复，而不是重新读整段历史。
 
-不采用直接伪造宿主生命周期事件的做法。若需要 `turn1` 形态，只生成带 `source: "recovery-seed"`、`seedId`、原始 `seq` 列表和 schema 版本的合成恢复消息；它不能冒充真实 user/assistant/tool 事件，不能参与计费、重试、冷却或官方 compaction 边界判断。默认不放入思考块，不伪造工具调用和结果。
+不采用状态重构消息系列，也不伪造 `turn1` 或任何宿主生命周期事件；它会污染 transcript、checkpoint、tool pairing、prefix cache 和官方压缩边界。冷会话点火只做内部 lazy hydrate：引擎初始化或第一个真实事件到来时分批读取索引，索引缺失就降级为无意图索引模式。
 
 ### 开关与回退
 
-- 默认关闭，先以离线索引和只读召回实验验证；出现格式错误、索引撕裂、宿主不接受 seed 或召回超时，立即退回现有卡片和 `shadow-search` 路径。
+- `SPINE_INTENT_INDEX=0` 默认关闭；开启后默认只有 `result` 召回，先以离线索引和只读召回实验验证。出现格式错误、索引撕裂、召回超时或恢复失败，立即退回现有卡片和 `shadow-search` 路径。
 - 新字段必须向后兼容：旧卡片没有 `intent`、`archive` 或 `seedId` 时照旧读取，不重做已完成的压缩。
 - 任何召回失败都保留原始 span，不因语义索引失败而丢失工具结果。
 
@@ -55,8 +60,8 @@
 
 1. 注释存在、缺失、重复、超长、恶意伪造；解析失败均能安全回退。
 2. 成功、非零退出码、超时、部分输出、重试和重启后恢复；每条记录的 `seq`、toolCallId、archive 与实际 raw 一致。
-3. 结果召回默认不带思考块；显式请求才读取思考归档，并验证大小上限与尾部追加。
-4. 冷会话 seed 重启、重复消费、乱序和旧 schema；不得产生重复真实事件、错误计费或错误 cooldown。
+3. 默认不自动召回；显式 `kind:"result"` 召回验证数量/字节限制、跨会话拒绝和哈希一致性；`kind:"thinking"` 明确返回拒绝。
+4. 冷会话 lazy hydrate 的重启、重复消费、乱序和旧 schema；不得产生重复真实事件、错误计费或错误 cooldown。
 5. 多进程 shared-root 与账本/rotation 同时运行；语义索引不可绕过 reservation、ACL 或 fail-closed 规则。
 
 该 RFC 在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具。

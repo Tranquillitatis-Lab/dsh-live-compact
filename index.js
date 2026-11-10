@@ -747,11 +747,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (deferCapture) {
       catchup = this.scheduleCaptureCatchup(agent, ev, settings);
     } else {
-      await this.flushPendingCaptures();
       if (ev.length > CAPTURE_EVENT_BATCH) {
         catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
-        await catchup.promise;
       } else {
+        await this.flushPendingCaptures();
         this.captureNew(agent.session, ev, settings);
       }
     }
@@ -814,7 +813,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           try {
             state.localOnly = true;
             state.approvedCard = chunk.card;
-            if (deferCapture) await this.flushPendingCaptures(agent.session, this.chunkToolCallIds(agent.session, chunk));
+            await this.flushPendingCaptures(agent.session, this.chunkToolCallIds(agent.session, chunk));
             await this.commitSelectedSpan(agent, chunk, op);
             measurement = this.ctx.tokenMeter.measure(agent.session);
             const after = measurement.totalTokens;
