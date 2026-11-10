@@ -683,6 +683,24 @@ test("shared roots keep full scans regardless of clock validity or elapsed lifet
   assert.equal(f.calls.readdir.length, 4);
 });
 
+test("rotation listing does not reread session raw bodies", (t) => {
+  const f = fixture(t);
+  configure(t, f, false);
+  const dir = join(f.dir, "mine");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "raw-0123456789abcdef.txt"), shadowFileBody("mine", "raw"));
+  let reads = 0;
+  withFsMock(t, "readSync", (read) => (...args) => {
+    reads += 1;
+    return read(...args);
+  }, () => {
+    const entries = listShadowEntries(f.dir);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].sessionKey, "mine");
+  });
+  assert.equal(reads, 0, "rotation already has the session key from the directory name");
+});
+
 test("eight actual cut/official saves below 80 percent do no backup readdir/stat after calibration and charge once", (t) => {
   const f = fixture(t);
   configure(t, f, true, 5000);

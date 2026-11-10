@@ -1116,7 +1116,12 @@ function readSessionKey(file) {
   }
 }
 
-export function listPluginShadows(dir, { readdir = readdirSync, stat = statSync, onError } = {}) {
+export function listPluginShadows(dir, {
+  readdir = readdirSync,
+  stat = statSync,
+  onError,
+  includeSessionKey = true,
+} = {}) {
   let names = [];
   try {
     names = readdir(dir);
@@ -1136,7 +1141,7 @@ export function listPluginShadows(dir, { readdir = readdirSync, stat = statSync,
         path,
         size: info.size,
         mtimeMs: info.mtimeMs,
-        sessionKey: readSessionKey(path),
+        sessionKey: includeSessionKey ? readSessionKey(path) : "",
       });
     } catch { onError?.(); }
   }
@@ -1147,7 +1152,12 @@ function byAge(left, right) {
   return left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name);
 }
 
-export function listShadowEntries(dir, alive = processAlive, { readdir = readdirSync, stat = statSync, onError } = {}) {
+export function listShadowEntries(dir, alive = processAlive, {
+  readdir = readdirSync,
+  stat = statSync,
+  onError,
+  includeSessionKey = false,
+} = {}) {
   const entries = [];
   let names = [];
   try {
@@ -1180,7 +1190,7 @@ export function listShadowEntries(dir, alive = processAlive, { readdir = readdir
     if (owner > 0) {
       try { live = alive(owner) !== false; } catch { live = true; }
     }
-    for (const file of listPluginShadows(path, { readdir, stat, onError })) {
+    for (const file of listPluginShadows(path, { readdir, stat, onError, includeSessionKey })) {
       // The directory and its owner define deletion authority. Raw tool output
       // is untrusted data and may itself start with a spine-session marker.
       entries.push({ ...file, legacy: false, live, sessionKey: entry.name });
