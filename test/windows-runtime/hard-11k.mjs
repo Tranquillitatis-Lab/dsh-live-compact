@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -59,6 +60,7 @@ for (let pass = 0; pass < passes; pass += 1) {
   assert.equal(result.estimated, undefined, "shared root must not use an estimate");
   durations.push(elapsedMs);
   results.push({ pass: pass + 1, elapsedMs: Number(elapsedMs.toFixed(2)), used: result.used, deleted: result.deleted, freed: result.freed, readdir: counters.readdir - beforeRead, stat: counters.stat - beforeStat });
+  await yieldImmediate();
 }
 clearInterval(watchdog);
 
