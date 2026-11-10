@@ -56,21 +56,42 @@ const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
 
+const shadowWorkers = new Map();
+
+function shadowWorkerFor(root) {
+  const key = String(root);
+  let entry = shadowWorkers.get(key);
+  if (entry) return entry;
+  const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url));
+  entry = { worker, nextId: 1, pending: new Map() };
+  const fail = (error) => {
+    for (const { reject } of entry.pending.values()) reject(error);
+    entry.pending.clear();
+    shadowWorkers.delete(key);
+  };
+  worker.on("message", (message) => {
+    const task = entry.pending.get(message?.id);
+    if (!task) return;
+    entry.pending.delete(message.id);
+    if (message?.ok) return task.resolve(message.result);
+    const error = new Error(message?.error?.message || "spine: shadow worker failed");
+    if (message?.error?.code) error.code = message.error.code;
+    task.reject(error);
+  });
+  worker.on("error", (error) => fail(error));
+  worker.on("exit", (code) => {
+    if (code !== 0) fail(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
+  });
+  shadowWorkers.set(key, entry);
+  return entry;
+}
+
 function runShadowWorker(payload) {
+  const entry = shadowWorkerFor(payload.shadow);
+  const id = entry.nextId++;
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), { workerData: payload });
-    const finish = () => worker.terminate().catch(() => {});
-    worker.once("message", (message) => {
-      finish();
-      if (message?.ok) return resolve(message.result);
-      const error = new Error(message?.error?.message || "spine: shadow worker failed");
-      if (message?.error?.code) error.code = message.error.code;
-      reject(error);
-    });
-    worker.once("error", (error) => { finish(); reject(error); });
-    worker.once("exit", (code) => {
-      if (code !== 0) reject(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
-    });
+    entry.pending.set(id, { resolve, reject });
+    entry.worker.postMessage({ id, payload });
   });
 }
 
