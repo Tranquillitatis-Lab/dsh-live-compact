@@ -63,26 +63,31 @@ function shadowWorkerFor(root) {
   let entry = shadowWorkers.get(key);
   if (entry) return entry;
   const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url));
-  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null };
+  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false };
+  const removeEntry = () => {
+    if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
+  };
   const scheduleIdleExit = () => {
-    if (entry.pending.size || entry.idleTimer) return;
+    if (entry.retired || entry.pending.size || entry.idleTimer) return;
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
       if (entry.pending.size) return;
-      shadowWorkers.delete(key);
+      entry.retired = true;
+      removeEntry();
       worker.terminate().catch(() => {});
     }, 500);
     entry.idleTimer.unref?.();
   };
   entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
+    entry.retired = true;
     if (entry.idleTimer) {
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
     for (const { reject } of entry.pending.values()) reject(error);
     entry.pending.clear();
-    shadowWorkers.delete(key);
+    removeEntry();
     worker.terminate().catch(() => {});
   };
   worker.on("message", (message) => {
@@ -101,7 +106,14 @@ function shadowWorkerFor(root) {
   });
   worker.on("error", (error) => fail(error));
   worker.on("exit", (code) => {
-    if (entry.pending.size || code !== 0) fail(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
+    if (entry.pending.size || (!entry.retired && code !== 0)) {
+      fail(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
+    } else {
+      entry.retired = true;
+      if (entry.idleTimer) clearTimeout(entry.idleTimer);
+      entry.idleTimer = null;
+      removeEntry();
+    }
   });
   shadowWorkers.set(key, entry);
   return entry;
@@ -121,7 +133,7 @@ function runShadowWorker(payload) {
     } catch (error) {
       entry.pending.delete(id);
       reject(error);
-      scheduleIdleExit();
+      entry.scheduleIdleExit();
     }
   });
 }
