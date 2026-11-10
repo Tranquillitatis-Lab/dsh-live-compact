@@ -104,6 +104,12 @@ try {
     $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
     if ($child.ExitCode -ne 0 -or $result.status -ne 'PASS') {
         $failed = $result.stages.PSObject.Properties | Where-Object { $_.Value.status -eq 'FAIL' } | Select-Object -First 1
+        if ($failed) {
+            $message = [string]$failed.Value.message
+            Write-Error ("RUNTIME_STAGE_FAILED name=$($failed.Name) childExit=$($child.ExitCode) message=$message")
+        } else {
+            Write-Error ("RUNTIME_STAGE_FAILED name=unknown childExit=$($child.ExitCode) resultStatus=$($result.status)")
+        }
         if ($failed -and $failed.Name -in @('install','plugin-install','fixture','before','denied','new-session','restart','native-rotation','issue38-recovery','long-session','hard-9430','hard-11k')) {
             $log = Join-Path $run "$($failed.Name).stderr.log"
             if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 24 }
