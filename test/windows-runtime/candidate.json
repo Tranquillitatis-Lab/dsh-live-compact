@@ -1,0 +1,95 @@
+{
+  "base": "36afad9c6cf3f71b8eab47368fb37452aec5c83c",
+  "name": "dsh-live-compact",
+  "version": "1.1.4",
+  "filename": "dsh-live-compact-1.1.4.tgz",
+  "bytes": 82486,
+  "sha256": "53dbc7b75bf9e9eeb7bef25cf940b1d5975a2b36f5415d73019ec7ea3ac5356c",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1064,
+      "sha256": "ddf10faf1fd9a5aec6cf1d8c136d034951df25358ad276d2becd1bc59d39d9a9"
+    },
+    {
+      "path": "adapter.js",
+      "bytes": 707,
+      "sha256": "96b431c710188aca6c65775af82c42931ed65fb46da1274fdb91fd6c80eb1f7a"
+    },
+    {
+      "path": "client.js",
+      "bytes": 6028,
+      "sha256": "7d94b8c923b69828b71388519b98aa6f29125fda26ad284176c049d36436cc69"
+    },
+    {
+      "path": "cooldown.js",
+      "bytes": 5789,
+      "sha256": "fc9ec57d4547cf86bcc86e267ac3411343db2d7f0a938b4aa0a89f80864569fb"
+    },
+    {
+      "path": "bin/dsh-live-compact.js",
+      "bytes": 1256,
+      "sha256": "634ecd94dbe9e45476f520e7286764fb682b3f73b37c50edcca0e2d273786d27"
+    },
+    {
+      "path": "gate.js",
+      "bytes": 5997,
+      "sha256": "a12df2d3694f1be520f54ea8ec38f43993239ff6affa12924ad2ac318d3f3f79"
+    },
+    {
+      "path": "index.js",
+      "bytes": 68028,
+      "sha256": "045bfcf6593440c5a223ff673916f6b0945c57bf6bc4f3ddb2da9a6e8dac90ee"
+    },
+    {
+      "path": "plan.js",
+      "bytes": 57276,
+      "sha256": "5e8a60549fad22d8e5e65d4559ce425d3daaadefefb76955759c9b378d5839ce"
+    },
+    {
+      "path": "raw.js",
+      "bytes": 8870,
+      "sha256": "3d5985ad78ba7b4263510fed63aef4c0b9b8dc6e430df401855112b7574fb1d7"
+    },
+    {
+      "path": "settings.js",
+      "bytes": 5542,
+      "sha256": "a2a05ca41bb56e9eb9aa4a524871f1784b38518fa52dc3009853858fdaa5d2ab"
+    },
+    {
+      "path": "shadow-search.js",
+      "bytes": 6155,
+      "sha256": "35ec551a4d433769685c59146f5d9c94c0b86bbfc237de14cf27aec64fa087d4"
+    },
+    {
+      "path": "shadow.js",
+      "bytes": 45918,
+      "sha256": "811ffeeb9d5e73d6f9345af21a699b433d250761d2341a294295b93e581f1f1d"
+    },
+    {
+      "path": "shell.js",
+      "bytes": 5055,
+      "sha256": "57ba46ae70c52aca6dcdcdb61ade3ac2621be37c5fcdc811aa1ed89e1f1970d1"
+    },
+    {
+      "path": "thunder.js",
+      "bytes": 2146,
+      "sha256": "47c696e820d25696c42ff96ce3ee5a356aaf44b79f9c27292413837c475221ac"
+    },
+    {
+      "path": "package.json",
+      "bytes": 2721,
+      "sha256": "a6fddef69563b2cd75bf79a52738a6df131cc3ac1d98a21677000b3526d46c87"
+    },
+    {
+      "path": "README.md",
+      "bytes": 36168,
+      "sha256": "b39b9812e41aca1f8db2b17a373c0fd92c72bb648d4454c621a6e1c942958c75"
+    },
+    {
+      "path": "cordis.patch.yml",
+      "bytes": 537,
+      "sha256": "fd31d42522b14d879a14bbc8575d4043581d23bc405ef4da1162ef34ff8ba4a5"
+    }
+  ]
+}
