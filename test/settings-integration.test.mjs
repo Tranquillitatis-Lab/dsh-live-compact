@@ -109,6 +109,17 @@ function host(t) {
   };
 }
 
+async function updateFiberConfig(fiber, patch) {
+  const key = Object.keys(patch)[0];
+  const target = fiber?.config?.[key];
+  const volatileWrite = Symbol.for("cosmokit.volatile.write");
+  if (target && typeof target === "object" && typeof target[volatileWrite] === "function") {
+    updateVolatile(target, Entry.Config(patch)[key]);
+    return;
+  }
+  await fiber.update({ ...fiber.config, ...patch }, true);
+}
+
 test("actual schema preserves absence, explicit defaults beat env, zero remains meaningful", () => {
   const env = { SPINE_MIN_TOKENS: "9000", SPINE_CHUNK_MIN: "500", SPINE_POINTER_TOKENS: "7000" };
   const absent = Entry.Config({});
@@ -304,10 +315,10 @@ test("shell-installed gate forwards root settings, preset overrides win, old pre
   assert.equal(explicit.config.maxTokens, 2048);
   assert.equal(await h.finish(inherited), false);
   assert.equal(await h.finish(explicit), true);
-  updateVolatile(root.config.minTokens, Entry.Config({ minTokens: 20000 }).minTokens);
+  await updateFiberConfig(root, { minTokens: 20000 });
   assert.equal(await h.finish(inherited), false);
   assert.equal(await h.finish(h.engine(h.preset().config).engine), true);
-  updateVolatile(root.config.takeoverPresets, Entry.Config({ takeoverPresets: false }).takeoverPresets);
+  await updateFiberConfig(root, { takeoverPresets: false });
   assert.equal(h.preset().name, STOCK_ENGINE);
   assert.equal(first.name, "dsh-live-compact");
 });
@@ -316,6 +327,7 @@ for (const legacyFirst of [true, false]) {
   test(`real Context root owns the sole gate with legacy ${legacyFirst ? "before" : "after"} root, including reload`, async (t) => {
     const h = host(t);
     const listenerCount = () => h.ctx.events._hooks["internal/config"]?.length ?? 0;
+    const listenerBaseline = listenerCount();
     const rootScope = h.ctx.isolate("compaction");
     const loadRoot = async () => {
       const fiber = await rootScope.plugin(Entry, { auto: false, takeoverPresets: false, minTokens: 25000 });
@@ -338,10 +350,10 @@ for (const legacyFirst of [true, false]) {
       root = await loadRoot();
       legacy = await loadLegacy();
     }
-    assert.equal(listenerCount(), 1);
+    assert.equal(listenerCount(), listenerBaseline + 1);
     assert.equal(h.preset().name, STOCK_ENGINE);
 
-    updateVolatile(root.config.takeoverPresets, Entry.Config({ takeoverPresets: true }).takeoverPresets);
+    await updateFiberConfig(root, { takeoverPresets: true });
     const inherited = h.preset();
     assert.equal(inherited.name, "dsh-live-compact");
     assert.equal(inherited.config.minTokens, 25000);
@@ -356,53 +368,57 @@ for (const legacyFirst of [true, false]) {
     const nested = await loadNested();
     assert.equal(h.preset().config.minTokens, 25000, "nested settings cannot become root settings");
     assert.equal(h.preset({ minTokens: 21000 }).config.minTokens, 21000, "explicit preset settings still win");
-    updateVolatile(root.config.takeoverPresets, Entry.Config({ takeoverPresets: false }).takeoverPresets);
+    await updateFiberConfig(root, { takeoverPresets: false });
     assert.equal(h.preset().name, STOCK_ENGINE);
 
     await legacy.dispose();
-    assert.equal(listenerCount(), 1, "disposing the old gate must not remove the root listener");
+    assert.equal(listenerCount(), listenerBaseline + 1, "disposing the old gate must not remove the root listener");
     legacy = await loadLegacy();
-    assert.equal(listenerCount(), 1);
+    assert.equal(listenerCount(), listenerBaseline + 1);
     assert.equal(h.preset().name, STOCK_ENGINE);
     await root.dispose();
-    assert.equal(listenerCount(), 0);
+    assert.equal(listenerCount(), listenerBaseline);
     await nested.dispose();
     await loadNested();
     await legacy.dispose();
     legacy = await loadLegacy();
-    assert.equal(listenerCount(), 0, "nested/legacy reload cannot replace a disposed root's authority");
+    assert.equal(listenerCount(), listenerBaseline, "nested/legacy reload cannot replace a disposed root's authority");
     assert.equal(h.preset().name, STOCK_ENGINE);
     root = await loadRoot();
-    assert.equal(listenerCount(), 1);
+    assert.equal(listenerCount(), listenerBaseline + 1);
     assert.equal(h.preset().name, STOCK_ENGINE);
     assert.equal(inherited.config.minTokens, 25000, "existing presets remain snapshots");
     await root.restart();
     await root.await();
     assert.equal(root.state, 2, String(root._error));
-    assert.equal(listenerCount(), 1);
+    assert.equal(listenerCount(), listenerBaseline + 1);
     assert.equal(h.preset().name, STOCK_ENGINE);
-    updateVolatile(root.config.takeoverPresets, Entry.Config({ takeoverPresets: true }).takeoverPresets);
+    await updateFiberConfig(root, { takeoverPresets: true });
     assert.equal(h.preset().config.minTokens, 25000, "reloaded root retains its numeric settings");
   });
 }
 
 test("real Context compatibility gate alone keeps its settings across reload", async (t) => {
   const h = host(t);
+  const listenerCount = () => h.ctx.events._hooks["internal/config"]?.length ?? 0;
+  const listenerBaseline = listenerCount();
   const legacy = await h.ctx.plugin(Gate, { minTokens: 23000 });
   assert.equal(legacy.state, 2, String(legacy._error));
   assert.equal(h.preset().config.minTokens, 23000);
   await legacy.restart();
   await legacy.await();
   assert.equal(legacy.state, 2, String(legacy._error));
-  assert.equal(h.ctx.events._hooks["internal/config"].length, 1);
+  assert.equal(listenerCount(), listenerBaseline + 1);
   assert.equal(h.preset().config.minTokens, 23000);
   await legacy.dispose();
-  assert.equal(h.ctx.events._hooks["internal/config"].length, 0);
+  assert.equal(listenerCount(), listenerBaseline);
   assert.equal(h.preset().name, STOCK_ENGINE);
 });
 
 test("real Context root supersedes a nested entry loaded after the compatibility gate", async (t) => {
   const h = host(t);
+  const listenerCount = () => h.ctx.events._hooks["internal/config"]?.length ?? 0;
+  const listenerBaseline = listenerCount();
   const legacy = await h.ctx.plugin(Gate, { minTokens: 12000 });
   const group = await h.ctx.plugin(function presetGroup() {});
   const nested = await group.ctx.isolate("compaction").plugin(Entry, { auto: false, minTokens: 5000 });
@@ -411,13 +427,13 @@ test("real Context root supersedes a nested entry loaded after the compatibility
     auto: false, takeoverPresets: false, minTokens: 25000,
   });
   assert.equal(root.state, 2, String(root._error));
-  assert.equal(h.ctx.events._hooks["internal/config"].length, 1);
+  assert.equal(listenerCount(), listenerBaseline + 1);
   assert.equal(h.preset().name, STOCK_ENGINE);
   await nested.dispose();
   await legacy.dispose();
-  updateVolatile(root.config.takeoverPresets, Entry.Config({ takeoverPresets: true }).takeoverPresets);
+  await updateFiberConfig(root, { takeoverPresets: true });
   assert.equal(h.preset().config.minTokens, 25000);
-  assert.equal(h.ctx.events._hooks["internal/config"].length, 1);
+  assert.equal(listenerCount(), listenerBaseline + 1);
 });
 
 test("nested and legacy preset callers preserve explicit retention mode and don't mutate input", () => {
