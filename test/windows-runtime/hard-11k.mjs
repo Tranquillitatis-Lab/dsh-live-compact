@@ -148,8 +148,18 @@ for (let pass = 0; pass < passes; pass += 1) {
 }
 clearInterval(externalWatchdog);
 const externalExit = await new Promise((resolve, reject) => {
+  let settled = false;
+  const finish = (code) => {
+    if (settled) return;
+    settled = true;
+    resolve(code);
+  };
   externalWriter.once("error", reject);
-  externalWriter.once("close", (code) => resolve(code));
+  // Windows ARM can close one stdio pipe without delivering the child's
+  // `close` event before Node decides an unresolved top-level await is exit 13.
+  // The process `exit` event is sufficient here because stdout/stderr are
+  // bounded diagnostics and are already drained by the listeners above.
+  externalWriter.once("exit", (code) => finish(code));
 });
 assert.equal(externalExit, 0, `external writer exited ${externalExit}: ${externalStderr}`);
 const externalSummary = JSON.parse(externalStdout.trim().split(/\r?\n/).at(-1));
