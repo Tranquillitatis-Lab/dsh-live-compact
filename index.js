@@ -1512,7 +1512,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       try {
         // Recheck both files immediately before prune, retaining the first
         // trusted hash rather than blessing a replacement raw/meta pair.
-        const stored = readRawToolResult({ dir, toolCallId: id });
+        // Recovery already secured the session directory once. Rechecking a
+        // cached raw before prune must stay read-only; per-file ACL tightening
+        // here recreates the Windows #38 long-session stall.
+        const stored = readRawToolResult({ dir, toolCallId: id, tighten: false });
         if (stored.ok && stored.path === cached.path && stored.sha256 === cached.sha256 && stored.bytes === cached.bytes) ids.add(id);
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
