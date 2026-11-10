@@ -25,14 +25,14 @@ export function fixture({ totalTokens = 24000, id = `runtime-${++serial}`, sessi
     return event.seq;
   };
   f.user = (text, source = { kind: "user" }) => f.add("user/message", createUserMessage({ content: [{ type: "text", text }], source }), 80);
-  f.round = (id, { name = "shell", text = "INFO fixture heartbeat ok", tokens = 30, command = "echo fixture", turn = 1, prose = "" } = {}) => {
+  f.round = (id, { name = "shell", text = "INFO fixture heartbeat ok", tokens = 30, command = "echo fixture", turn = 1, prose = "", isError = false } = {}) => {
     const call = f.add("assistant/message", { turn, message: createAssistantMessage({
       content: [...(prose ? [{ type: "text", text: prose }] : []), { type: "tool-call", id, name,
         arguments: JSON.stringify(name === "read" ? { file_path: "ledger.txt" } : { command }) }],
       source: { provider: "test", model: "no-network" },
     }) });
     const result = f.add("tool/result", { turn, message: createToolResultMessage({
-      callId: id, content: [{ type: "text", text }], isError: false,
+      callId: id, content: [{ type: "text", text }], isError,
     }) }, tokens);
     const round = [call, result];
     f.rounds.push(round);

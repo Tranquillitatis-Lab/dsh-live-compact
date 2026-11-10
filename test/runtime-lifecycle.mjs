@@ -16,6 +16,43 @@ const eventHash = (f) => contentHash(JSON.stringify(f.session.snapshotEvents()))
 const summaryText = (f) => f.summaries().map((event) => messageText({ content: event.data.summary })).join("\n");
 const checkpoints = (f, kind) => f.session.surface.nodes.filter((seq) => f.session.eventAt(seq)?.data?.source?.kind === kind);
 
+for (const kind of ["local", "cloud"]) {
+  test(`ordinary failed diagnostics exceeding the card budget preserve the span (${kind})`, async (t) => {
+    const h = runtime(t);
+    const text = `Error: ordinary failed result\n${"diagnostic context\n".repeat(250)}`;
+    const f = h.use(fixture({ long: { name: "read", tokens: 3000, text, isError: true } }));
+    const { engine } = h.engine({}, kind);
+    h.capture(engine, f);
+    const before = eventHash(f);
+    await engine.finishTurn(f.agent());
+    assert.equal(eventHash(f), before);
+    assert.equal(f.summaries().length, 0);
+  });
+}
+
+for (const kind of ["local", "cloud"]) {
+  for (const name of ["read", "shell"]) {
+    for (const status of ["success", "metadata", "exit-code"]) {
+      test(`oversized diagnostics respect failure state (${kind}/${name}/${status})`, async (t) => {
+        const h = runtime(t);
+        const failed = status !== "success";
+        const text = `${failed ? "Error: oversized diagnostic" : "INFO oversized successful result"}\n${"detail context\n".repeat(400)}${status === "exit-code" ? "[exit code: 23]" : "finished"}`;
+        const f = h.use(fixture({ long: { name, tokens: 33000, text, isError: status === "metadata" } }));
+        const { engine } = h.engine({}, kind);
+        h.capture(engine, f);
+        const before = eventHash(f);
+        await engine.finishTurn(f.agent());
+        if (failed) {
+          assert.equal(eventHash(f), before, "oversized failure preserves the original span");
+          assert.equal(f.summaries().length, 0);
+        } else {
+          assert.equal(f.summaries().length, 1, "successful oversized output remains eligible");
+        }
+      });
+    }
+  }
+}
+
 for (const changed of ["body", "meta", "pair", "unchanged"]) {
   test(`commit reauthorization preserves the first raw hash (${changed})`, async (t) => {
     const h = runtime(t);

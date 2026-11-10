@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const packageVersion = (name) => JSON.parse(readFileSync(require.resolve(`${name}/package.json`), "utf8")).version;
@@ -19,6 +19,12 @@ for (const name of [
   "@deepseek-ai/dsh-llm",
 ]) assert.equal(packageVersion(name), "0.2.2-rc.1", `compat gate requires ${name}@0.2.2-rc.1`);
 const node = process.execPath;
+const npmCli = [
+  process.env.npm_execpath,
+  join(dirname(node), "node_modules/npm/bin/npm-cli.js"),
+  join(dirname(node), "../lib/node_modules/npm/bin/npm-cli.js"),
+].find(file => file?.endsWith("npm-cli.js") && existsSync(file));
+assert.ok(npmCli, "compat gate requires npm-cli.js beside Node or via npm_execpath");
 execFileSync(node, ["--test", "test/settings-integration.test.mjs"], { cwd: process.cwd(), stdio: "inherit" });
-execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "test:gate"], { cwd: process.cwd(), stdio: "inherit" });
+execFileSync(node, [npmCli, "run", "test:gate"], { cwd: process.cwd(), stdio: "inherit" });
 console.log("Cordis 4.1.0 / DSH 0.2.2-rc.1 compatibility gate passed");
