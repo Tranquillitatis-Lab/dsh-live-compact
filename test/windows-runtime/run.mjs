@@ -161,8 +161,7 @@ try {
         ok: row.ok,
         reason: typeof row.reason === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(row.reason) ? row.reason : null,
       }));
-      const warnings = rows.filter((row) => row.kind === 'shadow-warning').slice(0, 6).map((row) =>
-        row.message.match(/ESHADOWACCESS (?:dir|file) exit [0-9]+/)?.[0] ?? 'other shadow warning');
+      const warnings = rows.filter((row) => row.kind === 'shadow-warning').slice(0, 6).map((row) => row.message);
       console.error(JSON.stringify({ stage, captures, warnings }));
       throw error;
     }
