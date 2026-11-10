@@ -116,3 +116,11 @@
 - `206981a`：修复 #33 的失败诊断裁剪和 oversized pointer 路径。完整诊断放不进预算就保留原段；结构化 JSON 额外字段也参加完整性校验。成功和状态未知输出沿用原策略。
 - GPT-6.1 SOL MAX 已给出本轮代码安全复核 PASS；主门禁 551/551、离线 live-fill 214/214。隔离的 DSH 0.2.2-rc.1 / Cordis 4.1.0 同样通过 settings 20/20 和完整门禁 551/551。
 - 上面的旧 Windows run 不覆盖这两个新提交；必须用包含它们的最终候选重新运行 x64/ARM 并读回同一 tarball SHA256，才可进入发布。公开 #27/#34 不因代码复核或受控验收自动关闭。
+
+## 1.1.5 最终受控 Windows 验收
+
+最终同包 [run 42856576241](https://github.com/Tranquillitatis-Lab/dsh-live-compact/actions/runs/42856576241) 已在 Windows 2022 x64 / Windows 11 ARM 普通用户环境完成，两边 13 个阶段均 PASS。冻结包 88,379 bytes，SHA256 `d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b`，19 个文件与复核主树逐字节一致。
+
+9,430-event：finishReturnMs 为 5.42 / 5.53，catchupMs 为 446.19 / 828.46，maxGapMs 为 228 / 417；两边 raw 86/86、cursor 9430、retryable 0。223-file 恢复为 17 / 52ms，全部 hash 通过。11k worker 主线程 maxGapMs 为 14 / 16，external 为 11 / 11；29 轮、58 次捕获、重启边界与强杀恢复均通过。
+
+每边各 1 条 checkout/setup-node 内部 Node 20 弃用 warning，0 error annotation；不能写成零 annotation。完整指标和日志哈希见 [release-1.1.5-verification.json](release-1.1.5-verification.json)。GPT-6.1 SOL MAX 独立读回后解除发布前验证 HOLD；#27/#34 继续保留原用户现场复测边界，语义索引仍未实现。
