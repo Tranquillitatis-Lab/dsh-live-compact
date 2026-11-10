@@ -1,10 +1,10 @@
 {
-  "base": "d2459bcb7f8e6015bd0f3205d43e34e22dba9db3",
+  "base": "38bd5536b022c7c966c8ded12c1de23761f45ed8",
   "name": "dsh-live-compact",
   "version": "1.1.4",
   "filename": "dsh-live-compact-1.1.4.tgz",
-  "bytes": 83124,
-  "sha256": "15dc6928cd950d722e703f45543eb104150e9ed0b0ca5ce05f775134031be6d8",
+  "bytes": 83197,
+  "sha256": "4cac858a0f696c99533c3f421be942b336c90edb34a9fa7aa373d3546a5cd154",
   "files": [
     {
       "path": "LICENSE",
@@ -38,8 +38,8 @@
     },
     {
       "path": "index.js",
-      "bytes": 68448,
-      "sha256": "7f75aab79ddbaadd64dff6c604520c45c914705afe7a33d57cefe68d14e91953"
+      "bytes": 68957,
+      "sha256": "1b37646c2010885251203be5a906b2df1e45ab5cd717174ccc67917259cbb39e"
     },
     {
       "path": "plan.js",
