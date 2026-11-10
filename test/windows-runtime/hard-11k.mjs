@@ -175,7 +175,34 @@ const walk = (dir) => {
 };
 walk(shadowRoot);
 assert.deepEqual(invalidFiles, [], "external mutations leave no empty or temporary backup");
-assert.equal(existsSync(join(shadowRoot, ".spine-rotation.lock")), false, "external matrix releases root lock");
+const externalRootLockLeaked = existsSync(join(shadowRoot, ".spine-rotation.lock"));
+assert.equal(externalRootLockLeaked, false, "external matrix releases root lock");
+const crashWriter = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "crash-writer.mjs"), installed, shadowRoot], {
+  stdio: ["ignore", "ignore", "pipe"],
+  windowsHide: true,
+});
+let crashStderr = "";
+crashWriter.stderr.on("data", (data) => { crashStderr += data; });
+const crashExit = await new Promise((resolve, reject) => {
+  crashWriter.once("error", reject);
+  crashWriter.once("exit", (code, signal) => resolve({ code, signal }));
+});
+assert.ok(crashExit.code !== 0 || crashExit.signal, `crash writer unexpectedly succeeded: ${crashStderr}`);
+const crashLock = join(shadowRoot, ".spine-rotation.lock");
+assert.equal(existsSync(crashLock), true, "SIGKILL leaves the rotation fence");
+const recovered = rotateShadow({ dir: shadowRoot, incomingBytes: 0, cap, readdir, stat });
+assert.equal(recovered.ok, true, "post-SIGKILL rotation recovers with a full scan");
+assert.equal(recovered.estimated, undefined, "post-SIGKILL rotation stays fail-closed");
+const crashTarget = join(shadowRoot, "post-crash", "cut-post-crash-ffffffff.txt");
+const crashSaved = await saveShadowAsync.call(
+  externalHost,
+  [{ role: "user", content: "post crash pooled writer" }],
+  true,
+  crashTarget,
+  "post-crash",
+);
+assert.equal(crashSaved.ok, true, "pooled writer resumes after SIGKILL recovery");
+assert.equal(existsSync(crashTarget), true);
 console.log(JSON.stringify({
   stage: "hard-11k",
   status: "PASS",
@@ -200,7 +227,15 @@ console.log(JSON.stringify({
     maxWorkerElapsedMs: Math.max(...externalResults.map((row) => row.elapsedMs)),
     maxGapMs: externalMaxGapMs,
     invalidFiles: invalidFiles.length,
-    rootLockLeaked: existsSync(join(shadowRoot, ".spine-rotation.lock")),
+    rootLockLeaked: externalRootLockLeaked,
+  },
+  sigkill: {
+    status: "PASS",
+    crashExit,
+    recoveredUsed: recovered.used,
+    recoveredEstimated: recovered.estimated,
+    savedAfterCrash: crashSaved.ok,
+    fencePresent: existsSync(crashLock),
   },
   results,
   rootMode: "shared-default-full-scan",
