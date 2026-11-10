@@ -76,3 +76,11 @@
 - **冷会话边界**：只做内部 lazy hydrate/first-real-event hook；禁止状态重构消息系列、synthetic turn1、synthetic user/assistant/tool 事件，以及把 raw/result/thinking 自动注入上下文。
 
 该条目在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具，不改变当前版本默认行为。
+
+## 2026-11-10 验收状态
+
+- 公开 `v1.1.4` tag 与后续专用候选链必须分开报告；`152402e`、`34a00b4`、`de6ed70`、`839aab9`、`69bb3ce` 和 `66417c4` 尚未证明已进入公开 tag。
+- Windows hosted run `42763949342` 的 Windows 2022 job 通过，但 Windows 11 ARM 的 29-turn replay 以 exit code 1 失败；不能宣称 1.1.4 在 Windows 全部修复 #34。必须保留 ARM annotation 和标准用户 stage 证据，直到同一候选的 ARM 干净复跑。
+- 下一轮验证必须包含真实 9,430-event/29-turn、86 existing raw/meta 的冷启动/重启场景，以及 15,001-event/356-tool-result 的首次 capture + restart recovery。记录 `finishReturnMs`、maintenance entry、后台 catch-up、最大 event-loop gap、cursor、retryable、raw/meta/hash 完整性；任何持续秒级静默都保持 HOLD。
+- catch-up 的 visible-existing 阶段只能把 `tighten:false` 且 hash/meta 完整的 raw 放入非 retryable cache；missing/corrupt/pruned/fuse 记录必须可回退到 retryable capture 或 fail-closed，不能让持久 cursor 越过失败结果。选中 span 的目标 raw 仍需按当前 ACL 策略重新授权，不能把只读恢复当成 ACL 证明。
+- #27 的 `69bb3ce` 只移除 rotation 中冗余的 raw 首行读取；shared/default root 仍会 `readdir/stat` 全量计量，尚无 11k 文件 native Windows p95/p99 证据，继续保持未解决 P0/P1 边界。
