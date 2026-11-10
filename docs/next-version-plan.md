@@ -1,13 +1,13 @@
 # 版本规划：语义归档索引与冷会话恢复
 
-这份规划建立在 1.1.4 当前实现之上，已列入当前版本规划，但只记录设计、开关和验收边界。公开的 #27 和 #34 仍未关闭；在它们的真实 Windows 长会话复测通过前，不把本 RFC 接入默认收尾路径，也不以受控小夹具的通过代替现场复测。
+这份规划建立在 1.1.5 候选实现之上。语义索引只记录设计、开关和验收边界，本版未实现。公开的 #27 和 #34 仍未关闭；在它们的真实 Windows 长会话复测通过前，不把本 RFC 接入默认收尾路径，也不以受控小夹具的通过代替现场复测。
 
-## 当前版本必须先完成
+## 本轮修复与交付边界
 
-1. **#34 调用契约**：`finishTurn` 不等待整批 catch-up。捕获、恢复和权限检查进入可恢复队列；切分提交只等待被选 span 的目标 raw，目标未就绪就保留 span，后台继续追赶。
-2. **#27 shared-root 容量安全**：为共享备份根增加带 root identity、generation、文件身份/大小、pending reservation 和 dirty 状态的持久账本。账本损坏、外部写入、旧 writer、锁或目录身份变化都必须转 full reconcile 或 fail-closed，不能把点检查当成绝对证明。
-3. **异步轮换与统一写路径**：rotation、raw/meta/cursor/card 写入和旧文件 ACL 修复使用可恢复、可分片的 root writer；raw 写不得绕过容量 reservation。
-4. **真实验收**：默认 shared root，11k 文件和 9,430/5,079、15k-event 长会话，Windows x64/ARM，冷热重启、并发 writer、旧 writer、外部 create/delete/overwrite/rename 及阶段强杀。必须记录 finishTurn 延迟、event-loop stall、capture lag、full-scan 次数、bytes/hash 和误删/超额计量。
+1. **#34 调用契约**：`finishTurn` 不等待整批 catch-up。捕获和恢复进入分批队列；切片提交只核验被选 span 的目标 raw，目标未就绪就保留 span，后台继续追赶。重启只读恢复不逐文件启动 ACL helper；真正切片前再授权选中目标，并与首次确认的 hash/bytes 比较。
+2. **#27 shared-root 性能**：默认和 shared 根继续完整扫描，不开启 shared estimate。容量扫描、删除、ACL 和 card 发布事务由按 root 串行的受管 worker 执行，正常事务沿用同一 root lock；worker 可复用、空闲回收，父线程与 worker 共享权限熔断。
+3. **未实现的架构提案仍单独保留**：此前的持久容量账本、pending reservation、统一异步 raw/meta/cursor writer 没有在本版实现。本轮选择保持完整计量并将轮换事务移出主线程，避免用新增账本改变共享目录的安全依据。raw 捕获仍可能在下一次轮换前超过正文容量上限；现有正文限额不是整个目录的物理硬配额。这些后续提案不能写成已经交付，也不能拿 worker 的通过证明它们成立。
+4. **受控验收与未完成项**：持续运行默认 shared root 的 11,078 文件、9,430-event、29-turn/restart，以及 15,001-event 捕获恢复场景，分别记录 Windows x64/ARM 的 finishTurn、event-loop gap、capture lag、hash/bytes、轮换及锁状态。外部 writer、阶段强杀已有回归；旧版真实 writer、目录 alias、双进程的同规模强压及外部 mutation/scan 的 barrier 重叠证明仍须补齐。公开原用户的冷装回退复测仍单独保留，不能由受控通过代替。
 
 ## Windows 稳定后的实现条目：语义归档索引
 
@@ -84,3 +84,35 @@
 - 下一轮验证必须包含真实 9,430-event/29-turn、86 existing raw/meta 的冷启动/重启场景，以及 15,001-event/356-tool-result 的首次 capture + restart recovery。记录 `finishReturnMs`、maintenance entry、后台 catch-up、最大 event-loop gap、cursor、retryable、raw/meta/hash 完整性；任何持续秒级静默都保持 HOLD。
 - catch-up 的 visible-existing 阶段只能把 `tighten:false` 且 hash/meta 完整的 raw 放入非 retryable cache；missing/corrupt/pruned/fuse 记录必须可回退到 retryable capture 或 fail-closed，不能让持久 cursor 越过失败结果。选中 span 的目标 raw 仍需按当前 ACL 策略重新授权，不能把只读恢复当成 ACL 证明。
 - #27 的 `69bb3ce` 只移除 rotation 中冗余的 raw 首行读取；shared/default root 仍会 `readdir/stat` 全量计量，尚无 11k 文件 native Windows p95/p99 证据，继续保持未解决 P0/P1 边界。
+
+## 2026-11-10 最终候选复测补充
+
+### Worker 生命周期复核（尚未发布）
+
+- `ec39c5a` 修复不可序列化 payload 的 `postMessage` 异常清理遗漏、旧 worker 迟到退出误删 replacement，以及空闲 worker 意外 exit 0 后残留死 entry。不可序列化 payload 的独立进程回归先复现 5 秒超时，修复后自然退出；可控 Worker 测试直接驱动实际 `index.js`，覆盖三个生命周期边界。
+- GPT-6.1 SOL MAX 已复核实际 diff 并独立读回完整门禁：523/523。DSH 0.2.2-rc.1 / Cordis 4.1.0 的隔离 peer graph 同样通过 settings 20/20 和完整门禁 523/523。
+- Windows run `42847877710` 已完成，Windows 2022 x64 与 Windows 11 ARM 两个 job 均 success，原始 JSON 已分别读回。候选 tarball SHA256 为 `0675e7c317f874ea181de275f9a732d145c925f0ea5282560e784821a58c66a4`，85,220 bytes。只有真实子进程 exit 0、无 signal 后才接受 external summary；崩溃测试核对 self-kill 前 PID/lock 证据。
+- #34 受控场景：两边 29-turn 均 PASS，9,430-event 的 finishReturnMs 为 x64 8.49 / ARM 6.38，catchupMs 为 542.57 / 777.10，maxGapMs 为 273 / 397；86/86 raw、cursor 9430、retryable 0。
+- #27 受控场景：两边 11,078 文件、8 次 full scan、worker 与 320 次外部 mutation 均 PASS；worker 主线程 maxGapMs 为 x64 15 / ARM 11，external 阶段为 12 / 16，0 invalid file、无正常事务锁泄露。SIGKILL ready/lock 证据及崩溃后 full-scan/re-save 均 PASS。同步扫描对照的 maxGapMs 306 / 267 不应冒充生产 worker 指标。
+- 前几轮 hard-11k 的 exit 13/exit 1 未完整归因，不能全部称作 harness 失败；本轮已修复 PowerShell 提前抛错吞掉 stderr 的诊断缺陷，并记录每个异步子阶段。外部 mutation 与实际 scan 的重叠尚未通过 barrier 单独证明，受控 PASS 不代表旧版本真实 writer、alias 或双进程同规模强压的全部矩阵已完成。新补丁尚未发布；公开 #27/#34 仍不以受控通过代替原用户冷装复测。
+
+### Issue #42 Cordis 4.1.0 兼容
+
+- 已确认 Cordis 4.1.0 的 compaction 记录可能没有顶层 `fiber`；`shell.js` 现在按 `current.fiber ?? current.ctx?.fiber` 做身份校验后释放失败构造，避免误删其他服务。
+- `settings-integration` 的 listener 断言改为 Context 初始基线加一，保留“插件只新增一个 listener”的语义，不改 `installPresetGate` 的注册方式。
+- 仓库锁定的 DSH 0.2.0-rc.2 / Cordis 4.0.x 基线与隔离的 DSH 0.2.2-rc.1 / Cordis 4.1.0 peer graph 均通过 settings 20/20 和完整 `npm run test:gate` 523/523；兼容命令为 `npm run test:compat41`，只应在完整 rc.1/4.1.0 clean install 中运行。
+- Cordis 4.1.0 的 `internal/config` 自带 listener 不再计为插件重复注册；开发依赖仍保留 4.0.x，避免覆盖旧基线。
+
+- `42794155039` 的 ARM 与 Windows 2022 都失败，但两边失败点均是 hard-9430 合成 watchdog 的 `<100ms` 门槛：x64 观测约 279ms、ARM 约 441ms；candidate、223-file recovery、29-turn replay、重启和 native rotation 均已通过。该 run 保留为 harness 阈值失败证据，不能作为 #34 修复证明。
+- 最终候选 `b3325e7` 使用 `<1000ms` watchdog 后，`42801602112` 的 ARM/x64 两 job 均成功。x64：223-file recovery 39ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=7.95`、`catchupMs=578.82`、`maxGapMs=285`、86/86 raw、retryable 0、cursor 9430；ARM：223-file recovery 56ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=6.17`、`catchupMs=749.94`、`maxGapMs=380`、86/86 raw、retryable 0、cursor 9430。
+- 这证明当前候选在受控 Windows x64/ARM 场景通过了代码和 harness 门槛；公开 #27/#34 仍保持 Open，#27 仍缺 11k shared-root native 证据，#34 仍缺公开原始用户冷装/同规模回退证据，不能自动关闭 issue 或把公开 1.1.4 tag 改写成已修复。
+- #27 的首轮 native telemetry run `42806335173` 已在 Windows 2022 x64 与 Windows 11 ARM 均通过：shared/default root、20 sessions、11,078 files、8 次 full scan、每次 11,078 stat（总 88,624），estimate=false。x64 p50/p95/p99 为 272.89/320.84/320.84ms，max event-loop gap 311ms；ARM 为 216.27/257.73/257.73ms，max gap 248ms。used/deleted/freed 保持 460258/0/0，未删除或低估。该数据确认 #27 的同步 full scan 已达到阻塞门槛，下一步必须进入完整串行 root-writer 设计；shared/default 继续 HOLD，不能开启 estimate。
+- root-writer 第一阶段候选 `42812179678` 已在 x64/ARM 通过：完整 scan/delete/ACL/write 事务在 worker 中持有同一 root lock 执行，29-turn、9,430-event、11k telemetry 均通过；worker 主线程 gap 为 x64 15ms、ARM 12ms。worker wall p95 为 x64 1.64s、ARM 2.17s，仍需 worker 复用/队列优化，且尚未覆盖旧 writer、外部 create/delete/overwrite/rename、SIGKILL、alias 和双进程强压矩阵。因此 #27 仍保持公开 HOLD，不能关闭 issue 或开启 shared estimate。
+- pooled/idle-reclaimed root-writer 候选 `42817381321` 已在 x64/ARM 通过，且修复了 pooled worker 持有 CLI 导致的 long-18 120s 超时。两边 candidate、权限拒绝、重启、223-file recovery、29-turn、9,430-event、11k、native rotation 均 PASS；worker 主线程 gap 为 x64 15ms、ARM 22ms。外部 writer、旧版本 writer、目录 alias、SIGKILL/重启和双进程强压矩阵仍未完成，因此 #27 仍是公开 HOLD，不能宣称全部问题关闭。
+
+## 2026-11-11 最终代码复核（候选，尚未发布）
+
+- `c4a5e3f`：受管 worker 与父线程通过共享原子状态传播 Windows ACL 熔断；回收和重建不会清除熔断。选中 raw 重新授权时必须保持首次确认的路径、字节数和 SHA256，变化后保留负缓存，不自动重新认证。
+- `206981a`：修复 #33 的失败诊断裁剪和 oversized pointer 路径。完整诊断放不进预算就保留原段；结构化 JSON 额外字段也参加完整性校验。成功和状态未知输出沿用原策略。
+- GPT-6.1 SOL MAX 已给出本轮代码安全复核 PASS；主门禁 551/551、离线 live-fill 214/214。隔离的 DSH 0.2.2-rc.1 / Cordis 4.1.0 同样通过 settings 20/20 和完整门禁 551/551。
+- 上面的旧 Windows run 不覆盖这两个新提交；必须用包含它们的最终候选重新运行 x64/ARM 并读回同一 tarball SHA256，才可进入发布。公开 #27/#34 不因代码复核或受控验收自动关闭。
