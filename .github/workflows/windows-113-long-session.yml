@@ -48,7 +48,7 @@ jobs:
           '--- evidence files ---' >> $env:GITHUB_STEP_SUMMARY
           Get-ChildItem -LiteralPath 'test/windows-runtime/.local/windows-evidence' -File -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Name >> $env:GITHUB_STEP_SUMMARY
-          foreach ($name in @('standard-user.stdout.log','standard-user.stderr.log','runtime-setup.stderr.log')) {
+          foreach ($name in @('standard-user.stdout.log','standard-user.stderr.log','runtime-setup.stderr.log','hard-11k.stdout.log','hard-11k.stderr.log')) {
             $file = Join-Path 'test/windows-runtime/.local/windows-evidence' $name
             if (Test-Path -LiteralPath $file) {
               "--- $name (tail 80) ---" >> $env:GITHUB_STEP_SUMMARY

@@ -75,7 +75,7 @@ export async function command(label, args, { root, cwd, env, timeout = 90000 }) 
   writeFileSync(join(root, `${label}.stderr.log`), stderr);
   save(join(root, `${label}.status.json`), { label, pid: child.pid, code, failure: failure?.message ?? null });
   if (failure) throw failure;
-  assert.equal(code, 0, `${label} exited ${code}; inspect its bounded synthetic logs`);
+  assert.equal(code, 0, `${label} exited ${code}; bounded stderr:\n${stderr.slice(-6000)}`);
   return stdout;
 }
 
