@@ -68,9 +68,11 @@ function releaseCompaction(ctx, previous) {
   const store = ctx?.reflect?.store;
   const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
   const current = compactionRecord(ctx);
-  if (!current || current === previous || current.fiber !== ctx.fiber) return false;
+  const currentFiber = current?.fiber ?? current?.ctx?.fiber;
+  const contextFiber = ctx?.fiber;
+  if (!current || current === previous || currentFiber !== contextFiber) return false;
   delete store[key];
-  if (ctx.fiber?.store?.compaction === current) delete ctx.fiber.store.compaction;
+  if (contextFiber?.store?.compaction === current) delete contextFiber.store.compaction;
   return true;
 }
 
