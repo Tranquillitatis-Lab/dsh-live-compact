@@ -16,6 +16,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { setImmediate as scheduleImmediate } from "node:timers";
+import { Worker } from "node:worker_threads";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
@@ -23,21 +24,17 @@ import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
 import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
 import { captureOwnedToolResult, contentHash, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
-  discardShadowFiles,
   ensureShadowDir,
   flushDrainStats,
   noteShadowWarning,
-  rotateShadow,
+  saveShadowTransaction,
   shadowDirectory,
-  sessionDir,
-  shadowAccessFused,
   shadowFileBody,
   shadowMaxBytes,
+  sessionDir,
+  shadowAccessFused,
   tightenCreatedShadow,
   tightenShadow,
-  writeShadowFile,
-  writeShadowOwner,
-  withShadowRoot,
 } from "./shadow.js";
 import { buildSendLess, decideThunder } from "./thunder.js";
 import { inCooldown, skipLiveOfficialCompaction } from "./cooldown.js";
@@ -58,6 +55,24 @@ const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
+
+function runShadowWorker(payload) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), { workerData: payload });
+    const finish = () => worker.terminate().catch(() => {});
+    worker.once("message", (message) => {
+      finish();
+      if (message?.ok) return resolve(message.result);
+      const error = new Error(message?.error?.message || "spine: shadow worker failed");
+      if (message?.error?.code) error.code = message.error.code;
+      reject(error);
+    });
+    worker.once("error", (error) => { finish(); reject(error); });
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(Object.assign(new Error(`spine: shadow worker exited ${code}`), { code: "ESHADOWWORKER" }));
+    });
+  });
+}
 
 function recoveryRetryable(record, dir, toolCallId) {
   if (record?.retryable === true || record?.reason === "unwritable") return true;
@@ -194,80 +209,41 @@ export function saveShadowImpl(
   rotationIO = {},
 ) {
   const shadow = shadowDirectory();
-  ensureShadowDir(shadow, access);
-
   const file = shadowFilePath(shadowFile, warnKey);
-  const dir = sessionDir(shadow, warnKey);
-  ensureShadowDir(dir, access);
-
-  return withShadowRoot(shadow, () => {
-    const owner = join(dir, "owner");
-    const ownerExisted = existsSync(owner);
-    let ownerWritten = false;
-
-    try {
-      writeShadowOwner(dir, access, shadow);
-      ownerWritten = true;
-
-      const body = shadowFileBody(warnKey, shadowBody(messages));
-      const incoming = Buffer.byteLength(body);
-      const cap = shadowMaxBytes();
-
-      const rotation = rotateShadow({
-        ...rotationIO,
-        dir: shadow,
-        incomingBytes: incoming,
-        protectPath: file,
-        protectPaths,
-        sessionKey: warnKey,
-        cap,
-      });
-
-      if (!rotation.ok) {
-        if (rotation.reason) {
-          const incomplete = rotation.reason === "scan-incomplete";
-          const error = Object.assign(new Error(incomplete
-            ? "spine: shadow capacity scan is incomplete; backup refused; leaving the span"
-            : "spine: shadow capacity measurement is invalid; backup refused; leaving the span"), {
-            code: incomplete ? "ESHADOWSCAN" : "ESHADOWMETER",
-          });
-          if (required) throw error;
-          this.ctx.logger?.warn?.(error.message);
-          return;
-        }
-        this.warnShadowFull(warnKey, shadow, rotation.used, cap);
-        if (required) {
-          throw new Error(
-            "spine: shadow backup is full; leaving the span",
-          );
-        }
-        return;
-      }
-
-      if (rotation.deleted > 0) {
-        this.ctx.logger?.info?.(
-          `spine: shadow 轮换 删除 ${rotation.deleted} 个文件，` +
-          `腾出 ${rotation.freed} 字节，` +
-          `用量 ${rotation.used + incoming}/${cap}`,
-        );
-      }
-
-      if (rotation.oversize) {
-        this.warnShadowOversize(warnKey, cap);
-      }
-
-      writeShadowFile(file, body, access, { root: shadow });
-
-      if (!existsSync(file)) {
-        throw new Error("spine: shadow backup was not written");
-      }
-    } catch (error) {
-      if (ownerWritten && !ownerExisted) {
-        discardShadowFiles([owner], error);
-      }
-      throw error;
-    }
+  const body = shadowFileBody(warnKey, shadowBody(messages));
+  const cap = shadowMaxBytes();
+  const result = saveShadowTransaction({
+    shadow,
+    file,
+    body,
+    required,
+    protectPaths,
+    sessionKey: warnKey,
+    cap,
+    access,
+    rotationIO,
   });
+  if (!result?.ok) {
+    if (result?.reason === "scan-incomplete" || result?.reason === "invalid-measurement") {
+      const error = result.reason === "scan-incomplete"
+        ? "spine: shadow capacity scan is incomplete; backup refused; leaving the span"
+        : "spine: shadow capacity measurement is invalid; backup refused; leaving the span";
+      this.ctx.logger?.warn?.(error);
+    } else if (result?.rotation) {
+      this.warnShadowFull(warnKey, shadow, result.rotation.used, cap);
+    }
+    return result;
+  }
+  const rotation = result.rotation;
+  if (rotation.deleted > 0) {
+    this.ctx.logger?.info?.(
+      `spine: shadow 轮换 删除 ${rotation.deleted} 个文件，` +
+      `腾出 ${rotation.freed} 字节，` +
+      `用量 ${rotation.used + Buffer.byteLength(body)}/${cap}`,
+    );
+  }
+  if (rotation.oversize) this.warnShadowOversize(warnKey, cap);
+  return result;
 }
 
 export { saveShadowImpl as saveShadow };
@@ -1598,6 +1574,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     warnKey = DEFAULT_KEY,
     protectPaths = [],
     access = {},
+    rotationIO = {},
   ) {
     return saveShadowImpl.call(
       this,
@@ -1607,7 +1584,61 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       warnKey,
       protectPaths,
       access,
+      rotationIO,
     );
+  }
+
+  async saveShadowAsync(
+    messages,
+    required,
+    shadowFile,
+    warnKey = DEFAULT_KEY,
+    protectPaths = [],
+    access = {},
+    rotationIO = {},
+  ) {
+    const injected = Object.values(access || {}).some((value) => typeof value === "function") ||
+      Object.values(rotationIO || {}).some((value) => typeof value === "function");
+    // Node's test runner can monkey-patch fs bindings in the parent isolate;
+    // a worker cannot observe those injected failures. Keep test/fault-injection
+    // paths synchronous while production uses the complete off-thread txn.
+    if (injected || process.env.NODE_TEST_CONTEXT) {
+      return this.saveShadow(messages, required, shadowFile, warnKey, protectPaths, access, rotationIO);
+    }
+    const shadow = shadowDirectory();
+    const file = shadowFilePath(shadowFile, warnKey);
+    const body = shadowFileBody(warnKey, shadowBody(messages));
+    const cap = shadowMaxBytes();
+    const result = await runShadowWorker({
+      shadow,
+      file,
+      body,
+      required,
+      protectPaths,
+      sessionKey: warnKey,
+      cap,
+      access,
+      rotationIO,
+    });
+    if (!result?.ok) {
+      if (result?.reason === "scan-incomplete" || result?.reason === "invalid-measurement") {
+        this.ctx.logger?.warn?.(result.reason === "scan-incomplete"
+          ? "spine: shadow capacity scan is incomplete; backup refused; leaving the span"
+          : "spine: shadow capacity measurement is invalid; backup refused; leaving the span");
+      } else if (result?.rotation) {
+        this.warnShadowFull(warnKey, shadow, result.rotation.used, cap);
+      }
+      return result;
+    }
+    if (result.rotation?.deleted > 0) {
+      this.ctx.logger?.info?.(
+        `spine: shadow 轮换 删除 ${result.rotation.deleted} 个文件，` +
+        `腾出 ${result.rotation.freed} 字节，` +
+        `用量 ${result.rotation.used + Buffer.byteLength(body)}/${cap}`,
+      );
+    }
+    if (result.rotation?.oversize) this.warnShadowOversize(warnKey, cap);
+    return result;
   }
 
   async summarize(input, agent, signal) {
@@ -1619,14 +1650,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const card = input?.liveCompact?.card;
       if (card?.needsBackup && !card.shadowFile) throw new Error("spine: omit refused; backup path missing");
       const restored = this.restoreRawMessages(input.messages, state.key);
-      this.saveShadow(restored, true, card?.shadowFile, state.key, card?.rawPaths || []);
+      await this.saveShadowAsync(restored, true, card?.shadowFile, state.key, card?.rawPaths || []);
       if (card?.needsBackup && !existsSync(card.shadowFile)) throw new Error("spine: shadow backup was not written");
       const text = backupClaimOk(restored) ? decision.text : withoutFullBackupClaim(decision.text, card?.shadowFile);
       const block = { type: "text", text };
       return { summary: [block], provider: "local", model: "spine-extract", rawOutput: [block] };
     }
     try {
-      this.saveShadow(
+      await this.saveShadowAsync(
         this.restoreRawMessages(input.messages, state.key),
         false,
         freshShadowFile("official", state.key),
