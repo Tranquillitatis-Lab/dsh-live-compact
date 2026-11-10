@@ -44,7 +44,7 @@ try {
     }
     $harness = Join-Path $work 'test\windows-runtime'
     New-Item -ItemType Directory -Path $harness -Force | Out-Null
-    foreach ($file in @('common.mjs','scenario.mjs','verify.mjs','run.mjs','observe.mjs','network-guard.mjs','fixture.mjs','hard-9430.mjs','candidate.json')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $harness }
+    foreach ($file in @('common.mjs','scenario.mjs','verify.mjs','run.mjs','observe.mjs','network-guard.mjs','fixture.mjs','hard-9430.mjs','hard-11k.mjs','candidate.json')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $harness }
     New-Item -ItemType Directory -Path (Join-Path $harness 'fixtures') | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "fixtures\$($pin.filename)") -Destination (Join-Path $harness 'fixtures')
     $nativeFixtures = Join-Path $work 'test\fixtures'
@@ -89,7 +89,7 @@ try {
     if ($setup.ExitCode -ne 0) { Get-Content -LiteralPath $setupErr -Tail 20; throw "Official runtime setup exited $($setup.ExitCode)." }
     $stdoutFile = Join-Path $root 'standard-user.stdout.log'
     $stderrFile = Join-Path $root 'standard-user.stderr.log'
-    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run, '--long', '--issue38', '--hard9430')
+    $arguments = @((Join-Path $harness 'run.mjs'), '--root', $run, '--long', '--issue38', '--hard9430', '--hard11k')
     $child = Start-Process -FilePath $node -ArgumentList $arguments -Credential ([pscredential]::new($account,$password)) -LoadUserProfile -WorkingDirectory $work -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru
     Write-Host "STANDARD_USER_PID $($child.Id)"
     $deadline = [DateTime]::UtcNow.AddMinutes(12)
@@ -104,7 +104,7 @@ try {
     $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
     if ($child.ExitCode -ne 0 -or $result.status -ne 'PASS') {
         $failed = $result.stages.PSObject.Properties | Where-Object { $_.Value.status -eq 'FAIL' } | Select-Object -First 1
-        if ($failed -and $failed.Name -in @('install','plugin-install','fixture','before','denied','new-session','restart','native-rotation','issue38-recovery','long-session','hard-9430')) {
+        if ($failed -and $failed.Name -in @('install','plugin-install','fixture','before','denied','new-session','restart','native-rotation','issue38-recovery','long-session','hard-9430','hard-11k')) {
             $log = Join-Path $run "$($failed.Name).stderr.log"
             if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 24 }
             if ($failed.Name -eq 'long-session') {
@@ -113,7 +113,7 @@ try {
         }
         throw "Runtime probe failed: exit=$($child.ExitCode), status=$($result.status)"
     }
-    foreach ($stage in @('before','denied','new-session','restart','native-rotation','issue38-recovery','long-session','hard-9430')) {
+    foreach ($stage in @('before','denied','new-session','restart','native-rotation','issue38-recovery','long-session','hard-9430','hard-11k')) {
         if ($result.stages.$stage.status -ne 'PASS') { throw "Missing stage PASS: $stage" }
     }
 } finally {

@@ -13,8 +13,9 @@ const args = process.argv.slice(2);
 const longMode = args.includes('--long');
 const issue38Mode = args.includes('--issue38');
 const hard9430Mode = args.includes('--hard9430');
+const hard11kMode = args.includes('--hard11k');
 const rootArg = args.indexOf('--root');
-assert.ok(rootArg === -1 || (rootArg === 0 && args.length >= 2 && args[1] && args.slice(2).every((arg) => ['--long', '--issue38', '--hard9430'].includes(arg))), 'usage: node test/windows-runtime/run.mjs [--root NEW_EMPTY_DIRECTORY] [--long] [--issue38] [--hard9430]');
+assert.ok(rootArg === -1 || (rootArg === 0 && args.length >= 2 && args[1] && args.slice(2).every((arg) => ['--long', '--issue38', '--hard9430', '--hard11k'].includes(arg))), 'usage: node test/windows-runtime/run.mjs [--root NEW_EMPTY_DIRECTORY] [--long] [--issue38] [--hard9430] [--hard11k]');
 const root = rootArg === -1 ? mkdtempSync(join(realpathSync(tmpdir()), 'dsh113-runtime-')) : resolve(args[1]);
 assert.ok(['darwin', 'win32'].includes(process.platform), 'only native macOS and Windows are supported');
 if (process.platform === 'darwin') assert.notEqual(process.geteuid(), 0, 'run the macOS probe as a non-root user');
@@ -29,7 +30,7 @@ const runtime = join(root, 'runtime');
 mkdirSync(workspace);
 if (!preinstalled) mkdirSync(runtime);
 writeInputs(workspace);
-const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart', 'issue38-recovery', 'long-session', 'hard-9430'].map((name) => [name, { status: 'NOT_RUN' }])) };
+const results = { platform: process.platform, arch: process.arch, node: process.version, root, windowsAcceptance: 'NOT_RUN', desktopAcceptance: 'NOT_RUN', stages: Object.fromEntries(['candidate', 'install', 'plugin-install', 'fixture', 'before', 'denied', 'new-session', 'restart', 'issue38-recovery', 'long-session', 'hard-9430', 'hard-11k'].map((name) => [name, { status: 'NOT_RUN' }])) };
 console.log(`EVIDENCE_ROOT ${root}`);
 let current = 'candidate';
 try {
@@ -250,6 +251,20 @@ try {
     assert.ok(result.finishReturnMs < 100, `hard-9430 finishTurn return ${result.finishReturnMs}ms`);
     assert.ok(result.catchupMs < 5000, `hard-9430 catch-up ${result.catchupMs}ms`);
     assert.ok(result.maxGapMs < 1000, `hard-9430 event-loop gap ${result.maxGapMs}ms`);
+    results.stages[current] = result;
+  }
+  if (hard11kMode) {
+    current = 'hard-11k';
+    const hardRoot = join(root, 'hard-11k-shadow');
+    mkdirSync(hardRoot, { recursive: true });
+    const output = await command(current, [join(here, 'hard-11k.mjs'), installed, hardRoot], { root, cwd: workspace, env, timeout: 240000 });
+    const result = JSON.parse(output.trim().split(/\r?\n/).filter(Boolean).at(-1));
+    assert.equal(result.status, 'PASS');
+    assert.equal(result.sessions, 20);
+    assert.equal(result.files, 11078);
+    assert.equal(result.passes, 8);
+    assert.equal(result.fullScanCount, 8);
+    assert.equal(result.estimateUsed, false);
     results.stages[current] = result;
   }
   results.status = 'PASS';
