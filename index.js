@@ -743,10 +743,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const signal = AbortSignal.timeout(30000);
     const ev = events || agent.session.snapshotEvents();
     const deferCapture = options.deferCapture === true;
-    const catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: !deferCapture });
-    if (!deferCapture) {
+    let catchup = { finished: true, progressed: false, retryRequested: false };
+    if (deferCapture) {
+      catchup = this.scheduleCaptureCatchup(agent, ev, settings);
+    } else {
       await this.flushPendingCaptures();
-      await catchup.promise;
+      if (ev.length > CAPTURE_EVENT_BATCH) {
+        catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
+        await catchup.promise;
+      } else {
+        this.captureNew(agent.session, ev, settings);
+      }
     }
     const jobs = collectJobs(ev);
     const calls = indexToolCalls(ev);

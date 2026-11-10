@@ -26,6 +26,7 @@ test("#34 turn-end maintenance also batches capture before compaction", async (t
   const h = runtime(t);
   const f = h.use(fixture());
   f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
   const { engine } = h.engine({ minTokens: 100000 });
   let batches = 0;
   engine.captureNew = () => { throw new Error("turn-end must not use synchronous captureNew"); };
@@ -36,6 +37,30 @@ test("#34 turn-end maintenance also batches capture before compaction", async (t
   engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
   await engine.finishTurn(f.agent(), f.session.snapshotEvents());
   assert.equal(batches, 1, "turn-end capture is queued as one bounded batch");
+});
+
+test("#34 small direct turns keep synchronous capture and wait pending captures", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let released = false;
+  let release;
+  const pending = new Promise((resolve) => { release = () => { released = true; resolve(); }; });
+  const key = engine.rawKey(f.session, "pending");
+  engine.pendingCaptures.add(pending);
+  engine.pendingCaptureJobs.set(key, pending);
+  let syncCaptures = 0;
+  let batches = 0;
+  engine.captureNew = () => { syncCaptures += 1; };
+  engine.captureNewBatch = () => { batches += 1; return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 }; };
+  const done = engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  await setImmediate();
+  assert.equal(released, false);
+  release();
+  await done;
+  assert.equal(syncCaptures, 1);
+  assert.equal(batches, 0);
 });
 
 test("#34 retries a transient raw lock without leaving catch-up retryable", async (t) => {
