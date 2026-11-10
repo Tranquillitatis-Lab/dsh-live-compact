@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
@@ -177,16 +177,19 @@ walk(shadowRoot);
 assert.deepEqual(invalidFiles, [], "external mutations leave no empty or temporary backup");
 const externalRootLockLeaked = existsSync(join(shadowRoot, ".spine-rotation.lock"));
 assert.equal(externalRootLockLeaked, false, "external matrix releases root lock");
-const crashWriter = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "crash-writer.mjs"), installed, shadowRoot], {
+// Keep the SIGKILL probe out of the event-loop measurements above.  A bounded
+// synchronous wait is intentional here: on Windows a spawned child can close
+// one stdio handle without delivering the asynchronous exit/close event, which
+// otherwise leaves this top-level await unresolved and makes Node exit 13.
+const crashResult = spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "crash-writer.mjs"), installed, shadowRoot], {
   stdio: ["ignore", "ignore", "pipe"],
   windowsHide: true,
+  timeout: 30000,
+  maxBuffer: 1024 * 1024,
 });
-let crashStderr = "";
-crashWriter.stderr.on("data", (data) => { crashStderr += data; });
-const crashExit = await new Promise((resolve, reject) => {
-  crashWriter.once("error", reject);
-  crashWriter.once("exit", (code, signal) => resolve({ code, signal }));
-});
+const crashStderr = crashResult.stderr?.toString() ?? "";
+assert.equal(crashResult.error, undefined, `crash writer did not exit cleanly: ${crashResult.error?.message ?? "unknown error"}`);
+const crashExit = { code: crashResult.status, signal: crashResult.signal };
 assert.ok(crashExit.code !== 0 || crashExit.signal, `crash writer unexpectedly succeeded: ${crashStderr}`);
 const crashLock = join(shadowRoot, ".spine-rotation.lock");
 assert.equal(existsSync(crashLock), true, "SIGKILL leaves the rotation fence");
