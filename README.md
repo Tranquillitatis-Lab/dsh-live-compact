@@ -16,13 +16,13 @@
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.4
+dsh plugin --profile headless add dsh-live-compact@1.1.5
 ```
 
 网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.4
+dsh plugin --profile web add dsh-live-compact@1.1.5
 ```
 
 想先装到本机看版本：
@@ -48,9 +48,9 @@ dsh-live-compact --version
 
 Issue #19 里下一轮输入回到 21 万到 24 万、前缀被打掉的那一刀，是切点走到了已有卡片左边。最新一张卡片当成地板。往左走到卡片就停。切点右边还有更新的卡片，这一刀不切。已进缓存的前缀不再被后面的刀改写。这是故意的。卡片已经换过一次，再穿过去会改掉已经进缓存的前缀。最新一段不够 1000，就跳过，不回头凑。
 
-一轮里有不少于 1000 token 的 `read`，这一刀只切这一轮，不把要留的后 3 轮短结果一起卷进去。这一轮里单个工具结果达到 3.2 万，只留指针。这一轮切不下来，才按原来的规则切更早的轮。
+一轮里有不少于 1000 token 的 `read`，这一刀只切这一轮，不把要留的后 3 轮短结果一起卷进去。这一轮里单个成功或状态未知的工具结果达到 3.2 万，只留指针；已识别失败的结果保留完整诊断或原段。这一轮切不下来，才按原来的规则切更早的轮。
 
-单个工具结果超过 3.2 万 token 才只留指针，并连同对应调用一起换掉。要自己调，启动前设 `SPINE_POINTER_TOKENS`，例如 `8000`。不按占比算。
+单个成功或状态未知的工具结果超过 3.2 万 token 才只留指针，并连同对应调用一起换掉。已识别的失败结果不走只留指针分支。要自己调，启动前设 `SPINE_POINTER_TOKENS`，例如 `8000`。不按占比算。
 
 小切的停切线是 65 万。窗口更大时，过了 65 万仍会停掉小切。同一次收尾可以连切。一次收尾只记一次：第一刀之后的前缀，减去后面几刀省下的。`dsh-live-compact stats` 的 `rewrite` 用这个数。逐刀明细在 shadow 目录的 `spine-cuts.jsonl`，只有序号、token 和切点，没有消息原文。没有「省下的必须盖过重写」这种门槛。加了会把同一次收尾里后面的刀切掉。
 
@@ -60,7 +60,7 @@ Issue #19 里下一轮输入回到 21 万到 24 万、前缀被打掉的那一�
 
 ## 卡片里留什么
 
-短的工具结果会留在摘要里，标成工具输出，不标已确认。不超过 12 行、也不超过 512 字，整段留下。更长的只留一行：多少字、正文已省略。省略的原文在本机 `~/.dsh/compaction-spine/shadow`，文件名含这次的短编号。需要再读，不要默认读进来。思考仍不进摘要。
+短的工具结果会留在摘要里，标成工具输出，不标已确认。不超过 12 行、也不超过 512 字，整段留下。较长的成功或状态未知结果保留有界末尾摘录，并说明正文省略；失败结果按下面的完整诊断门槛处理。省略的原文在本机 `~/.dsh/compaction-spine/shadow`，文件名含这次的短编号。需要再读，不要默认读进来。思考仍不进摘要。
 
 - 思考过程不进摘要。本地备份里单独存，标成思考。
 - 用户的话和助手写出来的句子按原来的规则留，并标是谁说的。
@@ -72,7 +72,7 @@ Issue #19 里下一轮输入回到 21 万到 24 万、前缀被打掉的那一�
 
 卡片指针是会话日志的事件号，不写备份文件路径。
 
-失败工具结果保留退出码、错误类型、标准错误和标准输出里的关键原因；过长时保留原因和首尾，不能把失败卡片写成正常完成。`npm run test:gate` 也会检查这条路径。
+失败工具结果保留退出码和完整诊断；诊断、调用信息合起来放不进卡片预算，或多个失败结果无法一起保留时，这一刀保留原段。结构化结果中的额外字段也不能静默丢掉。仅供查看的截短预览不代表可以提交切片，不能把失败卡片写成正常完成。`npm run test:gate` 检查这条路径。
 
 命令输出只有结构信号才标成报错原文：`isError`、非 0 退出码、`[stderr]`、`[exit code: N]`、`[Command finished with exit code N]`、`exit_code=N`、ptc 结果里的 `"exitCode": N`。证据不够就标状态未知，留原文末尾几行。
 
@@ -84,13 +84,15 @@ Issue #19 里下一轮输入回到 21 万到 24 万、前缀被打掉的那一�
 
 配置报错不再被盖成「服务已被注册」。装不上时能看见原来的原因。
 
+官方摘要仍调用宿主的 `super.summarize`。与其他接管 compaction-basic 的插件并用时，若宿主返回空或不可用的摘要，本插件会明确警告并保留原段；不保证能绕过另一个插件独立生成摘要。
+
 ## 重启和捕获
 
 进程重启后补抓工具结果，只补最近 3 轮。已经记下的位置还在，就从那里接着记。记下的位置比当前日志还大，按重启口径补最近 3 轮，不从 0 把整份日志再扫一遍。重启后会核验已有备份和游标，再从最近的工作位置继续。
 
 游标和 retryable 结果按会话缓存，避免长历史重复扫描；工具结果、raw/meta 字节与 SHA256 在重启恢复后继续校验。
 
-工具结果的 shadow/ACL 文件操作在事件循环后排队，并按 toolCallId 去重；维护开始前会等待已排队捕获，`captureNew` 仍负责补抓和重试。这条路径避免在模型收到工具结果前被同步磁盘操作卡住；权限失败仍然只拒绝备份，不让宿主 fatal 退出。
+工具结果的 shadow/ACL 捕获在事件循环后排队，并按 toolCallId 去重。`finishTurn` 不等待整批历史补抓；后台队列分批恢复和重试，切片只检查选中原段需要的 raw。目标未就绪、校验失败或权限拒绝时保留原段。原始捕获和冷目录权限初始化仍有同步文件操作；排队本身不等于所有 I/O 都已异步。
 
 空闲维护的大段 catch-up 分批让出事件循环。Windows 阴影文件短暂忙时按 8 次上限和退避自动重试，永久失败保持 fail-closed，不阻塞轮次结束返回。
 
@@ -106,13 +108,13 @@ Issue #19 里下一轮输入回到 21 万到 24 万、前缀被打掉的那一�
 
 ## Windows 备份权限
 
-Windows 会重新设置备份访问权限，失败时停止写备份并保留原工具输出。权限失败不再把宿主打退出。这次备份不落盘，不退回 `chmod`，只提示一次。压缩照常进行。
+Windows 会重新设置备份访问权限，失败时停止写备份并保留原工具输出。权限失败不再把宿主打退出，不退回 `chmod`，只提示一次；依赖该备份的修剪或切片跳过。主线程与受管 worker 共享本进程的权限熔断状态，worker 回收或重建不会解除熔断。
 
 双用户实测（Actions run `42367713007`，Windows 11 Enterprise ARM / Server 2022 x64）确认：`/inheritance:r /grant:r` 会留下其他主体的显式 ACE，第二个普通用户仍能读取备份。Windows 备份完整替换 DACL。慢存储、超大历史和共享目录压力仍属于后续观察范围。
 
-权限写入改为固定的 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`（Windows PowerShell 5.1 / .NET Framework），使用 `-NoProfile -NonInteractive -EncodedCommand`。脚本固定内嵌在已打包的 `shadow.js`，路径、SID、文件类型通过子进程环境传递，不拼进脚本。当前用户 SID 仍由固定 System32 `whoami.exe` 每进程获取一次，脚本再对照自身 Windows 身份。新建受保护的 DACL，只允许当前用户、SYSTEM、Administrators 完全控制；目录 ACE 带 OI/CI，直接修正的文件 ACE 不带继承标志。只修改 DACL，不提权，不改 owner、group 或 SACL，不使用临时宽松 ACL。写后读取实际 DACL，核验保护位、完整 ACE 数量、SID、Allow、权限及继承标志，收到确认才缓存。工具失败、超时、SID 非法或读回不符都会熔断本进程后续备份，不回退到 chmod。
+权限写入改为固定的 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`（Windows PowerShell 5.1 / .NET Framework），使用 `-NoProfile -NonInteractive -EncodedCommand`。脚本固定内嵌在已打包的 `shadow.js`，路径、SID、文件类型通过子进程环境传递，不拼进脚本。当前用户 SID 仍由固定 System32 `whoami.exe` 在各权限执行上下文获取并缓存，worker 重建后重新获取，脚本再对照自身 Windows 身份。新建受保护的 DACL，只允许当前用户、SYSTEM、Administrators 完全控制；目录 ACE 带 OI/CI，直接修正的文件 ACE 不带继承标志。只修改 DACL，不提权，不改 owner、group 或 SACL，不使用临时宽松 ACL。写后读取实际 DACL，核验保护位、完整 ACE 数量、SID、Allow、权限及继承标志，收到确认才缓存。工具失败、超时、SID 非法或读回不符都会熔断本进程后续备份，不回退到 chmod。
 
-目录缓存核对规范路径、设备/文件编号及创建时间；替换目录或改指向的已知别名会拒绝后续备份。经确认目录内以 `wx` 新建的空文件，核对已打开句柄与路径指向同一文件后，使用继承的 allowlist，不逐文件启动子进程，写入正文前完成检查。既有文件不能只凭父目录缓存获得信任：仅在本进程已确认同一文件身份时复用缓存，否则对被请求的文件单独替换 DACL。拒绝文件符号链接、非普通文件及多硬链接文件。不扫描或批量修复历史备份；捕获/恢复所请求的旧 raw、meta、cursor 文件在使用时修正。未触及的旧文件（包括直接外部读取或 shadow-search 读取的旧文件）不保证已修复，也无法撤回此前泄露的数据。不要把 shadow 指向混有其他文件的目录。
+目录缓存核对规范路径、设备/文件编号及创建时间；替换目录或改指向的已知别名会拒绝后续备份。经确认目录内以 `wx` 新建的空文件，核对已打开句柄与路径指向同一文件后，使用继承的 allowlist，不逐文件启动子进程，写入正文前完成检查。既有文件不能只凭父目录缓存获得信任：仅在本进程已确认同一文件身份时复用缓存，否则对被请求的文件单独替换 DACL。拒绝文件符号链接、非普通文件及多硬链接文件。不扫描或批量修复历史备份。重启恢复只读校验已有 raw/meta，不逐个收紧它们的权限；cursor 读取仍执行原有单文件 ACL 校验。raw 真正用于修剪或切片前，再重新授权目标文件，并与首次确认的字节数和 SHA256 比较。重新授权不能把已变化的内容当成原始备份。未触及的旧文件（包括直接外部读取或 shadow-search 读取的旧文件）不保证已修复，也无法撤回此前泄露的数据。不要把 shadow 指向混有其他文件的目录。
 
 缓存信任同一用户和管理员不在进程运行期间原地改写 ACL；元数据核对不能发现同一文件上的 ACL 原地变更，也不能消除同用户/管理员并发改路径的全部竞态。SystemRoot/windir 必须指向可信 Windows 安装；文件系统须提供稳定文件身份并支持 Windows DACL，工具缺失或策略禁止运行时拒绝备份。Unix 仍使用目录 0700 / 文件 0600。切点、token/cap 策略、#27 根目录协调与重启口径不变。
 
@@ -154,7 +156,7 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 
 `gate.js` 的官方压缩预设默认使用 `thresholdRatio: 0.8`、`headroomTokens: 65536`、`retainTokens: 8192`，可在启动前用对应环境变量覆盖。这些数值只管官方大压缩，不改小切切点。
 
-云端默认仍是 `0.8`、`65536`、`8192`，不按地址改小。TUI 的 `/settings` 没有这一项。`cordis.patch.yml` 是静态整块替换，不读这三个环境变量。要在这里改 `headroomTokens`，需直接改配置块，例如：
+云端默认仍是 `0.8`、`65536`、`8192`，不按地址改小。TUI 的 `/settings` 没有这一项。`cordis.patch.yml` 本身不插值环境变量；未显式填写的字段由引擎按环境变量和默认值补齐。若直接在配置块填写，显式值优先，例如：
 
 ```yaml
 - id: compaction-spine
@@ -172,8 +174,8 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.4
-dsh plugin --profile web add dsh-live-compact@1.1.4
+dsh plugin --profile headless add dsh-live-compact@1.1.5
+dsh plugin --profile web add dsh-live-compact@1.1.5
 ```
 
 想先装到本机看版本：
@@ -186,9 +188,9 @@ dsh-live-compact --version
 上不了 npm 时的镜像安装命令：
 
 ```sh
-dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz
-dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz
-npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.4.tgz"
+dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz
+dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz
+npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz"
 dsh-live-compact --version
 ```
 
@@ -216,16 +218,16 @@ rm -f ~/.dsh/compaction-spine/shadow/*/*.txt ~/.dsh/compaction-spine/shadow/*.tx
 
 默认目录（包括 `DSH_HOME` 下的目录）和未声明独占的目录，每次仍执行完整轮换扫描，可继续与旧版 writer 共用。仅设置 `SPINE_SHADOW_DIR` 不开启估算。需要减少扫描时，可将它指向一个**专用本地目录**，并另设 `SPINE_SHADOW_SINGLE_PROCESS=1`；即使显式指定默认目录，也不会开启。这个声明要求整个目录只由本进程的这一份插件使用，不能与旧版、不遵守协调协议的 writer、外部修改目录树或正文的程序共用。自定义代码调用底层备份函数时，必须传入同一 `root`，不能把会话子目录当根。无法满足契约时保持默认设置。
 
-专用根首次完整扫描后，只有目录身份、容量和所有权不变、预计用量严格低于 80%，且完整校准还不到 60 秒时，才省去正文遍历。60 秒到期后，在下一次同步轮转时重新扫描；没有后台定时清理。快返回和写入都不会延长有效期。时钟异常或回退也改走全扫。扫描不完整或计量不合法时拒绝本次需要容量准入的备份，保留原内容，不用漏算后的数字放行。
+专用根首次完整扫描后，只有目录身份、容量和所有权不变、预计用量严格低于 80%，且完整校准还不到 60 秒时，才省去正文遍历。60 秒到期后，在下一次轮转时重新扫描；没有后台定时清理。快返回和写入都不会延长有效期。时钟异常或回退也改走全扫。扫描不完整或计量不合法时拒绝本次需要容量准入的备份，保留原内容，不用漏算后的数字放行。
 
-正常锁路径下，所有普通 raw/cut/official 写入先在根目录取得原子锁并检查协作标记；cut/official 的容量检查和正文写入也在同一临界区。按 UTF-8 或 Buffer 的实际正文长度保守计账，覆盖写和失败清理不随意扣回，完整扫描后再校正。raw 沿用原来的捕获规则，写入本身不触发容量轮转；连续 raw 写入可能先超过限额，由下一次轮转处理。容量沿用正文口径，不含伴随 meta、owner、统计或锁文件，不是整个目录的物理占用硬配额。超大备份例外和删除顺序、引用保护不变；其他会话进程只有明确已死亡才按原规则清理，权限不足或 owner 状态不明时保守保留。共享目录仍可能有同步扫描停顿。
+正常锁路径下，所有普通 raw/cut/official 写入先在根目录取得原子锁并检查协作标记；cut/official 的容量检查和正文写入也在同一临界区。按 UTF-8 或 Buffer 的实际正文长度保守计账，覆盖写和失败清理不随意扣回，完整扫描后再校正。raw 沿用原来的捕获规则，写入本身不触发容量轮转；连续 raw 写入可能先超过限额，由下一次轮转处理。容量沿用正文口径，不含伴随 meta、owner、统计或锁文件，不是整个目录的物理占用硬配额。超大备份例外和删除顺序、引用保护不变；其他会话进程只有明确已死亡才按原规则清理，权限不足或 owner 状态不明时保守保留。普通 cut/official 的容量扫描、删除和发布事务在受管 worker 中执行，同一个 root 的任务串行，空闲 worker 自动回收；共享目录仍完整扫描，不以估算跳过。底层同步 API 和原始 raw 捕获保留各自的同步语义。
 
-`.spine-rotation.owner` 保存随机生命周期标识，第二个参与进程、worker 或插件副本（含路径别名）会先创建 `.spine-rotation.shared`，再写正文；之后此根一直退回完整扫描，另一进程退出也不自动恢复估算。该标记只检测协作方，不能发现旧版或外部 writer。锁由同目录临时文件完整写入、刷盘并关闭后，通过原子硬链接发布为 `.spine-rotation.lock`，包含持有者 PID 和每次事务唯一的随机标识。发布成功后的临时名称清理失败不会丢失锁的精确所有权，也不会阻断后续备份；可能残留不参与轮换的临时名称。
+`.spine-rotation.owner` 保存 PID 与随机生命周期标识。没有 shared 围栏、记录格式有效且旧 PID 明确已死亡时，新生命周期可安全重建所有权并重新完整扫描；不能确认死亡时不得抢占。第二个参与进程、worker 或插件副本（含路径别名）会先创建 `.spine-rotation.shared`，再写正文；之后此根一直退回完整扫描，另一进程退出也不自动恢复估算。该标记只检测协作方，不能发现旧版或外部 writer。锁由同目录临时文件完整写入、刷盘并关闭后，通过原子硬链接发布为 `.spine-rotation.lock`，包含持有者 PID 和每次事务唯一的随机标识。发布成功后的临时名称清理失败不会丢失锁的精确所有权，也不会阻断后续备份；可能残留不参与轮换的临时名称。
 
 仅当硬链接操作本身返回 `ENOTSUP`、`EOPNOTSUPP` 或 `ENOSYS` 时，先刷盘 shared 围栏，再确认没有先前的活跃或潜在独占事务，才允许原来的完整轮换和 raw/cut/official/游标写入；此根不再启用独占估算。正文写入前继续核验围栏和锁状态。`EPERM`、`EACCES`、`EIO`、`EXDEV`、`EINVAL` 等不明确错误，以及其他步骤返回的 unsupported 错误，都拒绝本次备份。该回退沿用旧共享并发语义，不提供独占容量保证。
 
 活跃锁、PID 已复用、旧版空目录锁、记录损坏或无法确认死亡时，本次备份被拒绝，原文保留；不按锁龄抢占，`EPERM` 和未知错误也不代表死亡。只有 `process.kill(pid, 0)` 明确返回 `ESRCH`，才先持久化 shared 标记、清除估算，并将该锁的完整身份原子记录到 `.spine-rotation.recovered`；硬链接不支持时以 `.spine-rotation.recovered-<pid>-<事务标识>` 空文件的完整名称记录并刷盘，避免半写 JSON。原锁始终保留作围栏，不删除、不替换；之后所有协作实例对这个已确认死亡的身份均走原来的完整轮换和正文写入，PID 后来复用也不改变该身份已经死亡的事实。恢复后共享操作沿用原来的并发语义，不再提供独占容量临界区。标记文件均刷盘，POSIX 另刷目录；Windows 的 Node 接口不能刷目录句柄，不承诺突然断电后的目录项持久性。
 
-正常重启没有遗留锁时，旧 owner 仍触发共享回退，不自动替换或继承旧估算。重新启用独占估算应选新专用目录，或仅在所有使用者停止后清除 `.spine-rotation.lock`、`.spine-rotation.owner`、`.spine-rotation.shared`、`.spine-rotation.recovered` 及该根的事务专属 recovered 空文件。旧版空锁等不明确的记录也只能在确认全部使用者停止后人工处理。与不遵守协议的旧版 writer 共用时，仍不得声明专用目录契约。
+正常重启没有遗留锁时，仅格式有效且 PID 明确死亡的 owner 可以重建；旧版无 PID 的 owner、已有 shared 围栏和无法确认的记录仍保守退回全扫。主线程与 worker 的不同生命周期也可能触发 shared，因此该开关不保证每次生产写入都使用估算。需要人工重新启用独占估算时，应选新专用目录，或仅在所有使用者停止后清除 `.spine-rotation.lock`、`.spine-rotation.owner`、`.spine-rotation.shared`、`.spine-rotation.recovered` 及该根的事务专属 recovered 空文件。旧版空锁等不明确的记录也只能在确认全部使用者停止后人工处理。与不遵守协议的旧版 writer 共用时，仍不得声明专用目录契约。
 
 MIT，见 `LICENSE`。
