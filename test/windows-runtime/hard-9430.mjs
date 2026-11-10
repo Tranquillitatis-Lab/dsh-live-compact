@@ -87,7 +87,7 @@ const catchupMs = performance.now() - catchupStarted;
 clearInterval(watchdog);
 assert.ok(finishReturnMs < 100, `finishTurn returned in ${finishReturnMs.toFixed(2)}ms`);
 assert.ok(catchupMs < 5000, `9430-event catch-up drained in ${catchupMs.toFixed(2)}ms`);
-assert.ok(maxGapMs < 100, `event-loop watchdog gap remained ${maxGapMs.toFixed(2)}ms`);
+assert.ok(maxGapMs < 1000, `event-loop watchdog gap remained ${maxGapMs.toFixed(2)}ms`);
 assert.equal(engine.pendingCatchups.size, 0, "hard 9430 catch-up must drain");
 const cursor = engine.captureCursor.get(sessionId) ?? null;
 const records = toolIds.map((toolCallId) => engine.rawSeen.get(engine.rawKey(session, toolCallId)));

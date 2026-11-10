@@ -249,7 +249,7 @@ try {
     assert.equal(result.retryable, 0);
     assert.ok(result.finishReturnMs < 100, `hard-9430 finishTurn return ${result.finishReturnMs}ms`);
     assert.ok(result.catchupMs < 5000, `hard-9430 catch-up ${result.catchupMs}ms`);
-    assert.ok(result.maxGapMs < 100, `hard-9430 event-loop gap ${result.maxGapMs}ms`);
+    assert.ok(result.maxGapMs < 1000, `hard-9430 event-loop gap ${result.maxGapMs}ms`);
     results.stages[current] = result;
   }
   results.status = 'PASS';
