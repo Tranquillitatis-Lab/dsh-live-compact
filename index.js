@@ -33,6 +33,7 @@ import {
   shadowMaxBytes,
   sessionDir,
   shadowAccessFused,
+  shadowAccessFuseBuffer,
   tightenCreatedShadow,
   tightenShadow,
 } from "./shadow.js";
@@ -62,7 +63,9 @@ function shadowWorkerFor(root) {
   const key = String(root);
   let entry = shadowWorkers.get(key);
   if (entry) return entry;
-  const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url));
+  const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), {
+    workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
+  });
   entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false };
   const removeEntry = () => {
     if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
@@ -992,11 +995,18 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
               toolCallId: id,
               tighten: true,
             });
-            raw = verified?.ok ? { ...verified, recovered: false, aclVerified: true } : verified;
+            // ACL success cannot establish a new content identity. Keep the
+            // first verified hash even if an external writer replaces both files.
+            const sameBackup = verified?.ok && verified.path === raw.path &&
+              verified.sha256 === raw.sha256 && verified.bytes === raw.bytes;
+            raw = sameBackup
+              ? { ...verified, recovered: false, aclVerified: true }
+              : { ...raw, ok: false, reason: verified?.reason || "hash-mismatch", aclVerified: false };
             this.rawSeen.set(this.rawKey(session, id), raw);
           } catch (error) {
             noteShadowWarning(this.ctx?.logger, error);
-            raw = { ok: false, reason: "unwritable", toolCallId: id };
+            raw = { ...raw, ok: false, reason: "unwritable", toolCallId: id, aclVerified: false };
+            this.rawSeen.set(this.rawKey(session, id), raw);
           }
         }
         if (!id || !verifiedRaw(raw).ok) {
@@ -1661,6 +1671,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    if (!access.runner && (access.platform ?? process.platform) === "win32" && shadowAccessFused()) {
+      const error = new Error("spine: shadow permission already failed; backup refused");
+      error.code = "ESHADOWACCESS";
+      throw error;
+    }
     const injected = Object.values(access || {}).some((value) => typeof value === "function") ||
       Object.values(rotationIO || {}).some((value) => typeof value === "function");
     // Node's test runner can monkey-patch fs bindings in the parent isolate;

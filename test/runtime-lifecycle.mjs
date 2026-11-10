@@ -16,6 +16,45 @@ const eventHash = (f) => contentHash(JSON.stringify(f.session.snapshotEvents()))
 const summaryText = (f) => f.summaries().map((event) => messageText({ content: event.data.summary })).join("\n");
 const checkpoints = (f, kind) => f.session.surface.nodes.filter((seq) => f.session.eventAt(seq)?.data?.source?.kind === kind);
 
+for (const changed of ["body", "meta", "pair", "unchanged"]) {
+  test(`commit reauthorization preserves the first raw hash (${changed})`, async (t) => {
+    const h = runtime(t);
+    const f = h.use(fixture());
+    const { engine } = h.engine();
+    h.capture(engine, f);
+    const key = engine.rawKey(f.session, "long");
+    const first = { ...engine.rawSeen.get(key), recovered: true, aclVerified: false };
+    assert.equal(first.ok, true);
+    engine.rawSeen.set(key, first);
+    const original = readFileSync(first.path, "utf8");
+    const replacement = original + "\nREPLACED_AFTER_FIRST_VERIFICATION\n";
+    const metaFile = `${first.path}.meta.json`;
+    const meta = JSON.parse(readFileSync(metaFile, "utf8"));
+    if (changed === "body" || changed === "pair") fs.writeFileSync(first.path, replacement);
+    if (changed === "meta" || changed === "pair") fs.writeFileSync(metaFile, JSON.stringify({
+      ...meta, sha256: contentHash(replacement), bytes: Buffer.byteLength(replacement),
+    }));
+    const before = eventHash(f);
+    const commit = () => engine.commitSelectedSpan(f.agent(), {
+      start: f.longRound[0], end: f.longRound[1], tokens: 10000,
+      card: { ok: true, text: "fixture retained context" },
+    }, new AbortController().signal);
+    if (changed === "unchanged") {
+      await commit();
+      assert.equal(f.summaries().length, 1);
+      assert.equal(engine.rawSeen.get(key).aclVerified, true);
+    } else {
+      await assert.rejects(commit(), /raw backup missing/);
+      assert.equal(eventHash(f), before);
+      assert.equal(f.summaries().length, 0);
+      assert.notEqual(engine.rawSeen.get(key).aclVerified, true);
+    }
+    assert.equal(engine.rawSeen.get(key).sha256, first.sha256, "ACL reauthorization cannot replace the first trusted hash");
+    assert.equal(engine.rawSeen.get(key).bytes, first.bytes);
+    assert.equal(engine.rawSeen.get(key).path, first.path);
+  });
+}
+
 test("an incomplete capacity scan after selection preserves the real surface and later maintenance recovers", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());

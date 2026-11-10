@@ -1,5 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { saveShadowTransaction } from "./shadow.js";
+import { attachShadowAccessFuse, saveShadowTransaction } from "./shadow.js";
+
+const managed = workerData?.spineWorker === 1;
+if (managed) attachShadowAccessFuse(workerData.accessFuse);
 
 async function handle(id, payload) {
   try {
@@ -15,7 +18,7 @@ async function handle(id, payload) {
 }
 
 let queue = Promise.resolve();
-if (workerData) handle(0, workerData);
+if (workerData && !managed) handle(0, workerData);
 parentPort.on("message", ({ id, payload }) => {
   queue = queue.then(() => handle(id, payload));
 });
