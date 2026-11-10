@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
 import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
-import { captureOwnedToolResult, contentHash, rawExcerptText, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
+import { captureOwnedToolResult, contentHash, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
   discardShadowFiles,
   ensureShadowDir,
@@ -57,6 +57,15 @@ const CAPTURE_EVENT_BATCH = 128;
 const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
+
+function recoveryRetryable(record, dir, toolCallId) {
+  if (record?.retryable === true || record?.reason === "unwritable") return true;
+  // A completely absent backup has never been captured and can be retried.
+  // If its metadata is still present, the body was damaged after capture and
+  // must remain fail-closed rather than being silently overwritten.
+  if (record?.reason === "missing-file") return !existsSync(join(dir, `${rawName(toolCallId)}.meta.json`));
+  return false;
+}
 
 function eventContent(session, seq) {
   const event = session.eventAt(seq);
@@ -475,6 +484,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   captureRetryStats = new Map();
   retryableCaptureSeqs = new Map();
   retryableCaptureSeeded = new Set();
+  captureRecoveryHolds = new Map();
   pruneGuarded = false;
 
   constructor(ctx, config, resolvedConfig) {
@@ -933,7 +943,21 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const event = session.eventAt(seq);
       if (event?.type === "tool/result") {
         const id = event.data?.message?.toolCallId;
-        const raw = id ? this.rawSeen.get(this.rawKey(session, id)) : null;
+        let raw = id ? this.rawSeen.get(this.rawKey(session, id)) : null;
+        if (id && raw?.ok && raw.recovered && raw.aclVerified !== true) {
+          try {
+            const verified = readRawToolResult({
+              dir: sessionDir(shadowDirectory(), session.id || DEFAULT_KEY),
+              toolCallId: id,
+              tighten: true,
+            });
+            raw = verified?.ok ? { ...verified, recovered: false, aclVerified: true } : verified;
+            this.rawSeen.set(this.rawKey(session, id), raw);
+          } catch (error) {
+            noteShadowWarning(this.ctx?.logger, error);
+            raw = { ok: false, reason: "unwritable", toolCallId: id };
+          }
+        }
         if (!id || !verifiedRaw(raw).ok) {
           throw new Error(`spine: raw backup missing before cut: ${id || "unknown"}`);
         }
@@ -1383,10 +1407,27 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (this.rawSeen.has(mapKey)) continue;
       try {
         const record = readRawToolResult({ dir, toolCallId: id, access, tighten: false });
-        this.rawSeen.set(mapKey, record?.ok ? record : { ...record, retryable: true, recovered: true });
+        const retryable = recoveryRetryable(record, dir, id);
+        const cached = record?.ok
+          ? { ...record, recovered: true, aclVerified: false }
+          : { ...record, ...(retryable ? { retryable: true } : {}), recovered: true, aclVerified: false };
+        this.rawSeen.set(mapKey, cached);
+        if (!cached.ok) {
+          const event = (session?.surface?.nodes || [])
+            .map((seq) => session.eventAt?.(seq))
+            .find((candidate) => candidate?.type === "tool/result" && candidate.data?.message?.toolCallId === id);
+          if (event) this.noteCaptureResult(session, event, cached);
+          if (retryable) this.captureRecoveryHolds.set(session?.id || DEFAULT_KEY, this.captureRecoveryFingerprint(session));
+        }
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
-        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true });
+        const failed = { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true, aclVerified: false };
+        this.rawSeen.set(mapKey, failed);
+        const event = (session?.surface?.nodes || [])
+          .map((seq) => session.eventAt?.(seq))
+          .find((candidate) => candidate?.type === "tool/result" && candidate.data?.message?.toolCallId === id);
+        if (event) this.noteCaptureResult(session, event, failed);
+        this.captureRecoveryHolds.set(session?.id || DEFAULT_KEY, this.captureRecoveryFingerprint(session));
       }
     }
   }
@@ -1404,11 +1445,30 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (this.rawSeen.has(mapKey)) continue;
       try {
         const record = readRawToolResult({ dir, toolCallId: id, access, tighten: false });
-        this.rawSeen.set(mapKey, record?.ok ? record : { ...record, retryable: true, recovered: true });
+        const retryable = recoveryRetryable(record, dir, id);
+        const cached = record?.ok
+          ? { ...record, recovered: true, aclVerified: false }
+          : { ...record, ...(retryable ? { retryable: true } : {}), recovered: true, aclVerified: false };
+        this.rawSeen.set(mapKey, cached);
+        if (!cached.ok) {
+          const event = session?.eventAt?.(session?.surface?.nodes?.find?.((seq) => {
+            const candidate = session.eventAt?.(seq);
+            return candidate?.type === "tool/result" && candidate.data?.message?.toolCallId === id;
+          }));
+          if (event) this.noteCaptureResult(session, event, cached);
+          if (retryable) this.captureRecoveryHolds.set(session?.id || DEFAULT_KEY, this.captureRecoveryFingerprint(session));
+        }
         progressed ||= Boolean(record?.ok);
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
-        this.rawSeen.set(mapKey, { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true });
+        const failed = { ok: false, reason: "unwritable", toolCallId: id, retryable: true, recovered: true, aclVerified: false };
+        this.rawSeen.set(mapKey, failed);
+        const event = session?.eventAt?.(session?.surface?.nodes?.find?.((seq) => {
+          const candidate = session.eventAt?.(seq);
+          return candidate?.type === "tool/result" && candidate.data?.message?.toolCallId === id;
+        }));
+        if (event) this.noteCaptureResult(session, event, failed);
+        this.captureRecoveryHolds.set(session?.id || DEFAULT_KEY, this.captureRecoveryFingerprint(session));
       }
       processed += 1;
     }
@@ -1416,7 +1476,20 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureSession(session) {
-    return this.captureNew(session, session?.snapshotEvents?.() || []);
+    const key = session?.id || DEFAULT_KEY;
+    const events = session?.snapshotEvents?.() || [];
+    const fingerprint = this.captureRecoveryFingerprint(session, events);
+    if (this.captureRecoveryHolds.get(key) === fingerprint) {
+      this.captureRecoveryHolds.delete(key);
+      return new Set();
+    }
+    return this.captureNew(session, events);
+  }
+
+  captureRecoveryFingerprint(session, events = null) {
+    const snapshot = events || session?.snapshotEvents?.() || [];
+    const nodes = session?.surface?.nodes || [];
+    return `${snapshot.length}:${snapshot.at(-1)?.seq ?? -1}|${nodes.length}:${nodes.at(-1) ?? -1}`;
   }
 
   surfaceToolIds(session) {

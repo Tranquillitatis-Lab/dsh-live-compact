@@ -256,3 +256,16 @@ test("#34 recovery failures remain retryable for cursor rewind", (t) => {
   assert.equal(record.ok, false);
   assert.equal(record.retryable, true, "a missing recovered raw must be revisited by captureNewBatch");
 });
+
+test("#34 recovery failures after cursor seeding still rewind the retryable seq", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const events = f.session.snapshotEvents();
+  engine.captureCursorStart(f.session, events, { keepRounds: 3 });
+  const target = f.longRound[1];
+  const id = f.session.eventAt(target).data.message.toolCallId;
+  engine.recoverVisibleRawBatch(f.session, {}, 0, 1, [id]);
+  assert.equal(engine.retryableCaptureSeqs.get(f.session.id)?.has(target), true);
+  assert.equal(engine.captureCursorStart(f.session, events, { keepRounds: 3 }), target);
+});
