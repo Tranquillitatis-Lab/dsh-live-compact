@@ -265,6 +265,8 @@ try {
     assert.equal(result.passes, 8);
     assert.equal(result.fullScanCount, 8);
     assert.equal(result.estimateUsed, false);
+    assert.equal(result.workerPasses, 8);
+    assert.ok(result.workerMaxGapMs < 1000, `hard-11k worker event-loop gap ${result.workerMaxGapMs}ms`);
     results.stages[current] = result;
   }
   results.status = 'PASS';

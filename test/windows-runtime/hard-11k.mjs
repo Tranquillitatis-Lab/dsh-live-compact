@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
+import { Worker } from "node:worker_threads";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -66,6 +67,42 @@ clearInterval(watchdog);
 
 const sorted = [...durations].sort((a, b) => a - b);
 const percentile = (ratio) => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1)];
+const workerDurations = [];
+let workerMaxGapMs = 0;
+let workerPrevious = Date.now();
+const workerWatchdog = setInterval(() => {
+  const now = Date.now();
+  workerMaxGapMs = Math.max(workerMaxGapMs, now - workerPrevious - 10);
+  workerPrevious = now;
+}, 10);
+for (let pass = 0; pass < passes; pass += 1) {
+  const started = performance.now();
+  const worker = new Worker(new URL("./shadow-save-worker.mjs", pathToFileURL(join(installed, "shadow-save-worker.mjs")).href), {
+    workerData: {
+      shadow: shadowRoot,
+      file: join(shadowRoot, "worker-session", "cut-worker-11111111.txt"),
+      body: `# spine-session worker-session\nworker telemetry ${pass}\n`,
+      required: true,
+      protectPaths: [],
+      sessionKey: "worker-session",
+      cap,
+      access: {},
+      rotationIO: {},
+    },
+  });
+  const message = await new Promise((resolve, reject) => {
+    worker.once("message", resolve);
+    worker.once("error", reject);
+  });
+  await worker.terminate();
+  assert.equal(message.ok, true);
+  assert.equal(message.result?.ok, true);
+  workerDurations.push(performance.now() - started);
+  await yieldImmediate();
+}
+clearInterval(workerWatchdog);
+const workerSorted = [...workerDurations].sort((a, b) => a - b);
+const workerPercentile = (ratio) => workerSorted[Math.min(workerSorted.length - 1, Math.ceil(workerSorted.length * ratio) - 1)];
 assert.equal(results.length, passes);
 assert.equal(results.reduce((sum, row) => sum + row.stat, 0) > fileCount, true);
 console.log(JSON.stringify({
@@ -81,6 +118,11 @@ console.log(JSON.stringify({
   p95Ms: Number(percentile(0.95).toFixed(2)),
   p99Ms: Number(percentile(0.99).toFixed(2)),
   maxGapMs,
+  workerPasses: passes,
+  workerP50Ms: Number(workerPercentile(0.50).toFixed(2)),
+  workerP95Ms: Number(workerPercentile(0.95).toFixed(2)),
+  workerP99Ms: Number(workerPercentile(0.99).toFixed(2)),
+  workerMaxGapMs,
   results,
   rootMode: "shared-default-full-scan",
   estimateUsed: false,
