@@ -1224,6 +1224,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const cursor = this.captureCursorStart(session, events, settings);
     let next = cursor;
     let retry = null;
+    let retryIndex = null;
     let processed = 0;
     let captures = 0;
     let progressed = false;
@@ -1253,7 +1254,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             captures += 1;
           }
           this.noteCaptureResult(session, event, record);
-          if (record?.retryable && retry === null) retry = seq;
+          if (record?.retryable && retry === null) {
+            retry = seq;
+            retryIndex = index;
+          }
         }
       }
       next = seq + 1;
@@ -1274,7 +1278,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       progressed,
       retryable: retry !== null,
       done: exhausted && retry === null && next > lastSeq,
-      nextIndex: index,
+      nextIndex: retryIndex ?? index,
     };
   }
 

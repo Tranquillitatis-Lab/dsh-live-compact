@@ -20,6 +20,7 @@
 ```json
 {
   "schema": 1,
+  "sessionId": "session-...",
   "seq": 1842,
   "intentKey": "repo-status",
   "ref": "repo-status",
@@ -33,15 +34,15 @@
     "exitCode": 0,
     "summary": "修改 2 个文件并通过测试"
   },
-  "archive": "raw-...txt",
+  "archive": "opaque-archive-id",
   "summaryHash": "sha256:..."
 }
 ```
 
 - marker 固定为单行 `// spine-intent:v1 {"ref":"repo-status","summary":"inspect repository status"}`，只接受锚定在 PTC 调用前的 marker；正则识别 envelope 后必须用 `JSON.parse` 校验。`ref`、摘要长度和控制字符都要限额，解析失败、重复 marker 或跨调用歧义均忽略并退回现有规则。
 - `intent` 只是模型声明，不代表成功；卡片必须把意图、实际结果（状态、退出码、错误摘要）和 `seq`/备份编号分开。
-- 索引只保存关联关系和摘要指针，工具正文继续由现有 raw 备份、哈希和 ACL 机制管理；使用原子追加/替换和 root writer，索引损坏时只丢语义标签，不影响原始 raw 备份。
-- 召回必须是显式 API，例如 `spine.recall({ intentRef, kind: "result", maxItems, maxBytes })`。默认不自动注入上下文，也不把结果重新写成 user/assistant 消息；跨会话、哈希不符、找不到或超限时返回 `unavailable`。
+- 索引键必须包含 `sessionId`，模型提供的 `ref` 只作标签，不能作为跨会话身份。索引只保存关联关系和摘要指针，工具正文继续由现有 raw 备份、哈希和 ACL 机制管理；`archive` 只能是 opaque id，不能暴露本地路径。使用原子追加/替换和 root writer，索引损坏时只丢语义标签，不影响原始 raw 备份。
+- 召回必须绑定当前 session/agent，且是显式 API，例如 `spine.recall({ sessionId, intentRef, kind: "result", maxItems, maxBytes })`。默认不自动注入上下文，也不把结果重新写成 user/assistant 消息；跨会话、哈希不符、找不到或超限时返回 `unavailable`。
 - 原始 thinking/reasoning 不纳入下一版；若未来支持，必须是独立宿主策略、独立开关、明确用户请求、限额和脱敏。
 
 ### 冷会话点火与状态重构

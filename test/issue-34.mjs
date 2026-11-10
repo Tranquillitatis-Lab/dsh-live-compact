@@ -145,6 +145,23 @@ test("#34 keeps the cursor at the first retryable catch-up result", () => {
   assert.equal(engine.captureCursor.get("s"), 0);
 });
 
+test("#34 rewinds the batch index when the last event is retryable", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.callIndex = new Map();
+  engine.captureCursor = new Map([["s", 0]]);
+  engine.persistCapture = false;
+  engine.writeCaptureCursor = () => {};
+  engine.captureOne = () => ({ ok: false, retryable: true });
+  const session = { id: "s", surface: { nodes: [0] }, eventAt() { return this.event; } };
+  session.event = { seq: 0, type: "tool/result", data: { message: { toolCallId: "last" } } };
+
+  const result = engine.captureNewBatch(session, [session.event], { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128 });
+  assert.equal(result.retryable, true);
+  assert.equal(result.done, false);
+  assert.equal(result.nextIndex, 0, "a last retryable event must be retried, not advanced past the batch");
+});
+
 test("#34 rewinds the batch index when an older visible raw becomes retryable", () => {
   const engine = Object.create(Spine.prototype);
   engine.rawSeen = new Map();
