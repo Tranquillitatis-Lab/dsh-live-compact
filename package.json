@@ -17,6 +17,7 @@
     "./shadow-search": "./shadow-search.js"
   },
   "files": [
+    "CHANGELOG.md",
     "shell.js",
     "adapter.js",
     "settings.js",
