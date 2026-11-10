@@ -122,11 +122,22 @@ test("prune revalidation stays read-only after recovery", (t) => {
   writeFileSync(file, text);
   writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
   const engine = Object.create(Spine.prototype);
-  engine.rawSeen = new Map([[`${session.id}\0${toolCallId}`, { ok: true, path: file, bytes: Buffer.byteLength(text), sha256: contentHash(text), toolCallId }]]);
+  engine.rawSeen = new Map([[`${session.id}\0${toolCallId}`, { ok: true, path: file, bytes: Buffer.byteLength(text), sha256: contentHash(text), toolCallId, aclVerified: true }]]);
   engine.surfaceToolIds = () => [toolCallId];
   f.actions.length = 0;
   assert.deepEqual([...engine.rawVerifiedSet(session)], [toolCallId]);
   assert.equal(f.actions.length, 0, "prune revalidation must not spawn per-file ACL work");
+});
+
+test("large recovered surfaces refuse prune before per-file ACL work", (t) => {
+  const f = fixture(t);
+  const session = { id: "large-recovery" };
+  const ids = Array.from({ length: 33 }, (_, index) => `recovered-${index}`);
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map(ids.map((id) => [`${session.id}\0${id}`, { ok: true, recovered: true, aclVerified: false, toolCallId: id }]));
+  engine.surfaceToolIds = () => ids;
+  assert.deepEqual([...engine.rawVerifiedSet(session)], []);
+  assert.equal(f.actions.length, 0, "large recovery must fail closed without per-file ACL work");
 });
 
 test("recovery entry secures the existing session directory once, not each raw file", (t) => {

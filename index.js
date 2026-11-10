@@ -57,6 +57,7 @@ const CAPTURE_EVENT_BATCH = 128;
 const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
+const RECOVERY_ACL_REAUTH_LIMIT = 32;
 
 function recoveryRetryable(record, dir, toolCallId) {
   if (record?.retryable === true || record?.reason === "unwritable") return true;
@@ -1180,8 +1181,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         ),
         access,
       });
-      this.rawSeen.set(mapKey, record);
-      return record;
+      const cached = record?.ok ? { ...record, aclVerified: true } : record;
+      this.rawSeen.set(mapKey, cached);
+      return cached;
     } catch (error) {
       if (
         error?.code === "ESHADOWACCESS" ||
@@ -1513,17 +1515,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   rawVerifiedSet(session) {
     const ids = new Set();
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
-    for (const id of this.surfaceToolIds(session)) {
+    const visibleIds = this.surfaceToolIds(session);
+    const recoveredNeedsAcl = visibleIds.filter((id) => {
       const cached = this.rawSeen.get(this.rawKey(session, id));
-      if (!cached?.ok) continue;
+      return cached?.ok && cached.recovered === true && cached.aclVerified !== true;
+    });
+    if (recoveredNeedsAcl.length > RECOVERY_ACL_REAUTH_LIMIT) return ids;
+    for (const id of visibleIds) {
+      const cached = this.rawSeen.get(this.rawKey(session, id));
+      if (!cached?.ok || cached.aclVerified !== true && cached.recovered !== true) continue;
       try {
         // Recheck both files immediately before prune, retaining the first
         // trusted hash rather than blessing a replacement raw/meta pair.
-        // Recovery already secured the session directory once. Rechecking a
-        // cached raw before prune must stay read-only; per-file ACL tightening
-        // here recreates the Windows #38 long-session stall.
-        const stored = readRawToolResult({ dir, toolCallId: id, tighten: false });
-        if (stored.ok && stored.path === cached.path && stored.sha256 === cached.sha256 && stored.bytes === cached.bytes) ids.add(id);
+        const needsAcl = cached.recovered === true && cached.aclVerified !== true;
+        const stored = readRawToolResult({ dir, toolCallId: id, tighten: needsAcl });
+        if (stored.ok && stored.path === cached.path && stored.sha256 === cached.sha256 && stored.bytes === cached.bytes) {
+          ids.add(id);
+          if (needsAcl) this.rawSeen.set(this.rawKey(session, id), { ...stored, recovered: false, aclVerified: true });
+        }
       } catch (error) {
         noteShadowWarning(this.ctx?.logger, error);
       }
