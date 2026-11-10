@@ -258,7 +258,8 @@ function failureBody(text) {
 export function failureKeptLines(text) {
   const useful = usefulLines(failureBody(text));
   if (useful.join("\n").length <= TOOL_BUDGET) return useful.map(shorten);
-  const marked = useful.filter((line) => FAILURE_LINE.test(line)).slice(-8).map(shorten);
+  const markedLines = useful.filter((line) => FAILURE_LINE.test(line));
+  const marked = (markedLines.length > 8 ? [markedLines[0], ...markedLines.slice(-7)] : markedLines).map(shorten);
   const causes = useful.filter((line) => /(?:root|stderr|stdout)[ _-]*cause\b|CAUSE\b/i.test(line)).slice(-4).map(shorten);
   const edges = [...useful.slice(0, 1), ...useful.slice(-2)].map(shorten);
   const picked = [];
@@ -538,9 +539,10 @@ export function roundHasLongRead(events, round) {
   return false;
 }
 
-export function keptToolRounds(events, limit = 3) {
+export function keptToolRounds(events, limit = 3, afterIndex = -1) {
   const count = Number.isInteger(limit) && limit > 0 ? limit : 3;
-  const rounds = finishedToolRounds(events).filter((round) => !roundHasLongRead(events, round));
+  const floor = Number.isInteger(afterIndex) ? afterIndex : -1;
+  const rounds = finishedToolRounds(events).filter((round) => round.start > floor && !roundHasLongRead(events, round));
   return rounds.slice(-count);
 }
 
@@ -767,7 +769,8 @@ export function resolveProviderBaseURL({
   if (fromConfig) return fromConfig;
   const fromPatch = providerURLFromPatch(patchText, provider);
   if (fromPatch) return fromPatch;
-  if (provider === "deepseek-account" && launchURL) return String(launchURL);
+  const launch = String(launchURL || "").trim();
+  if (provider === "deepseek-account" && launch) return launch;
   const fallback = fallbackProviderURL(provider);
   if (fallback) return fallback;
   return catalogProviderURL(provider, catalog);

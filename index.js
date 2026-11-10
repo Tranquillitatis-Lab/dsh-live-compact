@@ -304,9 +304,11 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
       type: event?.type === "tool/result" ? "tool" : "other",
       toolCalls,
       longRead: event?.type === "tool/result" && call?.name === "read" && (priced[index].tokens || 0) >= settings.chunkMin,
+      checkpoint: isCheckpoint(session, nodes[index]),
     });
   }
-  const rounds = keptToolRounds(visible, settings.keepRounds);
+  const floorVisible = visible.reduce((found, item, index) => item.checkpoint ? index : found, -1);
+  const rounds = keptToolRounds(visible, settings.keepRounds, floorVisible);
   const newestLong = [...finishedToolRounds(visible)].reverse().find((round) => roundHasLongRead(visible, round));
   const span = rounds.length ? { start: rounds[0].start, end: rounds.at(-1).end } : null;
   const cutEnd = span ? reservedCutEnd(visible[span.start].index, first) : null;
@@ -1522,7 +1524,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       }
     }
     const joined = input.messages.map(messageText).join("\n\n");
-    if (process.env.SPINE_THUNDER !== "1") return super.summarize(input, agent, signal);
+    if (process.env.SPINE_THUNDER !== "1") return this.summarizeOfficial(input, agent, signal);
     const next = joined;
     const mode = decideThunder({
       previous: state.lastPrefix || "",
@@ -1530,7 +1532,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       modelKind: process.env.SPINE_THUNDER_MODEL === "27b" ? "27b" : "flash",
       prefixTokens: state.lastPrefixTokens || 0,
     });
-    if (mode === "attach") return super.summarize(input, agent, signal);
+    if (mode === "attach") return this.summarizeOfficial(input, agent, signal);
     const users = input.messages.filter((message) => (message?.role ?? message?.message?.role) === "user");
     const taskLine = messageText(users.at(-1) || input.messages.at(-1)).slice(0, 500);
     const trunk = buildCard(joined, "", input.messages.map((message) => ({
@@ -1539,9 +1541,25 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     })));
     const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
     const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
-    return super.summarize({
+    return this.summarizeOfficial({
       ...input,
       messages: [{ role: "user", content: [{ type: "text", text: slim }] }],
     }, agent, signal);
+  }
+
+  async summarizeOfficial(input, agent, signal) {
+    const result = await super.summarize(input, agent, signal);
+    const blocks = Array.isArray(result?.summary) ? result.summary : [];
+    const usable = blocks.some((block) => {
+      if (typeof block === "string") return block.trim().length > 0;
+      if (!block || typeof block !== "object") return false;
+      if (typeof block.text === "string" && block.text.trim()) return true;
+      return Array.isArray(block.content) && block.content.some((part) => typeof part?.text === "string" && part.text.trim());
+    });
+    if (!usable) {
+      this.ctx.logger?.warn?.("spine: official summarizer returned no usable summary; leaving the span untouched");
+      throw new Error("spine: official summarizer returned no usable summary");
+    }
+    return result;
   }
 }
