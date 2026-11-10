@@ -89,14 +89,75 @@ function touchExclusive(file, body = "") {
 }
 
 function readRotationOwner(file) {
+  if (!lstatSync(file).isFile()) throw new Error("shadow owner is not a regular file");
   const fd = openSync(file, "r");
   try {
-    const buffer = Buffer.alloc(49);
+    const info = fstatSync(fd, { bigint: true });
+    if (!info.isFile() || info.size <= 0n || info.size > 256n) throw new Error("invalid shadow owner size");
+    const buffer = Buffer.alloc(257);
     const count = readSync(fd, buffer, 0, buffer.length, 0);
-    const token = buffer.subarray(0, count).toString("utf8");
-    return /^[0-9a-f]{48}$/.test(token) ? token : "";
+    const text = buffer.subarray(0, count).toString("utf8");
+    const record = JSON.parse(text);
+    if (count !== Number(info.size) || record?.v !== 1 ||
+        !Number.isSafeInteger(record.pid) || record.pid <= 0 || record.pid > 0x7fffffff ||
+        !/^[0-9a-f]{48}$/.test(record.id) || `${JSON.stringify({ v: 1, pid: record.pid, id: record.id })}\n` !== text) {
+      throw new Error("invalid shadow owner record");
+    }
+    return record;
   } finally {
     closeSync(fd);
+  }
+}
+
+function rotationOwnerText(record) {
+  return `${JSON.stringify({ v: 1, pid: record.pid, id: record.id })}\n`;
+}
+
+function publishRotationOwner(file, record) {
+  const temp = `${file}.${randomBytes(24).toString("hex")}.tmp`;
+  let fd;
+  try {
+    fd = openSync(temp, "wx", 0o600);
+    writeFileSync(fd, rotationOwnerText(record));
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    // The rotation lock serializes owner claims. Remove only the stale owner
+    // after its PID was proven dead, then publish the complete replacement.
+    try { unlinkSync(file); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    renameSync(temp, file);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try { unlinkSync(temp); } catch {}
+  }
+}
+
+function ownerProcessAlive(record) {
+  try {
+    process.kill(record.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
+function claimRotationOwner(file) {
+  const next = { pid: process.pid, id: rotationOwner };
+  let current;
+  try {
+    current = readRotationOwner(file);
+  } catch (error) {
+    if (error?.code !== "ENOENT") return false;
+  }
+  if (current) {
+    if (current.pid === next.pid && current.id === next.id) return true;
+    if (ownerProcessAlive(current)) return false;
+  }
+  try {
+    publishRotationOwner(file, next);
+    return readRotationOwner(file).pid === next.pid && readRotationOwner(file).id === next.id;
+  } catch {
+    return false;
   }
 }
 
@@ -390,12 +451,18 @@ export function withShadowRoot(dir, action) {
     const optedIn = guard.owned && dedicatedRoot(root, identity);
     const owner = join(root, ROTATION_OWNER);
     let token = "";
-    if (optedIn && !existsSync(owner) && !existsSync(shared)) {
+    let currentOwner;
+    try { currentOwner = readRotationOwner(owner); } catch {}
+    const ownsCurrent = currentOwner?.pid === process.pid && currentOwner?.id === rotationOwner;
+    if (optedIn && !existsSync(shared) && !ownsCurrent) {
       shadowUsage = null;
-      touchExclusive(owner, rotationOwner);
+      if (!claimRotationOwner(owner)) touchExclusive(shared);
     }
     if (existsSync(owner)) {
-      try { token = readRotationOwner(owner); } catch {}
+      try {
+        const record = readRotationOwner(owner);
+        token = record.pid === process.pid && record.id === rotationOwner ? record.id : "";
+      } catch {}
       if (token !== rotationOwner || !optedIn) touchExclusive(shared);
     }
     const exclusive = optedIn && token === rotationOwner && !existsSync(shared);

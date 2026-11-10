@@ -1346,7 +1346,7 @@ for (const kind of ["default", "shared", "dedicated"]) {
   });
 }
 
-test("clean restart does not inherit a former process's estimate or guess ownership from a PID", { timeout: 15000 }, async (t) => {
+test("clean restart reclaims a dead owner after one bounded recalibration", { timeout: 15000 }, async (t) => {
   const f = fixture(t);
   configure(t, f);
   const a = child(t, f.dir, true);
@@ -1355,9 +1355,11 @@ test("clean restart does not inherit a former process's estimate or guess owners
   a.proc.send({ command: "exit" });
   assert.equal((await a.exit)[0], 0);
   assert.equal(existsSync(join(f.dir, LOCK)), false);
-  assert.equal(rotation(f).used, 600);
-  assert.equal(rotation(f).estimated, undefined);
-  assert.equal(existsSync(join(f.dir, SHARED)), true);
+  const first = rotation(f);
+  assert.equal(first.used, 600);
+  assert.equal(first.estimated, undefined);
+  assert.equal(rotation(f).estimated, true);
+  assert.equal(existsSync(join(f.dir, SHARED)), false);
 });
 
 test("explicit root rejects files outside its counted scope and does not charge a different root", (t) => {
