@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import Spine from "../index.js";
+import { resetShadowAccessState, sessionDir, shadowDirectory } from "../shadow.js";
 import { fixture, runtime } from "./helpers/runtime.mjs";
 
 test("#34 idle maintenance defers full catch-up to the event loop", async (t) => {
@@ -268,4 +270,20 @@ test("#34 recovery failures after cursor seeding still rewind the retryable seq"
   engine.recoverVisibleRawBatch(f.session, {}, 0, 1, [id]);
   assert.equal(engine.retryableCaptureSeqs.get(f.session.id)?.has(target), true);
   assert.equal(engine.captureCursorStart(f.session, events, { keepRounds: 3 }), target);
+});
+
+test("#34 previsible ACL fuse fails closed without escaping catch-up", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const access = {
+    platform: "win32",
+    env: { SystemRoot: "D:\\WinX" },
+    execFile() { throw Object.assign(new Error("permission denied"), { status: 1300 }); },
+  };
+  const id = f.session.eventAt(f.longRound[1]).data.message.toolCallId;
+  mkdirSync(sessionDir(shadowDirectory(), f.session.id), { recursive: true });
+  t.after(() => resetShadowAccessState());
+  assert.doesNotThrow(() => engine.recoverVisibleRawBatch(f.session, access, 0, 1, [id]));
+  assert.equal(engine.rawSeen.has(engine.rawKey(f.session, id)), false);
 });

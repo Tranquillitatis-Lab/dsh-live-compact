@@ -1435,7 +1435,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   recoverVisibleRawBatch(session, access = {}, startIndex = 0, limit = RECOVER_RAW_BATCH, visibleIds = null) {
     const ids = visibleIds || [...new Set(this.surfaceToolIds(session))];
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
-    if (ids.length && startIndex === 0 && existsSync(dir)) ensureShadowDir(dir, access);
+    if (ids.length && startIndex === 0 && existsSync(dir)) {
+      try {
+        ensureShadowDir(dir, access);
+      } catch (error) {
+        noteShadowWarning(this.ctx?.logger, error);
+        return { nextIndex: ids.length, done: true, progressed: false };
+      }
+    }
     let index = Math.max(0, startIndex);
     let processed = 0;
     let progressed = false;
