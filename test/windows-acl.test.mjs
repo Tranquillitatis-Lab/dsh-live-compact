@@ -105,6 +105,30 @@ test("read-only recovery can skip repeated ACL tightening while retaining raw/me
   assert.equal(result.sha256, contentHash(text));
 });
 
+test("prune revalidation stays read-only after recovery", (t) => {
+  const f = fixture(t);
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = f.dir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+  });
+  const session = { id: "prune-revalidation" };
+  const dir = sessionDir(f.dir, session.id);
+  mkdirSync(dir);
+  const toolCallId = "prune-revalidation-tool";
+  const file = join(dir, rawName(toolCallId));
+  const text = "cached raw for prune revalidation";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map([[`${session.id}\0${toolCallId}`, { ok: true, path: file, bytes: Buffer.byteLength(text), sha256: contentHash(text), toolCallId }]]);
+  engine.surfaceToolIds = () => [toolCallId];
+  f.actions.length = 0;
+  assert.deepEqual([...engine.rawVerifiedSet(session)], [toolCallId]);
+  assert.equal(f.actions.length, 0, "prune revalidation must not spawn per-file ACL work");
+});
+
 test("recovery entry secures the existing session directory once, not each raw file", (t) => {
   const f = fixture(t);
   const previous = process.env.SPINE_SHADOW_DIR;
