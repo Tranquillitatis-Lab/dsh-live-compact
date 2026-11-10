@@ -1,15 +1,15 @@
 {
-  "base": "a383494903ef10cd10a13a2e335988bf1526733d",
+  "base": "f0846e7a8e8386cdabc3e0460079dd922d6110d1",
   "name": "dsh-live-compact",
-  "version": "1.1.4",
-  "filename": "dsh-live-compact-1.1.4.tgz",
-  "bytes": 85220,
-  "sha256": "0675e7c317f874ea181de275f9a732d145c925f0ea5282560e784821a58c66a4",
+  "version": "1.1.5",
+  "filename": "dsh-live-compact-1.1.5.tgz",
+  "bytes": 88379,
+  "sha256": "d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b",
   "files": [
     {
       "path": "CHANGELOG.md",
-      "bytes": 24098,
-      "sha256": "75e9d2d8e2ddd2d58399ae12cef78a4d896f0c924c6cb6f8a8c58bc402f3b33d"
+      "bytes": 26510,
+      "sha256": "258ce359d07eb74347ee542b5fd51392ce6fc656b2eaf9b4322960306fad4ff8"
     },
     {
       "path": "LICENSE",
@@ -18,8 +18,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 22687,
-      "sha256": "7ab0c5bb327f157c01e3312919d774828b995538f9613e95db841775a2237107"
+      "bytes": 24430,
+      "sha256": "bdca2a6582d2871fa4e56766b5b0e730d5ea5bc183da59a26af67ab7a853a35a"
     },
     {
       "path": "adapter.js",
@@ -53,18 +53,18 @@
     },
     {
       "path": "index.js",
-      "bytes": 72556,
-      "sha256": "1075f80b5228760086873e49cba8bdebfd3e33ff556af852194f3a31dfc418d5"
+      "bytes": 73491,
+      "sha256": "78863e44cd0edab4d3c60bb97f266e98536663bb8391c1899444e7bb94d1c55f"
     },
     {
       "path": "package.json",
-      "bytes": 2892,
-      "sha256": "dd65d9d4d8d7e33d94b9393b39fc60bbeb21338f33893d4efb690dead7e3dcc6"
+      "bytes": 2961,
+      "sha256": "0e577be6dea537a0b94e029ec7eee0dae3be6a496e0ce3cd603b34708424b768"
     },
     {
       "path": "plan.js",
-      "bytes": 57276,
-      "sha256": "5e8a60549fad22d8e5e65d4559ce425d3daaadefefb76955759c9b378d5839ce"
+      "bytes": 58877,
+      "sha256": "7bdf5432bbbd2bb35a585eefc84288ae8688ae9b95c8a5e7bb3c1b1f944a3782"
     },
     {
       "path": "raw.js",
@@ -78,8 +78,8 @@
     },
     {
       "path": "shadow-save-worker.mjs",
-      "bytes": 636,
-      "sha256": "fa2848968e040f9dcedcf0c663da8412e5a72bd637df14feff999f5bd35938bb"
+      "bytes": 780,
+      "sha256": "59aebcaee4c73e9c03a3039b203908043350ec314eb0c143860cb7280eacde8d"
     },
     {
       "path": "shadow-search.js",
@@ -88,8 +88,8 @@
     },
     {
       "path": "shadow.js",
-      "bytes": 48081,
-      "sha256": "dcb6394bf969d0a2760aafa389411c6411a1acf705ec2766c5924d656a821f22"
+      "bytes": 48855,
+      "sha256": "7a12dd58af33f80a02c2220724abd114b2f1a4cc7795e76ca8fd8aa328b4915a"
     },
     {
       "path": "shell.js",
