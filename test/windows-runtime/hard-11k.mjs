@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const [installed, shadowRoot] = process.argv.slice(2);
 assert.ok(installed && shadowRoot, "usage: hard-11k.mjs INSTALLED_PACKAGE SHADOW_ROOT");
@@ -13,6 +14,8 @@ mkdirSync(shadowRoot, { recursive: true });
 
 const shadow = await import(pathToFileURL(join(installed, "shadow.js")).href);
 const { rotateShadow, isPluginShadowName } = shadow;
+const index = await import(pathToFileURL(join(installed, "index.js")).href);
+const saveShadowAsync = index.default.prototype.saveShadowAsync;
 const sessionCount = 20;
 const fileCount = 11078;
 const passes = 8;
@@ -105,6 +108,64 @@ const workerSorted = [...workerDurations].sort((a, b) => a - b);
 const workerPercentile = (ratio) => workerSorted[Math.min(workerSorted.length - 1, Math.ceil(workerSorted.length * ratio) - 1)];
 assert.equal(results.length, passes);
 assert.equal(results.reduce((sum, row) => sum + row.stat, 0) > fileCount, true);
+
+const externalWriter = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "external-writer.mjs"), shadowRoot, "320"], {
+  stdio: ["ignore", "pipe", "pipe"],
+  windowsHide: true,
+});
+let externalStdout = "";
+let externalStderr = "";
+externalWriter.stdout.on("data", (data) => { externalStdout += data; });
+externalWriter.stderr.on("data", (data) => { externalStderr += data; });
+let externalMaxGapMs = 0;
+let externalPrevious = Date.now();
+const externalWatchdog = setInterval(() => {
+  const now = Date.now();
+  externalMaxGapMs = Math.max(externalMaxGapMs, now - externalPrevious - 10);
+  externalPrevious = now;
+}, 10);
+const externalResults = [];
+const externalHost = {
+  ctx: { logger: { info() {}, warn() {} } },
+  warnShadowFull() {},
+  warnShadowOversize() {},
+};
+process.env.SPINE_SHADOW_DIR = shadowRoot;
+process.env.SPINE_SHADOW_MAX_BYTES = String(cap);
+for (let pass = 0; pass < passes; pass += 1) {
+  const files = Array.from({ length: 2 }, (_, index) => join(shadowRoot, "pooled-external", `cut-${pass + 1}-${index + 1}-ffffffff.txt`));
+  const started = performance.now();
+  const saved = await Promise.all(files.map((file) => saveShadowAsync.call(
+    externalHost,
+    [{ role: "user", content: `pooled external pass ${pass}` }],
+    true,
+    file,
+    "pooled-external",
+  )));
+  for (const result of saved) assert.equal(result.ok, true, "pooled writer transaction under external mutation");
+  externalResults.push({ pass: pass + 1, elapsedMs: Number((performance.now() - started).toFixed(2)), files: saved.length });
+  await yieldImmediate();
+}
+clearInterval(externalWatchdog);
+const externalExit = await new Promise((resolve, reject) => {
+  externalWriter.once("error", reject);
+  externalWriter.once("close", (code) => resolve(code));
+});
+assert.equal(externalExit, 0, `external writer exited ${externalExit}: ${externalStderr}`);
+const externalSummary = JSON.parse(externalStdout.trim().split(/\r?\n/).at(-1));
+assert.equal(externalSummary.status, "PASS");
+const invalidFiles = [];
+const walk = (dir) => {
+  for (const name of readdirSync(dir)) {
+    const file = join(dir, name);
+    const info = statSync(file);
+    if (info.isDirectory()) walk(file);
+    else if (name.endsWith(".tmp") || (name.endsWith(".txt") && info.size === 0)) invalidFiles.push(file);
+  }
+};
+walk(shadowRoot);
+assert.deepEqual(invalidFiles, [], "external mutations leave no empty or temporary backup");
+assert.equal(existsSync(join(shadowRoot, ".spine-rotation.lock")), false, "external matrix releases root lock");
 console.log(JSON.stringify({
   stage: "hard-11k",
   status: "PASS",
@@ -123,6 +184,14 @@ console.log(JSON.stringify({
   workerP95Ms: Number(workerPercentile(0.95).toFixed(2)),
   workerP99Ms: Number(workerPercentile(0.99).toFixed(2)),
   workerMaxGapMs,
+  externalWriter: {
+    ...externalSummary,
+    workerPasses: externalResults.length,
+    maxWorkerElapsedMs: Math.max(...externalResults.map((row) => row.elapsedMs)),
+    maxGapMs: externalMaxGapMs,
+    invalidFiles: invalidFiles.length,
+    rootLockLeaked: existsSync(join(shadowRoot, ".spine-rotation.lock")),
+  },
   results,
   rootMode: "shared-default-full-scan",
   estimateUsed: false,
