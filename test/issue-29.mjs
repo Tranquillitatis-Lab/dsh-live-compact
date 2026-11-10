@@ -116,6 +116,8 @@ for (const scenario of [
 test("#29 exact account no-address fallback; near names and existing public providers keep their behavior", (t) => {
   const h = routing(t);
   assert.deepEqual(h.engine.engineFor(h.agent), { engine: "cloud", source: "provider" });
+  const blankLaunch = routing(t, { launchURL: "   " });
+  assert.deepEqual(blankLaunch.engine.engineFor(blankLaunch.agent), { engine: "cloud", source: "provider" });
   for (const provider of ["deepseek-account-copy", "my-deepseek-account", "DeepSeek-Account", "deepseek_account", "unknown"]) {
     assert.deepEqual(resolveEngine({ provider, env: {} }), { engine: "local", source: "unknown" }, provider);
     assert.equal(resolveProviderBaseURL({ provider, launchURL: LOCAL, directory, layers: [] }), "");
