@@ -84,3 +84,9 @@
 - 下一轮验证必须包含真实 9,430-event/29-turn、86 existing raw/meta 的冷启动/重启场景，以及 15,001-event/356-tool-result 的首次 capture + restart recovery。记录 `finishReturnMs`、maintenance entry、后台 catch-up、最大 event-loop gap、cursor、retryable、raw/meta/hash 完整性；任何持续秒级静默都保持 HOLD。
 - catch-up 的 visible-existing 阶段只能把 `tighten:false` 且 hash/meta 完整的 raw 放入非 retryable cache；missing/corrupt/pruned/fuse 记录必须可回退到 retryable capture 或 fail-closed，不能让持久 cursor 越过失败结果。选中 span 的目标 raw 仍需按当前 ACL 策略重新授权，不能把只读恢复当成 ACL 证明。
 - #27 的 `69bb3ce` 只移除 rotation 中冗余的 raw 首行读取；shared/default root 仍会 `readdir/stat` 全量计量，尚无 11k 文件 native Windows p95/p99 证据，继续保持未解决 P0/P1 边界。
+
+## 2026-11-10 最终候选复测补充
+
+- `42794155039` 的 ARM 与 Windows 2022 都失败，但两边失败点均是 hard-9430 合成 watchdog 的 `<100ms` 门槛：x64 观测约 279ms、ARM 约 441ms；candidate、223-file recovery、29-turn replay、重启和 native rotation 均已通过。该 run 保留为 harness 阈值失败证据，不能作为 #34 修复证明。
+- 最终候选 `b3325e7` 使用 `<1000ms` watchdog 后，`42801602112` 的 ARM/x64 两 job 均成功。x64：223-file recovery 39ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=7.95`、`catchupMs=578.82`、`maxGapMs=285`、86/86 raw、retryable 0、cursor 9430；ARM：223-file recovery 56ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=6.17`、`catchupMs=749.94`、`maxGapMs=380`、86/86 raw、retryable 0、cursor 9430。
+- 这证明当前候选在受控 Windows x64/ARM 场景通过了代码和 harness 门槛；公开 #27/#34 仍保持 Open，#27 仍缺 11k shared-root native 证据，#34 仍缺公开原始用户冷装/同规模回退证据，不能自动关闭 issue 或把公开 1.1.4 tag 改写成已修复。
