@@ -1,0 +1,94 @@
+{
+  "version": "1.1.5",
+  "publicationStatus": "PASS",
+  "tagCommit": "b6b7c61a5172b84d1756a098002909cd636f9367",
+  "release": {
+    "status": "PASS",
+    "tag": "v1.1.5",
+    "publicReleaseMetadata": true,
+    "anonymousMetadataApi": "rate-limited",
+    "anonymousDownload": true,
+    "bytes": 88379,
+    "sha256": "d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b",
+    "publishedAt": "2026-11-10T17:07:29Z",
+    "url": "https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.5"
+  },
+  "npm": {
+    "status": "PASS",
+    "version": "1.1.5",
+    "latest": "1.1.5",
+    "bytes": 88379,
+    "sha256": "d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b",
+    "integrity": "sha512-H1/3aOHoBX3WUK0u7KWRMReWlfoJgDuuEszQUTU/AE2eSoQlPjIICvFdcAVSLz/RDJNDt/pkDqQttvq2VX09vA=="
+  },
+  "mirrorAndPage": {
+    "status": "PASS",
+    "packageBytes": 88379,
+    "packageSha256": "d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b",
+    "pageSha256": "4f48950626919d3579daff9361f6d3a2feb224d6f9b63d5e65fc0335f097b512",
+    "barePublicUrls": true
+  },
+  "sourceFilesReadBack": 22,
+  "freshInstall": {
+    "status": "PASS",
+    "shell": "zsh -f",
+    "isolatedHomeAndProfiles": true,
+    "registry": "https://registry.npmjs.org/",
+    "installs": 6,
+    "filesPerInstall": 19,
+    "commands": [
+      {
+        "label": "npm-global",
+        "code": 0,
+        "signal": null,
+        "command": "npm install -g dsh-live-compact"
+      },
+      {
+        "label": "npm-version",
+        "code": 0,
+        "signal": null,
+        "command": "dsh-live-compact --version"
+      },
+      {
+        "label": "npm-headless",
+        "code": 0,
+        "signal": null,
+        "command": "dsh plugin --profile headless add dsh-live-compact@1.1.5"
+      },
+      {
+        "label": "npm-web",
+        "code": 0,
+        "signal": null,
+        "command": "dsh plugin --profile web add dsh-live-compact@1.1.5"
+      },
+      {
+        "label": "mirror-headless",
+        "code": 0,
+        "signal": null,
+        "command": "dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz"
+      },
+      {
+        "label": "mirror-web",
+        "code": 0,
+        "signal": null,
+        "command": "dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz"
+      },
+      {
+        "label": "mirror-global",
+        "code": 0,
+        "signal": null,
+        "command": "npm install -g --force \"https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz\""
+      },
+      {
+        "label": "mirror-version",
+        "code": 0,
+        "signal": null,
+        "command": "dsh-live-compact --version"
+      }
+    ]
+  },
+  "publicIssueBoundary": {
+    "27": "OPEN - original-user same-scale/cold-install retest pending",
+    "34": "OPEN - original-user same-scale/cold-install retest pending"
+  }
+}

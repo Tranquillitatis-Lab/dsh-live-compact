@@ -124,3 +124,9 @@
 9,430-event：finishReturnMs 为 5.42 / 5.53，catchupMs 为 446.19 / 828.46，maxGapMs 为 228 / 417；两边 raw 86/86、cursor 9430、retryable 0。223-file 恢复为 17 / 52ms，全部 hash 通过。11k worker 主线程 maxGapMs 为 14 / 16，external 为 11 / 11；29 轮、58 次捕获、重启边界与强杀恢复均通过。
 
 每边各 1 条 checkout/setup-node 内部 Node 20 弃用 warning，0 error annotation；不能写成零 annotation。完整指标和日志哈希见 [release-1.1.5-verification.json](release-1.1.5-verification.json)。GPT-6.1 SOL MAX 独立读回后解除发布前验证 HOLD；#27/#34 继续保留原用户现场复测边界，语义索引仍未实现。
+
+## 1.1.5 发布与独立读回
+
+[1.1.5 已正式发布](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.5)。GitHub、npm 官方 registry、下载镜像的实际 tarball 均重新下载并匹配冻结 SHA256；公网裸下载页与候选页面逐字节一致。npm 与镜像的 global/headless/web 共六次隔离全新安装均通过，每次核对 19 个文件；README/CHANGELOG 拆分已随版交付。
+
+详见 [publication receipt](release-1.1.5-publication.json)。发布 tag 固定在 `b6b7c61`，后续发布记录只更新文档，不改变已验收包。#27/#34 仍为原现场待复测，不以发布完成冒充公开 P0 已关单。
