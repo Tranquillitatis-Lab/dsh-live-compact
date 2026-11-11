@@ -1,0 +1,179 @@
+{
+  "schema": "dsh-live-compact-benchmark-evidence-v1",
+  "updated": "2026-11-11",
+  "historical_dsh": {
+    "memory_1_0_5": {
+      "description": "同一真实 DeepSeek 会话：13 条约束和 1 条报错，灌入 6 轮日志，最后禁止读文件凭记忆回答；每组 2 次。",
+      "original": {
+        "recall_questions": [
+          15,
+          15
+        ],
+        "constraint_violations": [
+          "one_minor",
+          0
+        ],
+        "middle_log_details": [
+          "1/3",
+          "3/3_with_unzip_and_10_extra_tool_calls"
+        ]
+      },
+      "live_compact": {
+        "recall_questions": [
+          15,
+          15
+        ],
+        "constraint_violations": [
+          0,
+          0
+        ],
+        "middle_log_details": [
+          "3/3_with_on_demand_backup",
+          "3/3_with_on_demand_backup"
+        ]
+      },
+      "scope": "directional_small_sample",
+      "source": "CHANGELOG.md historical 1.0.5 memory comparison"
+    },
+    "early_150_and_20": {
+      "source_commit": "7e0611e",
+      "version_scope": "before 1.0.2",
+      "aider_like_150": {
+        "original": {
+          "passed": "150/150",
+          "cache_hit_rate": 0.9955,
+          "cached_input_tokens": 335000000,
+          "non_cached_input_tokens": 1498000,
+          "estimated_cost_usd": 1.5,
+          "peak_context_tokens": 679000,
+          "compaction": "1 pause / 12.8s",
+          "wall_clock_seconds": 8531
+        },
+        "live_compact": {
+          "passed": "150/150",
+          "cache_hit_rate": 0.9956,
+          "cached_input_tokens": 244300000,
+          "non_cached_input_tokens": 1088000,
+          "estimated_cost_usd": 1.15,
+          "peak_context_tokens": 589000,
+          "compaction": "145 local cuts / 2.2s",
+          "wall_clock_seconds": 6105
+        }
+      },
+      "webuniverse_20": {
+        "original": {
+          "native_compaction": "1 model summary / 14.552s",
+          "compacted_tokens": 520460,
+          "mean_end_context_tokens": 366942,
+          "end_context_tokens": 433844,
+          "sampled_end_hit_rate": 0.9987
+        },
+        "live_compact": {
+          "native_compaction": "local cuts / no model call",
+          "mean_end_context_tokens": 217276,
+          "end_context_tokens": 323726,
+          "sampled_end_hit_rate": 0.999,
+          "local_cut_time_ms": 74
+        }
+      },
+      "limitations": [
+        "early historical run",
+        "plugin-side wall clock was not rerun symmetrically",
+        "costs are estimates"
+      ]
+    },
+    "long_fill": {
+      "1.0.6": {
+        "groups": 8,
+        "fill_turns": 184,
+        "warn": "184/184",
+        "notice": "184/184",
+        "false_notice": 0,
+        "sessions_cut": "8/8",
+        "cuts": 17,
+        "estimated_cost_usd": {
+          "live_compact": 0.211,
+          "original": 0.229
+        }
+      },
+      "1.0.8": {
+        "groups": 8,
+        "fill_turns": 184,
+        "warn": "184/184",
+        "notice": "184/184",
+        "cache_hit_rate": {
+          "live_compact": 0.9823,
+          "1.0.6": 0.9788,
+          "original": 0.9851
+        }
+      }
+    },
+    "coder_390_27b": {
+      "groups": 3,
+      "turns_per_group": 31,
+      "fill_pass": "69/69",
+      "cut_tokens": 20635,
+      "note": "separate local-model regression"
+    }
+  },
+  "external_opencode_reference": {
+    "repository": "https://github.com/Haoming9527/opencode-live-compact",
+    "date": "2026-11-09",
+    "host": "stock OpenCode 2.2.6",
+    "model": "GPT-6 Luna",
+    "aider_150": {
+      "original": {
+        "passed": "150/150",
+        "cache_hit_rate": 0.9924,
+        "estimated_cost_usd": 6.295,
+        "peak_context_tokens": 783000,
+        "wall_clock_seconds": 5526
+      },
+      "live_compact": {
+        "passed": "150/150",
+        "cache_hit_rate": 0.9956,
+        "estimated_cost_usd": 5.397,
+        "peak_context_tokens": 762000,
+        "wall_clock_seconds": 3637
+      },
+      "cost_delta": -0.143,
+      "source": "https://github.com/Haoming9527/opencode-live-compact/blob/main/benchmarks/results/2026-11-09-aider-150/README.md"
+    },
+    "webbench_react_20": {
+      "original": {
+        "stages": "20/20",
+        "browser_tests": "59/59",
+        "cache_hit_rate": 0.9802,
+        "estimated_cost_usd": 0.1655,
+        "peak_context_tokens": 202924,
+        "wall_clock_seconds": 1361
+      },
+      "live_compact": {
+        "stages": "20/20",
+        "browser_tests": "59/59",
+        "cache_hit_rate": 0.9692,
+        "estimated_cost_usd": 0.0958,
+        "peak_context_tokens": 104970,
+        "wall_clock_seconds": 1308
+      },
+      "cost_delta": -0.421,
+      "source": "https://github.com/Haoming9527/opencode-live-compact/blob/main/benchmarks/results/2026-11-09-webbench-react-20/README.md"
+    },
+    "limitations": [
+      "one comparison pair per suite",
+      "estimated usage cost, not provider invoice",
+      "Web-Bench did not exercise native compaction pauses",
+      "results are OpenCode evidence, not DSH runtime results"
+    ]
+  },
+  "artifacts": {
+    "docs/slide-results.jpg": {
+      "bytes": 305638,
+      "sha256": "75a67a4a953a7c8d89d9dea0f7874b56368ac5571b706012b682fe9b63940f8e"
+    },
+    "docs/benchmarks-opencode-2026-11-09.png": {
+      "bytes": 1125697,
+      "sha256": "5b2b0ce04fa6e405d9ce88835d02d740d928ef942dd837338a5054ee307cb84a"
+    }
+  }
+}

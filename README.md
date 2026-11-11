@@ -4,6 +4,18 @@
 
 版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 测评实证
+
+完整数据、原始口径和限制见 [docs/benchmarks.md](docs/benchmarks.md)，结构化数字见 [docs/benchmark-results.json](docs/benchmark-results.json)。
+
+- **1.0.5 失忆对比**：同一真实 DeepSeek 会话，15 道回忆题两边都是 15/15；Live Compact 的日志中段细节两次都是 3/3，原版一次 1/3、一次 3/3。
+- **历史 DSH 长链路**：早期 150 道短题和 20 道 WebUniverse 连续任务都保留了原版／Live Compact 对照表；它们是历史实测，不是 1.1.5 的新验收。
+- **OpenCode 移植参考**：独立项目在 OpenCode 2.2.6 + GPT-6 Luna 上跑 Aider 150 和 Web-Bench React 20，任务分别 150/150、20/20 且最终浏览器测试 59/59；估算费用分别低 14.3% 和 42.1%。这是 OpenCode 项目的结果，用来说明移植后的可复核测评方法，不冒充 DSH 运行结果。
+
+![早期 DSH 两场实测](docs/slide-results.jpg)
+
+![OpenCode Aider / Web-Bench 对照](docs/benchmarks-opencode-2026-11-09.png)
+
 ## 云端和本地怎么用
 
 - **用 DeepSeek、GLM 这类云端 API**，按下面的命令安装即可。先看答案是否正确，再一起看缓存命中、未命中输入和实际费用。命中率的百分比不是费用本身，输入变少时要连同 token 数一起比较。
