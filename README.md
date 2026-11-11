@@ -162,7 +162,7 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 
 插件小切参数在每次轮后维护开始时取得本引擎的一致快照，保存后下一次维护生效，多个引擎互不覆盖。官方大压缩参数沿用宿主的构造时快照，保存后需要重建引擎或会话。宿主支持的 `retainRatio`、`maxTokens`、摘要模型路由、`modelPolicies`、溢出重试等配置继续由宿主校验并保留；`retainRatio` 与 `retainTokens` 互斥。
 
-接管开关只影响未来加载的官方预设。新预设按 **预设引擎显式配置 > 根插件显式配置 > 有效环境变量 > 默认值** 取值；已有预设保留加载时的数值，根设置后续修改需要重新加载预设。原生客户端 slot、资源声明和安装方式沿用现有接口。
+接管开关只影响未来加载的预设及 `compaction` 隔离组；直接注册预设和 Include 加载的组也按原位换包。新预设按 **预设引擎显式配置 > 根插件显式配置 > 有效环境变量 > 默认值** 取值；已有预设保留加载时的数值，根设置后续修改需要重新加载预设。原生客户端 slot、资源声明和安装方式沿用现有接口。
 
 每个新的 `compact-checkpoint` 只让轮后小切跳过一次，`spine-checkpoint` 不触发这个跳过。
 
@@ -208,7 +208,7 @@ dsh-live-compact --version
 
 需要 DSH `>=0.2.0-rc.2 <0.3.0`。装上后跑长任务，日志里出现 `spine cut …ms` 才算这刀生效。页面：https://download.merkyorlynn.com/live-compact.html
 
-DSH-TUI 同样换不掉预设里的原版压缩，先不要装。
+DSH-TUI 先不要装。本包已补预设压缩隔离组的接管；TUI 仍需适配 `spine-checkpoint` 的局部卡片显示，两仓联合验收后再开放支持。
 
 被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`。Unix 权限为目录 0700 / 文件 0600；Windows 新建/修正后的备份允许当前用户、SYSTEM、Administrators，历史文件及缓存限制见上面的 ACL 说明。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。插件自己不会去搜。
 

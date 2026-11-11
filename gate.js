@@ -66,8 +66,9 @@ function rewriteNode(node, loadable, rootConfig) {
   return next;
 }
 
-export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}) {
-  if (!isPreset(config)) return config;
+export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}, entry) {
+  const group = Array.isArray(config) && entry?.group === true && entry.isolate?.compaction === true;
+  if (!isPreset(config) && !group) return config;
   return rewriteNode(config, loadable, rootConfig);
 }
 
@@ -75,6 +76,7 @@ function engineEntry(node) {
   if (!node || typeof node !== "object") return null;
   if (node.name === OURS) return node;
   const nested = [];
+  if (Array.isArray(node)) nested.push(...node);
   if (Array.isArray(node.plugins)) nested.push(...node.plugins);
   if (Array.isArray(node.config)) nested.push(...node.config);
   else if (node.config && typeof node.config === "object") nested.push(node.config);
@@ -113,13 +115,14 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
     return typeof value === "boolean" ? value : value.get();
   };
   const seen = new Set();
-  gate.disposeListener = ctx.on("internal/config", function (_raw, next) {
+  gate.disposeListener = ctx.on("internal/config", function (fiber, next) {
     const resolved = next();
     if (!gate.active || !enabled()) return resolved;
     const loadable = packageLoadable();
-    const rewritten = rewritePresetConfig(resolved, loadable, config);
-    const id = rewritten?.id || rewritten?.config?.id;
-    if (isPreset(resolved) && id && !seen.has(String(id))) {
+    const entry = fiber?.entry?.options;
+    const rewritten = rewritePresetConfig(resolved, loadable, config, entry);
+    const id = rewritten?.id || rewritten?.config?.id || entry?.id;
+    if (rewritten !== resolved && id && !seen.has(String(id))) {
       seen.add(String(id));
       const engine = engineEntry(rewritten);
       if (engine) {

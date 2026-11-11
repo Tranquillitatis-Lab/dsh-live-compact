@@ -25,6 +25,6 @@ const npmCli = [
   join(dirname(node), "../lib/node_modules/npm/bin/npm-cli.js"),
 ].find(file => file?.endsWith("npm-cli.js") && existsSync(file));
 assert.ok(npmCli, "compat gate requires npm-cli.js beside Node or via npm_execpath");
-execFileSync(node, ["--test", "test/settings-integration.test.mjs"], { cwd: process.cwd(), stdio: "inherit" });
+execFileSync(node, ["--test", "test/settings-integration.test.mjs", "test/preset-group.test.mjs"], { cwd: process.cwd(), stdio: "inherit" });
 execFileSync(node, [npmCli, "run", "test:gate"], { cwd: process.cwd(), stdio: "inherit" });
 console.log("Cordis 4.1.0 / DSH 0.2.2-rc.1 compatibility gate passed");
