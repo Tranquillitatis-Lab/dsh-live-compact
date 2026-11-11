@@ -6,9 +6,11 @@
 
 - **1.0.5 失忆对比**：同一会话埋入 13 条约束和 1 条报错，再灌入 6 轮日志，最后禁止读文件、只凭记忆回答。两边 15 道回忆题都为 15/15；Live Compact 在日志中段细节回忆上两次都是 3/3，原版一次 1/3、一次 3/3，后一轮依靠解压会话日志并多调用了 10 次工具。
 - **早期长链路实测**：150 道 Aider 风格短题和 20 道 WebUniverse 长任务都记录过原版与 Live Compact 对照；详情、版本和限制见下文。
-- **OpenCode 独立对照**：`Haoming9527/opencode-live-compact` 在 OpenCode 2.2.6 + GPT-6 Luna 上，用同一协议跑了 Aider 150 和 Web-Bench React 20。两组任务都完成，估算费用分别低 14.3% 和 42.1%；这是 OpenCode 项目的结果，作为可复核的移植案例引用，不冒充 DSH 运行结果。
+- **OpenCode 独立对照**：[`Haoming9527/opencode-live-compact`](https://github.com/Haoming9527/opencode-live-compact) 在 OpenCode 2.2.6 + GPT-6 Luna 上，用同一协议跑了 Aider 150 和 Web-Bench React 20。两组任务都完成，估算费用分别低 14.3% 和 42.1%；这是 OpenCode 项目的结果，作为可复核的移植案例引用，不冒充 DSH 运行结果。
 
 ![早期 DSH 两场实测](slide-results.jpg)
+
+![OpenCode Aider / Web-Bench 对照](benchmarks-opencode-2026-11-09.png)
 
 ## DSH Live Compact 历史实测
 

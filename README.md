@@ -10,9 +10,11 @@
 
 - **1.0.5 失忆对比**：同一真实 DeepSeek 会话，15 道回忆题两边都是 15/15；Live Compact 的日志中段细节两次都是 3/3，原版一次 1/3、一次 3/3。
 - **历史 DSH 长链路**：早期 150 道短题和 20 道 WebUniverse 连续任务都保留了原版／Live Compact 对照表；它们是历史实测，不是 1.1.5 的新验收。
-- **OpenCode 移植参考**：独立项目在 OpenCode 2.2.6 + GPT-6 Luna 上跑 Aider 150 和 Web-Bench React 20，任务分别 150/150、20/20 且最终浏览器测试 59/59；估算费用分别低 14.3% 和 42.1%。这是 OpenCode 项目的结果，用来说明移植后的可复核测评方法，不冒充 DSH 运行结果。
+- **OpenCode 移植参考**：独立项目 [opencode-live-compact](https://github.com/Haoming9527/opencode-live-compact) 把插件移植到 OpenCode，和 OpenCode 自带的 autocompact 做了对照：在 OpenCode 2.2.6 + GPT-6 Luna 上跑 Aider 150 和 Web-Bench React 20，任务分别 150/150、20/20 且最终浏览器测试 59/59；估算费用分别低 14.3% 和 42.1%。这是 OpenCode 项目的结果，用来说明移植后的可复核测评方法，不冒充 DSH 运行结果。
 
 ![早期 DSH 两场实测](docs/slide-results.jpg)
+
+![OpenCode Aider / Web-Bench 对照](docs/benchmarks-opencode-2026-11-09.png)
 
 ## 云端和本地怎么用
 
