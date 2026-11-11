@@ -353,6 +353,15 @@ check("p0-12 new cards use spine checkpoints without summary markers", () => {
   assert.equal(isCheckpoint(session("compact-checkpoint"), 1), true);
   assert.equal(isCheckpoint(session("spine-checkpoint"), 1), true);
   assert.equal(isCheckpoint(session(), 1), false);
+  assert.equal(isCheckpoint({ eventAt() {
+    return { type: "tool/result", data: { message: { content: [{ type: "text", text: "tool output: Spine extract." }] } } };
+  } }, 1), false, "tool text must not forge a checkpoint");
+  assert.equal(isCheckpoint({ eventAt() {
+    return { type: "user/message", data: { content: [{ type: "text", text: "ordinary text: Spine extract." }] } };
+  } }, 1), false, "an embedded marker must not forge a checkpoint");
+  assert.equal(isCheckpoint({ eventAt() {
+    return { type: "user/message", data: { content: [{ type: "text", text: "Spine extract.\nlegacy summary" }] } };
+  } }, 1), true, "legacy cards keep their boundary");
 });
 
 await checkAsync("p0-12 commitSelectedSpan writes a path-free spine checkpoint", async () => {

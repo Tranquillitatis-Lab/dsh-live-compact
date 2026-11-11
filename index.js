@@ -170,7 +170,27 @@ function isCheckpoint(session, seq) {
   // 自己的卡片，以及已经写过的官方标记，都要停住。新卡片不再用官方标记。
   // Stop on our own cards and on older official markers. New cards do not use the official marker.
   if (kind === SPINE_SOURCE_KIND || kind === "compact-checkpoint") return true;
-  return eventText(session, seq).includes(MARK);
+  // The legacy text marker is only meaningful on a user/message card and only
+  // at the beginning of its text. A tool result or an ordinary sentence that
+  // merely mentions the marker must not create a permanent cut boundary.
+  if (event?.type !== "user/message") return false;
+  const text = eventText(session, seq).trimStart();
+  return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
+}
+
+function latestTurnCompleted(events) {
+  let lastStart = -1;
+  let lastEnd = -1;
+  let reason;
+  for (let index = 0; index < (events || []).length; index += 1) {
+    const event = events[index];
+    if (event?.type === "turn/start") lastStart = index;
+    if (event?.type === "turn/end") {
+      lastEnd = index;
+      reason = event.data?.reason?.kind;
+    }
+  }
+  return lastEnd > lastStart && reason === "completed";
 }
 
 function spineCheckpointSource(compactionId) {
@@ -583,7 +603,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const state = this.stateFor(agent);
         if (state.warming) return;
         const events = agent.session.snapshotEvents();
-        const done = events.some((event) => event.type === "turn/end" && event.data?.reason?.kind === "completed");
+        const done = latestTurnCompleted(events);
         if (!done) return;
         state.warming = true;
         const job = this.finishTurn(agent, events, { deferCapture: true })
@@ -790,7 +810,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       state.retryScheduled = false;
       if (state.warming) return;
       const events = agent.session.snapshotEvents();
-      const done = events.some((event) => event.type === "turn/end" && event.data?.reason?.kind === "completed");
+      const done = latestTurnCompleted(events);
       if (!done) return;
       state.warming = true;
       const job = this.finishTurn(agent, events, { deferCapture: true })
