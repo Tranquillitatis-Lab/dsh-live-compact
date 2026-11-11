@@ -56,6 +56,7 @@ const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
+const SHADOW_WORKER_TIMEOUT_MS = 30000;
 
 const shadowWorkers = new Map();
 
@@ -88,7 +89,10 @@ function shadowWorkerFor(root) {
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
-    for (const { reject } of entry.pending.values()) reject(error);
+    for (const { reject, timer } of entry.pending.values()) {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    }
     entry.pending.clear();
     removeEntry();
     worker.terminate().catch(() => {});
@@ -96,6 +100,7 @@ function shadowWorkerFor(root) {
   worker.on("message", (message) => {
     const task = entry.pending.get(message?.id);
     if (!task) return;
+    if (task.timer) clearTimeout(task.timer);
     entry.pending.delete(message.id);
     if (message?.ok) {
       task.resolve(message.result);
@@ -130,15 +135,39 @@ function runShadowWorker(payload) {
   }
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
-    entry.pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      const error = Object.assign(new Error("spine: shadow worker timed out"), { code: "ESHADOWWORKER" });
+      failShadowWorker(entry, error);
+    }, SHADOW_WORKER_TIMEOUT_MS);
+    timer.unref?.();
+    entry.pending.set(id, { resolve, reject, timer });
     try {
       entry.worker.postMessage({ id, payload });
     } catch (error) {
+      clearTimeout(timer);
       entry.pending.delete(id);
       reject(error);
       entry.scheduleIdleExit();
     }
   });
+}
+
+function failShadowWorker(entry, error) {
+  if (!entry || entry.retired) return;
+  entry.retired = true;
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+  for (const { reject, timer } of entry.pending.values()) {
+    if (timer) clearTimeout(timer);
+    reject(error);
+  }
+  entry.pending.clear();
+  for (const [key, value] of shadowWorkers) {
+    if (value === entry) shadowWorkers.delete(key);
+  }
+  entry.worker.terminate().catch(() => {});
 }
 
 function recoveryRetryable(record, dir, toolCallId) {
@@ -148,6 +177,11 @@ function recoveryRetryable(record, dir, toolCallId) {
   // must remain fail-closed rather than being silently overwritten.
   if (record?.reason === "missing-file") return !existsSync(join(dir, `${rawName(toolCallId)}.meta.json`));
   return false;
+}
+
+function captureErrorRetryable(error) {
+  const code = error?.code;
+  return code === "ESHADOWBUSY" || ["EAGAIN", "EBUSY", "EINTR", "EIO"].includes(code);
 }
 
 function eventContent(session, seq) {
@@ -387,8 +421,6 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   const cutEnd = span ? reservedCutEnd(visible[span.start].index, first) : null;
   if (span && cutEnd === null) return null;
   if (cutEnd !== null) {
-    const keptEnd = visible[span.end].index;
-    for (let index = visible[span.start].index; index <= keptEnd; index += 1) keptTokens += priced[index].tokens;
     end = cutEnd;
     while (end >= first && classifications[end].isGenuineUserBoundary && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
     if (floorCard >= 0 && end <= floorCard) return null;
@@ -476,6 +508,9 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   };
   let usedLongCut = false;
   let picked = null;
+  const fallbackWithoutLongRead = () => context.disableLongRead
+    ? null
+    : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true });
   if (longSpan) {
     const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
     if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
@@ -501,27 +536,39 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
         }
       }
     }
-    if (pairStart < 0) return null;
-    if (usedLongCut && pairStart < longSpan.start) return null;
-    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return null;
-    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return null;
+    if (pairStart < 0) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (usedLongCut && pairStart < longSpan.start) return fallbackWithoutLongRead();
+    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return usedLongCut ? fallbackWithoutLongRead() : null;
     picked.start = pairStart;
   }
-  if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;
+  if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();
   const start = picked.start;
   end = picked.end;
   const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
   const pieces = spanPieces(start, end);
-  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) return null;
+  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) {
+    return usedLongCut ? fallbackWithoutLongRead() : null;
+  }
   let card = picked.pointerOnly
     ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
     : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, end), pieces, extras);
-  if (card.ok !== true) return null;
+  if (card.ok !== true) return usedLongCut ? fallbackWithoutLongRead() : null;
   card = attachBackupHint(card, freshShadowFile("cut", key));
   if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
   if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return null;
   let after = 0;
   for (let index = end + 1; index < priced.length; index += 1) after += priced[index].tokens;
+  // `keptTokens` must describe retained rounds to the right of the actual
+  // cut. A long-read cut can be newer than the ordinary rounds selected above;
+  // counting those older rounds made `tailBeyondKept` negative and disabled
+  // the tail guard.
+  for (const round of rounds) {
+    const roundStart = visible[round.start]?.index;
+    const roundEnd = visible[round.end]?.index;
+    if (!Number.isInteger(roundStart) || !Number.isInteger(roundEnd) || roundStart <= end) continue;
+    for (let index = roundStart; index <= roundEnd; index += 1) keptTokens += priced[index].tokens;
+  }
   let prefix = 0;
   for (let index = 0; index < start; index += 1) prefix += priced[index].tokens;
   return { start: nodes[start], end: nodes[end], tokens, after, keptTokens, card, prefix };
@@ -846,14 +893,25 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       await agent.runMaintenance(async (agentSignal) => {
         const op = AbortSignal.any([agentSignal, signal]);
         let measurement = this.ctx.tokenMeter.measure(agent.session);
-        if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) return;
+        const settleTurnBaseline = () => {
+          state.turnBase = measurement.totalTokens;
+          state.maxTurnGrowth = 0;
+        };
+        if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) {
+          settleTurnBaseline();
+          return;
+        }
         // Restored cards establish a baseline; a live card still skips once,
         // even when maintenance or engine construction is delayed.
         if (skipLiveOfficialCompaction(agent.session)) {
           this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
+          settleTurnBaseline();
           return;
         }
-        if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) return;
+        if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
+          settleTurnBaseline();
+          return;
+        }
         this.ensurePruneGuard();
         const resolved = this.engineFor(agent);
         if (state.engine !== resolved.engine || state.engineSource !== resolved.source) {
@@ -935,6 +993,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         if (drainNotes.length) flushDrainStats(shadowDirectory(), drainNotes, { sid: state.key, drain });
         state.turnBase = measurement.totalTokens;
+        state.maxTurnGrowth = 0;
         await this.ctx.sessions?.flush?.(agent.session);
         this.rememberPrefix(agent);
       });
@@ -1267,7 +1326,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       }
       const message = error instanceof Error ? error.message : String(error);
       this.ctx?.logger?.warn?.(`spine: raw backup failed: ${message}`);
-      const record = { ok: false, reason: "unwritable", toolCallId: id, retryable: error?.code === "ESHADOWBUSY" };
+      const record = { ok: false, reason: "unwritable", toolCallId: id, retryable: captureErrorRetryable(error) };
       this.rawSeen.set(mapKey, record);
       return record;
     }
@@ -1787,7 +1846,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       role: message?.role ?? message?.message?.role,
       text: messageText(message),
     })));
-    const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
+    const facts = [...(trunk.hardFacts || []), ...(trunk.missingFacts || [])];
     const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
     return this.summarizeOfficial({
       ...input,

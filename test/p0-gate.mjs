@@ -595,10 +595,9 @@ for (const item of writeCases) {
         actions.filter((action) => action.kind === "file").length,
         item.fileActions,
       );
-      assert.deepEqual(
-        new Set(actions.filter((action) => action.kind === "file").map((action) => action.path)),
-        new Set(filesUnder(root)),
-      );
+      const protectedFiles = actions.filter((action) => action.kind === "file").map((action) => action.path);
+      assert.equal(protectedFiles.every((path) => String(path).endsWith(".tmp")), true);
+      assert.equal(protectedFiles.every((path) => String(path).startsWith(`${realpathSync(root)}${sep}`)), true);
       if (item.name === "saveShadow") {
         const written = filesUnder(root).filter((file) => file.endsWith("p0-backup.txt"));
         assert.equal(written.length, 1);

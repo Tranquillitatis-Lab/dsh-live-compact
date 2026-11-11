@@ -808,7 +808,9 @@ test("UTF-8, Buffer, raw, owner and metadata scopes, overwrite and partial failu
   writeShadowFile(file, Buffer.from("界".repeat(4)), {}, { root: f.dir }); // +12, do not subtract overwrite
   const raw = captureOwnedToolResult({ dir: join(f.dir, "mine"), root: f.dir, toolCallId: "raw", text: "界".repeat(12) });
   assert.equal(raw.ok, true); // +36, no owner/meta charge
-  assert.equal(captureToolResult({ dir: join(f.dir, "mine"), root: f.dir, toolCallId: "raw", text: "ignored" }).existed, true);
+  const duplicate = captureToolResult({ dir: join(f.dir, "mine"), root: f.dir, toolCallId: "raw", text: "ignored" });
+  assert.equal(duplicate.ok, false);
+  assert.equal(duplicate.reason, "duplicate-tool-call-id");
   assert.equal(rotation(f).used, 72);
   assert.equal(f.calls.readdir.length, 1);
   const failure = join(f.dir, "official-2-22222222.txt");
@@ -817,19 +819,20 @@ test("UTF-8, Buffer, raw, owner and metadata scopes, overwrite and partial failu
     write(fd, body) { writeFileSync(fd, body.slice(0, 1)); throw Object.assign(new Error("partial"), { code: "ENOSPC" }); },
   }), /partial/);
   assert.equal(existsSync(failure), false);
-  assert.equal(rotation(f).used, 102); // failed write still charged all 30
+  assert.equal(rotation(f).used, 102); // failed writes remain conservatively charged
   assert.throws(() => writeShadowFile(failure, Buffer.alloc(20), {}, {
     root: f.dir,
     write(fd, body) { writeFileSync(fd, body.subarray(0, 2)); throw new Error("partial again"); },
     unlink() { throw new Error("cleanup denied"); },
   }), /cleanup failed/);
-  assert.equal(statSync(failure).size, 2);
+  assert.equal(existsSync(failure), false);
+  assert.equal(readdirSync(f.dir).some((name) => name.startsWith(`.${failure.split("/").at(-1)}-`)), true);
   assert.equal(rotation(f).used, 122);
   // Only a full scan can correct overcounting, including external deletions.
   unlinkSync(file);
   const recalibrated = rotation(f, 678);
   assert.equal(recalibrated.estimated, undefined);
-  assert.equal(recalibrated.used, 38);
+  assert.equal(recalibrated.used, 36);
 });
 
 test("metadata write failure retains the raw byte charge after successful cleanup", (t) => {
@@ -838,7 +841,7 @@ test("metadata write failure retains the raw byte charge after successful cleanu
   rotation(f);
   assert.throws(() => captureToolResult({ dir: join(f.dir, "mine"), root: f.dir,
     toolCallId: "meta-failure", text: "界".repeat(10), access: { runner({ kind, path }) {
-      if (kind === "file" && path.endsWith(".meta.json")) return false;
+      if (kind === "file" && path.includes(".meta.json")) return false;
       return true;
     } },
   }), (error) => error.code === "ESHADOWACCESS");
@@ -1205,7 +1208,7 @@ test("directory replacement during a failed body write cannot unlink a replaceme
   assert.equal(readFileSync(file, "utf8"), "replacement");
   assert.equal(existsSync(join(f.dir, LOCK)), true);
   assert.equal(existsSync(join(old, LOCK)), true);
-  assert.equal(readFileSync(join(old, "cut-1-11111111.txt"), "utf8"), "");
+  assert.equal(existsSync(join(old, "cut-1-11111111.txt")), false);
 });
 
 // Each child has a persistent inbox, so no barrier event can be lost while the

@@ -20,6 +20,10 @@ import {
 
 export const PRUNE_MARKER = "[... tool result middle pruned ...]";
 
+function transientCaptureError(error) {
+  return ["ESHADOWBUSY", "EAGAIN", "EBUSY", "EINTR", "EIO"].includes(error?.code);
+}
+
 export function contentHash(text) {
   const hash = createHash("sha256");
   hash.update(typeof text === "string" ? Buffer.from(text, "utf8") : text);
@@ -122,7 +126,7 @@ export function captureToolResult(options) {
     ensureShadowDir(dir, access);
   } catch (error) {
     if (error?.code === "ESHADOWACCESS" || error?.code === "ESHADOWCLEANUP") throw error;
-    return { ok: false, reason: "unwritable", toolCallId };
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
   }
   let entered = false;
   try {
@@ -131,7 +135,7 @@ export function captureToolResult(options) {
       return captureToolResultLocked({ ...options, root });
     });
   } catch (error) {
-    if (!entered || error?.code === "ESHADOWBUSY") return { ok: false, reason: "unwritable", toolCallId, retryable: error?.code === "ESHADOWBUSY" };
+    if (!entered || transientCaptureError(error)) return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
     throw error; // In particular, preserve exceptions from failed raw cleanup.
   }
 }
@@ -153,6 +157,8 @@ function captureToolResultLocked({
   const body = String(text ?? "");
   const file = join(dir, rawName(toolCallId));
   const metaPath = `${file}.meta.json`;
+  const bytes = Buffer.from(body, "utf8");
+  const hash = contentHash(bytes);
 
   if (!existsSync(file) && body.includes(PRUNE_MARKER)) {
     return { ok: false, reason: "already-pruned", toolCallId };
@@ -163,10 +169,24 @@ function captureToolResultLocked({
   let createdRaw = false;
 
   try {
-    if (existsSync(file)) return readProtectedExisting();
-
-    const bytes = Buffer.from(body, "utf8");
-    const hash = contentHash(bytes);
+    if (existsSync(file)) {
+      const existing = readProtectedExisting();
+      if (!existing.ok) {
+        // A raw without its meta marker is an incomplete publication. When
+        // the current event still has the original body, discard the orphan
+        // and rebuild the pair; a malformed/valid meta file remains fail-closed.
+        if (existing.reason === "missing-meta" && !body.includes(PRUNE_MARKER)) {
+          discardShadowFiles([file, metaPath], new Error("incomplete raw/meta pair"));
+        } else {
+          return existing;
+        }
+      }
+      if (existing.ok && body.includes(PRUNE_MARKER)) return existing;
+      if (existing.ok && (existing.sha256 !== hash || existing.bytes !== bytes.length)) {
+        return { ok: false, reason: "duplicate-tool-call-id", toolCallId, retryable: false };
+      }
+      if (existing.ok) return existing;
+    }
 
     writeShadowFile(file, bytes, access, { exclusive: true, root });
     createdRaw = true;
@@ -208,7 +228,7 @@ function captureToolResultLocked({
       return readProtectedExisting();
     }
 
-    return { ok: false, reason: "unwritable", toolCallId, retryable: error?.code === "ESHADOWBUSY" };
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
   }
 }
 

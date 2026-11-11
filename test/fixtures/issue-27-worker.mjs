@@ -27,7 +27,7 @@ function save(bytes, barrier) {
   const file = join(root, key, `cut-${++ordinal}-aaaaaaaa.txt`);
   const logs = [];
   const access = barrier ? { runner({ kind, path }) {
-    if (kind === "file" && path.endsWith(".txt")) {
+    if (kind === "file") {
       send({ event: "admitted", pid: process.pid });
       const wait = new Int32Array(new SharedArrayBuffer(4));
       const deadline = Date.now() + 10000;
