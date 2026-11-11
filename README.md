@@ -14,8 +14,6 @@
 
 ![早期 DSH 两场实测](docs/slide-results.jpg)
 
-![OpenCode Aider / Web-Bench 对照](docs/benchmarks-opencode-2026-11-09.png)
-
 ## 云端和本地怎么用
 
 - **用 DeepSeek、GLM 这类云端 API**，按下面的命令安装即可。先看答案是否正确，再一起看缓存命中、未命中输入和实际费用。命中率的百分比不是费用本身，输入变少时要连同 token 数一起比较。

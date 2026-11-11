@@ -10,8 +10,6 @@
 
 ![早期 DSH 两场实测](slide-results.jpg)
 
-![OpenCode Aider / Web-Bench 对照](benchmarks-opencode-2026-11-09.png)
-
 ## DSH Live Compact 历史实测
 
 ### 1.0.5 失忆对比
