@@ -13,9 +13,10 @@ import SessionProjections from "@deepseek-ai/dsh-session-projection";
 import { STOCK_ENGINE } from "../adapter.js";
 import { installPresetGate } from "../gate.js";
 
-// Run through test:compat41. Real registry/Loader/Include, no model or user profile.
+// Run through test:compat41. This mirrors dsh-deep-ptc-mode v1.8.2's
+// `deep-ptc` compaction group: the pruner is isolated alongside compaction.
 for (const include of [false, true]) {
-  test(`direct registry registration takes over ${include ? "included" : "inline"} compaction groups`, async (t) => {
+  test(`direct registry registration takes over Deep PTC's ${include ? "included" : "inline"} compaction group`, async (t) => {
     const ctx = new Context();
     const directory = mkdtempSync(join(tmpdir(), "spine-preset-group-"));
     t.after(async () => {
@@ -28,12 +29,12 @@ for (const include of [false, true]) {
     ctx.loader.builtins.group = { apply: Group, inject: ["loader"] };
     await ctx.plugin(SessionProjections).await();
     await ctx.plugin(Agents).await();
-    await ctx.plugin(AgentPresets, { default: "fixture" }).await();
+    await ctx.plugin(AgentPresets, { default: "deep-ptc" }).await();
     const mounted = [];
     ctx.loader.internal = {
       async import(name) {
         if (name === "include-fixture") return { default: Include };
-        assert.ok([STOCK_ENGINE, "dsh-live-compact", "command-fixture", "pruner-fixture"].includes(name), name);
+        assert.ok([STOCK_ENGINE, "dsh-live-compact", "@deepseek-ai/dsh-command-compact", "@deepseek-ai/dsh-compaction-tool-result-pruner"].includes(name), name);
         return { apply(owner, config) {
           mounted.push({ name, config });
           if (name === STOCK_ENGINE || name === "dsh-live-compact") owner.provide("compaction", { name });
@@ -47,11 +48,15 @@ for (const include of [false, true]) {
     await gate.await();
     const rows = [{
       id: "compaction", name: "cordis:group", group: true,
-      isolate: { compaction: true },
+      isolate: { compaction: true, toolResultPruner: true },
       config: [
         { id: "compaction-basic", name: STOCK_ENGINE, config: { thresholdRatio: 0.2, retainRatio: 0.05 } },
-        { id: "command-compact", name: "command-fixture" },
-        { id: "tool-result-pruner", name: "pruner-fixture" },
+        { id: "command-compact", name: "@deepseek-ai/dsh-command-compact" },
+        {
+          id: "tool-result-pruner",
+          name: "@deepseek-ai/dsh-compaction-tool-result-pruner",
+          config: { thresholdChars: 8192, headChars: 4096, tailChars: 1024 },
+        },
       ],
     }];
     const original = structuredClone(rows);
@@ -60,9 +65,9 @@ for (const include of [false, true]) {
     const plugins = include
       ? [{ id: "fixture-plugins", name: "include-fixture", config: { path: pathToFileURL(file).href } }]
       : rows;
-    await ctx.agentPresets.register({ id: "fixture", plugins });
-    assert.deepEqual((await ctx.agentPresets.list()).map((row) => row.id), ["fixture"]);
-    assert.deepEqual(mounted.map((row) => row.name).sort(), ["command-fixture", "dsh-live-compact", "pruner-fixture"]);
+    await ctx.agentPresets.register({ id: "deep-ptc", plugins });
+    assert.deepEqual((await ctx.agentPresets.list()).map((row) => row.id), ["deep-ptc"]);
+    assert.deepEqual(mounted.map((row) => row.name).sort(), ["@deepseek-ai/dsh-command-compact", "@deepseek-ai/dsh-compaction-tool-result-pruner", "dsh-live-compact"]);
     const engine = mounted.find((row) => row.name === "dsh-live-compact");
     assert.equal(engine.config.minTokens, 9000);
     assert.equal(engine.config.thresholdRatio, 0.2);
@@ -72,12 +77,12 @@ for (const include of [false, true]) {
     assert.equal(ctx.get("compaction"), undefined, "the preset engine must not leak into the host realm");
 
     enabled = false;
-    await ctx.agentPresets.register({ id: "disabled", plugins });
+    await ctx.agentPresets.register({ id: "deep-ptc-disabled", plugins });
     assert.equal(mounted.filter((row) => row.name === STOCK_ENGINE).length, 1);
     assert.equal(mounted.filter((row) => row.name === "dsh-live-compact").length, 1);
     enabled = true;
     await gate.dispose();
-    await ctx.agentPresets.register({ id: "disposed", plugins });
+    await ctx.agentPresets.register({ id: "deep-ptc-disposed", plugins });
     assert.equal(mounted.filter((row) => row.name === STOCK_ENGINE).length, 2);
     assert.equal(warnings.length, 0, warnings.join("\n"));
   });
