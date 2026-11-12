@@ -1173,9 +1173,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const header = agent?.session?.requestHeader?.()?.config || {};
     const context = agent?.session?.requestContext?.() || {};
     const provider = header.provider || context.provider || "";
+    const model = header.model || context.model || "";
     const listed = this.listedProviders();
     const baseURL = resolveProviderBaseURL({
       provider,
+      model,
       headerURL: header.baseURL || context.baseURL || "",
       listed,
       layers: this.providerLayers(),
@@ -1247,10 +1249,21 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       try {
         const loaded = createRequire(anchor)("@earendil-works/pi-ai/providers/all");
         const list = typeof loaded.builtinProviders === "function" ? loaded.builtinProviders() : [];
-        return list.map((entry) => ({
-          id: entry?.id || "",
-          baseURL: entry?.baseUrl || entry?.baseURL || "",
-        })).filter((entry) => entry.id && entry.baseURL);
+        return list.map((entry) => {
+          let models = [];
+          try {
+            const declared = typeof entry?.getModels === "function" ? entry.getModels() : entry?.models || [];
+            models = (Array.isArray(declared) ? declared : []).map((model) => ({
+              id: model?.id || "",
+              baseURL: model?.baseUrl || model?.baseURL || "",
+            })).filter((model) => model.id && model.baseURL);
+          } catch {}
+          return {
+            id: entry?.id || "",
+            baseURL: entry?.baseUrl || entry?.baseURL || "",
+            models,
+          };
+        }).filter((entry) => entry.id && (entry.baseURL || entry.models.length));
       } catch {}
     }
     return [];

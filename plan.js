@@ -734,11 +734,18 @@ export function providerURLFromPatch(text, provider) {
 
 // 内置目录只在这家没有自己的地址时使用。调用方传入 {id, baseURL}，这里不读包。
 // Use a built-in catalog URL only when this provider has no URL of its own.
-export function catalogProviderURL(provider, catalog) {
+export function catalogProviderURL(provider, catalog, model = "") {
   const name = String(provider || "");
   if (!name || !catalog) return "";
   const list = Array.isArray(catalog) ? catalog : [];
   const match = list.find((entry) => entry?.id === name || entry?.provider === name);
+  const modelName = String(model || "");
+  if (match && modelName) {
+    const models = Array.isArray(match.models) ? match.models : [];
+    const modelMatch = models.find((entry) => entry?.id === modelName || entry?.model === modelName);
+    const modelURL = modelMatch?.baseURL || modelMatch?.baseUrl || "";
+    if (modelURL) return String(modelURL);
+  }
   return String(match?.baseURL || match?.baseUrl || "");
 }
 
@@ -748,6 +755,7 @@ export function catalogProviderURL(provider, catalog) {
 // Official DeepSeek and the built-in catalog apply only when the profile has no URL. Empty stays unresolved.
 export function resolveProviderBaseURL({
   provider = "",
+  model = "",
   headerURL = "",
   listed = [],
   layers = [],
@@ -775,7 +783,7 @@ export function resolveProviderBaseURL({
   if (provider === "deepseek-account" && launch) return launch;
   const fallback = fallbackProviderURL(provider);
   if (fallback) return fallback;
-  return catalogProviderURL(provider, catalog);
+  return catalogProviderURL(provider, catalog, model);
 }
 
 export function resolveEngine({ provider = "", baseURL = "", env = process.env } = {}) {

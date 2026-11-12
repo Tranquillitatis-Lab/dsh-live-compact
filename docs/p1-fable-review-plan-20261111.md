@@ -14,6 +14,8 @@ This branch is a new P1 candidate. It must not merge PR #44 or publish a release
 
 ### A. Raw identity and selection correctness
 
+6. **Added from open issue #45:** resolve BYOK providers whose catalog keeps the endpoint at model level. Match the exact `(provider, model)` entry for cloud/local classification without changing the host's actual request route.
+
 1. **Implemented:** detect same-session reuse of a `toolCallId` with different raw content. Identical duplicate events remain idempotent; conflicting content becomes a non-retryable fail-closed record and cannot be pruned or used for a cut.
 2. **Implemented:** if a selected long-read cut fails pairing, pointer, failure-diagnostic, or card validation, fall back to the ordinary legal cut search instead of returning no cut immediately.
 3. **Implemented:** keep `keptTokens` and `tailBeyondKept` in the same coordinate system for long-read cuts.
@@ -48,6 +50,7 @@ This branch is a new P1 candidate. It must not merge PR #44 or publish a release
 - `npm run test:live-gate` passes with clean counters.
 - `git diff --check`, package dry-run, and public-export checks pass.
 - No merge, release, or default TUI compatibility claim. Windows x64/ARM and real Deep PTC/TUI joint evidence remain separate acceptance gates.
+- Issue #45 is included in this candidate; its original issue remains open until the candidate is reviewed and the previous PR chain is complete.
 
 ## Delivery
 
