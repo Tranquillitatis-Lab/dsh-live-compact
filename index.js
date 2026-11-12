@@ -39,6 +39,7 @@ import {
 } from "./shadow.js";
 import { buildSendLess, decideThunder } from "./thunder.js";
 import { inCooldown, skipLiveOfficialCompaction } from "./cooldown.js";
+import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
 
 const { BasicCompactionEngine } = await loadBase();
 const { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } = await loadCompaction();
@@ -564,6 +565,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
       ctx.on("session/event", (session, event) => {
         try {
+          if (this.standDown?.()) return;
           this.noteEvent(session, event);
           if (event?.type !== "tool/result") return;
           const id = event.data?.message?.toolCallId;
@@ -577,6 +579,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           job = new Promise((resolve) => {
             scheduleImmediate(() => {
               try {
+                if (this.standDown?.()) return;
                 const current = this.rawSeen.get(key);
                 if (!current || current.retryable) {
                   const record = this.captureOne(session, event);
@@ -600,6 +603,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
       ctx.on("agent/status", ({ agent, status }) => {
         if (status !== "idle") return;
+        if (this.standDown?.()) return;
         const state = this.stateFor(agent);
         if (state.warming) return;
         const events = agent.session.snapshotEvents();
@@ -618,6 +622,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const message = error instanceof Error ? error.message : String(error);
       ctx.logger?.warn?.(`spine: 本会话未接管自动小切。${message}`);
     }
+  }
+
+  standDown() {
+    const peers = activeCompactionPeers(this.ctx);
+    if (peers.length) warnCompactionStandDown(this.ctx);
+    return peers.length > 0;
+  }
+
+  ownedSignal(signal) {
+    const controller = new AbortController();
+    const dispose = this.ctx.on("internal/status", () => {
+      if (this.standDown?.()) controller.abort();
+    }, { global: true });
+    if (this.standDown?.()) controller.abort();
+    return {
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+      dispose,
+    };
   }
 
   stateFor(agent) {
@@ -720,6 +742,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     scheduleImmediate(() => {
       task.scheduled = false;
       try {
+        if (this.standDown?.()) {
+          this.finishCaptureCatchup(task);
+          return;
+        }
         const latest = task.freezeSnapshot ? null : task.session.snapshotEvents?.();
         const latestTail = Number.isInteger(latest?.at?.(-1)?.seq) ? latest.at(-1).seq : -1;
         const latestSurfaceTail = task.session.surface?.nodes?.at?.(-1) ?? -1;
@@ -799,15 +825,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchups.delete(task.key);
     this.pendingCatchupJobs.delete(task.promise);
     task.resolve();
-    if (task.retryRequested && task.progressed) this.scheduleMaintenanceRetry(task.agent);
+    if (!this.standDown?.() && task.retryRequested && task.progressed) this.scheduleMaintenanceRetry(task.agent);
   }
 
   scheduleMaintenanceRetry(agent) {
+    if (this.standDown?.()) return;
     const state = this.stateFor(agent);
     if (state.retryScheduled) return;
     state.retryScheduled = true;
     scheduleImmediate(() => {
       state.retryScheduled = false;
+      if (this.standDown?.()) return;
       if (state.warming) return;
       const events = agent.session.snapshotEvents();
       const done = latestTurnCompleted(events);
@@ -824,6 +852,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async finishTurn(agent, events, options = {}) {
+    if (this.standDown?.()) return null;
     const settings = readSettings(this.liveConfig);
     const state = this.stateFor(agent);
     const signal = AbortSignal.timeout(30000);
@@ -844,6 +873,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const calls = indexToolCalls(ev);
     try {
       await agent.runMaintenance(async (agentSignal) => {
+        if (this.standDown?.()) return;
         const op = AbortSignal.any([agentSignal, signal]);
         let measurement = this.ctx.tokenMeter.measure(agent.session);
         if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) return;
@@ -900,7 +930,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             state.localOnly = true;
             state.approvedCard = chunk.card;
             await this.flushPendingCaptures(agent.session, this.chunkToolCallIds(agent.session, chunk));
-            await this.commitSelectedSpan(agent, chunk, op);
+            const committed = await this.commitSelectedSpan(agent, chunk, op);
+            if (committed === false) break;
             measurement = this.ctx.tokenMeter.measure(agent.session);
             const after = measurement.totalTokens;
             reduced = after < before;
@@ -976,6 +1007,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async commitSelectedSpan(agent, chunk, signal) {
+    if (this.standDown?.()) return false;
     signal?.throwIfAborted();
     const session = agent.session;
     if (chunk.card?.ok !== true || !chunk.card.text) throw new Error("spine: approved card missing; leaving the span");
@@ -1042,6 +1074,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
     signal?.throwIfAborted();
+    if (this.standDown?.()) return false;
     assertCurrentSpan(shadowedSeqs);
     const compactionId = CompactionId(randomUUID());
     const checkpointMessage = createUserMessage({
@@ -1101,11 +1134,27 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async compactIfNeeded(agent, trigger, signal) {
+    if (this.standDown?.()) return null;
     const state = this.stateFor(agent);
     state.liveAgent = agent;
     state.localOnly = false;
     this.ensurePruneGuard();
-    return super.compactIfNeeded(agent, trigger, signal);
+    const owned = this.ownedSignal(signal);
+    try {
+      return await super.compactIfNeeded(agent, trigger, owned.signal);
+    } finally {
+      owned.dispose?.();
+    }
+  }
+
+  async compactNow(agent, signal, sourceCommandId) {
+    if (this.standDown?.()) return null;
+    const owned = this.ownedSignal(signal);
+    try {
+      return await super.compactNow(agent, owned.signal, sourceCommandId);
+    } finally {
+      owned.dispose?.();
+    }
   }
 
   // Preserve explicit URL precedence. Only the exact account provider gets
@@ -1221,6 +1270,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureOne(session, event, access = {}) {
+    if (this.standDown?.()) return null;
     const id = event?.data?.message?.toolCallId;
     if (!id) return null;
     const key = session?.id || DEFAULT_KEY;
@@ -1327,6 +1377,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureNewBatch(session, events, settings = readSettings(this.liveConfig), limits = {}) {
+    if (this.standDown?.()) {
+      return {
+        seen: new Set(),
+        progressed: false,
+        retryable: false,
+        done: true,
+        nextIndex: Number.isInteger(limits.startIndex) ? limits.startIndex : 0,
+      };
+    }
     if (!Array.isArray(events)) events = [];
     const key = session?.id || DEFAULT_KEY;
     const cursor = this.captureCursorStart(session, events, settings);
@@ -1391,6 +1450,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureNew(session, events, settings = readSettings(this.liveConfig)) {
+    if (this.standDown?.()) return new Set();
     if (!Array.isArray(events)) events = [];
     const key = session?.id || DEFAULT_KEY;
     const cursor = this.captureCursorStart(session, events, settings);
@@ -1446,6 +1506,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   writeCaptureCursor(key, cursor, access = {}) {
+    if (this.standDown?.()) return;
     if (this.persistCapture !== true || !Number.isSafeInteger(cursor) || cursor < 0) return;
     let tmp;
     let fd;
@@ -1472,6 +1533,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   recoverVisibleRaw(session, access = {}) {
+    if (this.standDown?.()) return;
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
     const ids = [...new Set(this.surfaceToolIds(session))];
     if (ids.length && existsSync(dir)) ensureShadowDir(dir, access);
@@ -1506,6 +1568,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   recoverVisibleRawBatch(session, access = {}, startIndex = 0, limit = RECOVER_RAW_BATCH, visibleIds = null) {
+    if (this.standDown?.()) return { nextIndex: startIndex, done: true, progressed: false };
     const ids = visibleIds || [...new Set(this.surfaceToolIds(session))];
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
     if (ids.length && startIndex === 0 && existsSync(dir)) {
@@ -1556,6 +1619,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureSession(session) {
+    if (this.standDown?.()) return new Set();
     const key = session?.id || DEFAULT_KEY;
     const events = session?.snapshotEvents?.() || [];
     const fingerprint = this.captureRecoveryFingerprint(session, events);
@@ -1612,6 +1676,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   ensurePruneGuard() {
+    if (this.standDown?.()) return;
     if (this.pruneGuarded) return;
     let pruner;
     try {
@@ -1629,6 +1694,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     function guarded(session) {
       const engine = pruner.__spineEngine;
       try {
+        if (engine.standDown?.()) return;
         engine.captureSession(session);
         return runPruneAfterCapture(engine.surfaceToolIds(session), engine.rawVerifiedSet(session), () => original(session));
       } catch (error) {
@@ -1671,6 +1737,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    if (this.standDown?.()) return { ok: false, reason: "stand-down" };
     return saveShadowImpl.call(
       this,
       messages,
@@ -1692,6 +1759,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    if (this.standDown?.()) return { ok: false, reason: "stand-down" };
     if (!access.runner && (access.platform ?? process.platform) === "win32" && shadowAccessFused()) {
       const error = new Error("spine: shadow permission already failed; backup refused");
       error.code = "ESHADOWACCESS";
