@@ -4,8 +4,54 @@ import { configSnapshot, engineConfig } from "./settings.js";
 
 const OURS = "dsh-live-compact";
 const PRESET_IDS = new Set(["standard", "ptc", "minimal", "cordis", "preset-standard", "preset-ptc", "preset-minimal", "preset-cordis"]);
+const COMPETING_COMPRESSORS = new Set(["bili-native", "billion-context"]);
+const COMPETING_FIBER_STATES = new Set([1, 2]); // Cordis 4.1: LOADING=1, ACTIVE=2.
+const standDownNotices = new WeakMap();
 export const GATE_SERVICE = "liveCompactPresetGate";
 export const PRESET_ENGINE_CONFIG = Object.freeze(engineConfig());
+
+/**
+ * Return the exact active compressor runtimes that own the session when they
+ * are loading or active. Cordis keeps one runtime per plugin callback and
+ * exposes every live fiber through `ctx.registry.values()`; a package on disk
+ * or a failed/unloading fiber is not an active compressor.
+ */
+export function activeCompactionPeers(ctx) {
+  const peers = [];
+  if (process.env.SPINE_STAND_DOWN === "1") peers.push("SPINE_STAND_DOWN");
+  const registry = ctx?.registry;
+  if (!registry || typeof registry.values !== "function") return peers;
+  try {
+    for (const runtime of registry.values()) {
+      const name = runtime?.name;
+      if (!COMPETING_COMPRESSORS.has(name)) continue;
+      const active = [...(runtime?.fibers || [])].some((fiber) => COMPETING_FIBER_STATES.has(fiber?.state));
+      if (active && !peers.includes(name)) peers.push(name);
+    }
+  } catch {
+    // Cordis 4.1 always exposes an iterable registry. If an older/partial host
+    // cannot enumerate it, preserve the single-plugin path and do not guess a
+    // competing package from installation state.
+  }
+  return peers;
+}
+
+export function compactionStandDown(ctx) {
+  return activeCompactionPeers(ctx).length > 0;
+}
+
+export function warnCompactionStandDown(ctx, logger = ctx?.logger) {
+  const peers = activeCompactionPeers(ctx);
+  if (!peers.length) return peers;
+  const root = ctx?.root || ctx;
+  const key = peers.join(",");
+  if (root && standDownNotices.get(root) === key) return peers;
+  if (root) standDownNotices.set(root, key);
+  logger?.warn?.(peers[0] === "SPINE_STAND_DOWN"
+    ? "spine: SPINE_STAND_DOWN=1，已有压缩插件接管，本插件不切、不改预设。"
+    : `spine: 已有压缩插件接管（${peers.join(", ")}），本插件不切、不改预设。`);
+  return peers;
+}
 
 const require = createRequire(import.meta.url);
 
@@ -117,6 +163,10 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
   const seen = new Set();
   gate.disposeListener = ctx.on("internal/config", function (fiber, next) {
     const resolved = next();
+    if (compactionStandDown(ctx)) {
+      warnCompactionStandDown(ctx);
+      return resolved;
+    }
     if (!gate.active || !enabled()) return resolved;
     const loadable = packageLoadable();
     const entry = fiber?.entry?.options;
