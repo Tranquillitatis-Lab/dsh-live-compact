@@ -14,7 +14,8 @@
     "./client": "./client.js",
     "./engine": "./index.js",
     "./gate": "./gate.js",
-    "./shadow-search": "./shadow-search.js"
+    "./shadow-search": "./shadow-search.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "CHANGELOG.md",
