@@ -39,7 +39,11 @@ function readExisting(file, toolCallId) {
   try {
     meta = JSON.parse(readFileSync(`${file}.meta.json`, "utf8"));
   } catch {
-    return { ok: false, reason: "missing-meta", toolCallId };
+    return {
+      ok: false,
+      reason: existsSync(`${file}.meta.json`) ? "bad-meta" : "missing-meta",
+      toolCallId,
+    };
   }
   if (meta?.toolCallId !== toolCallId || typeof meta.sha256 !== "string" || !Number.isInteger(meta.bytes)) {
     return { ok: false, reason: "bad-meta", toolCallId };

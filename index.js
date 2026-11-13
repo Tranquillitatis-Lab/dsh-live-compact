@@ -22,7 +22,7 @@ import { pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
 import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, isToolFailure, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
-import { captureOwnedToolResult, contentHash, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
+import { captureOwnedToolResult, contentHash, PRUNE_MARKER, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
   ensureShadowDir,
   flushDrainStats,
@@ -68,7 +68,7 @@ function shadowWorkerFor(root) {
   const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), {
     workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
   });
-  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false };
+  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false, timedOut: false };
   const removeEntry = () => {
     if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
   };
@@ -103,6 +103,7 @@ function shadowWorkerFor(root) {
     if (!task) return;
     if (task.timer) clearTimeout(task.timer);
     entry.pending.delete(message.id);
+    if (entry.timedOut && entry.pending.size === 0) entry.timedOut = false;
     if (message?.ok) {
       task.resolve(message.result);
       scheduleIdleExit();
@@ -130,18 +131,29 @@ function shadowWorkerFor(root) {
 
 function runShadowWorker(payload) {
   const entry = shadowWorkerFor(payload.shadow);
+  if (entry.timedOut) {
+    return Promise.reject(Object.assign(new Error("spine: shadow worker is finishing a timed-out transaction"), { code: "ESHADOWWORKER" }));
+  }
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
   }
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
+    const task = { resolve, reject, timer: null, timedOut: false };
     const timer = setTimeout(() => {
       const error = Object.assign(new Error("spine: shadow worker timed out"), { code: "ESHADOWWORKER" });
-      failShadowWorker(entry, error);
+      // Do not terminate a worker that may hold the rotation lock. Worker
+      // threads share process.pid, so killing it can leave a live-PID lock
+      // which every later session refuses to recover. Reject this caller but
+      // keep the pending task until the worker naturally releases its lock.
+      task.timedOut = true;
+      entry.timedOut = true;
+      reject(error);
     }, SHADOW_WORKER_TIMEOUT_MS);
     timer.unref?.();
-    entry.pending.set(id, { resolve, reject, timer });
+    task.timer = timer;
+    entry.pending.set(id, task);
     try {
       entry.worker.postMessage({ id, payload });
     } catch (error) {
@@ -173,6 +185,9 @@ function failShadowWorker(entry, error) {
 
 function recoveryRetryable(record, dir, toolCallId) {
   if (record?.retryable === true || record?.reason === "unwritable") return true;
+  // A raw body without its metadata marker is an incomplete publication. If
+  // the current event is still available, captureOne can rebuild the pair.
+  if (record?.reason === "missing-meta") return true;
   // A completely absent backup has never been captured and can be retried.
   // If its metadata is still present, the body was damaged after capture and
   // must remain fail-closed rather than being silently overwritten.
@@ -432,7 +447,7 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
     }
     if (floorCard >= 0 && end <= floorCard) return null;
   }
-  const longSpan = newestLong && visible[newestLong.start].index > floorCard
+  const longSpan = !context.disableLongRead && newestLong && visible[newestLong.start].index > floorCard
     ? { start: visible[newestLong.start].index, end: visible[newestLong.end].index }
     : null;
   if (!longSpan && (end < first || isCheckpoint(session, nodes[end]))) return null;
@@ -618,8 +633,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           const id = event.data?.message?.toolCallId;
           if (!id) return;
           const key = this.rawKey(session, id);
-          const cached = this.rawSeen.get(key);
-          if (cached && !cached.retryable) return;
+          const cached = this.cachedCaptureFor(session, event);
+          if (cached && !cached.retryable) {
+            this.noteCaptureResult(session, event, cached);
+            return;
+          }
           if (this.pendingCaptureKeys.has(key)) return;
           this.pendingCaptureKeys.add(key);
           let job;
@@ -627,7 +645,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             scheduleImmediate(() => {
               try {
                 if (this.standDown?.()) return;
-                const current = this.rawSeen.get(key);
+                const current = this.cachedCaptureFor(session, event);
                 if (!current || current.retryable) {
                   const record = this.captureOne(session, event);
                   this.noteCaptureResult(session, event, record);
@@ -660,7 +678,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const job = this.finishTurn(agent, events, { deferCapture: true })
           .catch((error) => noteShadowWarning(this.ctx?.logger, error))
           .finally(() => {
-            state.warming = false;
+            if (!state.pendingMaintenance) state.warming = false;
             this.pendingCuts.delete(job);
           });
         this.pendingCuts.add(job);
@@ -761,6 +779,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       retryRequested: false,
       captureRetryAttempts: 0,
       progressed: false,
+      hadRetry: false,
+      failed: false,
+      maintenanceRequested: options.maintenanceRequested === true,
       eventTail: Number.isInteger(events?.at?.(-1)?.seq) ? events.at(-1).seq : -1,
       surfaceTail: agent.session.surface?.nodes?.at?.(-1) ?? -1,
       freezeSnapshot: options.freezeSnapshot === true,
@@ -832,6 +853,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           task.eventIndex = result.nextIndex;
           task.progressed ||= result.progressed;
           if (result.retryable) {
+            task.hadRetry = true;
             task.captureRetryAttempts += 1;
             const previousMax = this.captureRetryStats?.get(task.key) || 0;
             if (task.captureRetryAttempts > previousMax) this.captureRetryStats.set(task.key, task.captureRetryAttempts);
@@ -840,6 +862,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
               return;
             }
             this.queueCaptureRetry(task);
+            return;
+          }
+          if (result.blocked) {
+            task.captureBlocked = true;
+            this.finishCaptureCatchup(task);
             return;
           }
           if (result.progressed) task.captureRetryAttempts = 0;
@@ -860,6 +887,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         this.finishCaptureCatchup(task);
       } catch (error) {
+        task.failed = true;
         noteShadowWarning(this.ctx?.logger, error);
         this.finishCaptureCatchup(task);
       }
@@ -872,7 +900,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchups.delete(task.key);
     this.pendingCatchupJobs.delete(task.promise);
     task.resolve();
-    if (!this.standDown?.() && task.retryRequested && task.progressed) this.scheduleMaintenanceRetry(task.agent);
+    if (task.failed || task.captureBlocked) {
+      const state = this.stateFor(task.agent);
+      state.pendingMaintenance = false;
+      state.warming = false;
+      return;
+    }
+    if (!this.standDown?.() && !task.captureBlocked &&
+        (task.retryRequested || task.maintenanceRequested)) {
+      this.scheduleMaintenanceRetry(task.agent);
+    }
   }
 
   scheduleMaintenanceRetry(agent) {
@@ -883,14 +920,18 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     scheduleImmediate(() => {
       state.retryScheduled = false;
       if (this.standDown?.()) return;
-      if (state.warming) return;
+      if (state.warming && !state.pendingMaintenance) {
+        scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
+        return;
+      }
       const events = agent.session.snapshotEvents();
       const done = latestTurnCompleted(events);
       if (!done) return;
       state.warming = true;
-      const job = this.finishTurn(agent, events, { deferCapture: true })
+      const job = this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true })
         .catch((error) => noteShadowWarning(this.ctx?.logger, error))
         .finally(() => {
+          state.pendingMaintenance = false;
           state.warming = false;
           this.pendingCuts.delete(job);
         });
@@ -906,8 +947,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const ev = events || agent.session.snapshotEvents();
     const deferCapture = options.deferCapture === true;
     let catchup = { finished: true, progressed: false, retryRequested: false };
-    if (deferCapture) {
-      catchup = this.scheduleCaptureCatchup(agent, ev, settings);
+    if (options.skipCapture) {
+      // A completed idle catch-up or a failed-cut retry already established
+      // the capture surface. Re-run maintenance without rescanning events.
+    } else if (deferCapture) {
+      state.pendingMaintenance = true;
+      catchup = this.scheduleCaptureCatchup(agent, ev, settings, { maintenanceRequested: true });
     } else {
       if (ev.length > CAPTURE_EVENT_BATCH) {
         catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
@@ -916,6 +961,18 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         this.captureNew(agent.session, ev, settings);
       }
     }
+    // Never enter the host's maintenance gate while another session's
+    // catch-up is still running. The host may serialize runMaintenance across
+    // agents; defer this pass and retry after the catch-up settles instead of
+    // making finishTurn wait or holding the global gate.
+    if (catchup?.promise && !catchup.finished) {
+      if (options.maintenanceRetry || (!deferCapture && ev.length <= CAPTURE_EVENT_BATCH)) {
+        await catchup.promise;
+      } else {
+        return null;
+      }
+    }
+    await this.flushPendingCaptures();
     const jobs = collectJobs(ev);
     const calls = indexToolCalls(ev);
     try {
@@ -987,8 +1044,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           try {
             state.localOnly = true;
             state.approvedCard = chunk.card;
-            await this.flushPendingCaptures(agent.session, this.chunkToolCallIds(agent.session, chunk));
-            const committed = await this.commitSelectedSpan(agent, chunk, op);
+            const committed = await this.commitSelectedSpan(agent, chunk, op, { drain });
             if (committed === false) break;
             measurement = this.ctx.tokenMeter.measure(agent.session);
             const after = measurement.totalTokens;
@@ -1065,7 +1121,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     return ids;
   }
 
-  async commitSelectedSpan(agent, chunk, signal) {
+  async commitSelectedSpan(agent, chunk, signal, options = {}) {
     if (this.standDown?.()) return false;
     signal?.throwIfAborted();
     const session = agent.session;
@@ -1143,9 +1199,19 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       ],
       source: spineCheckpointSource(compactionId),
     });
-    const framedTokens = this.ctx.tokenMeter.estimateMessage?.(checkpointMessage);
+    const framedTokens = typeof this.ctx.tokenMeter.estimateMessage === "function"
+      ? this.ctx.tokenMeter.estimateMessage(checkpointMessage)
+      : Math.ceil(JSON.stringify(checkpointMessage.content || []).length / 4) + 8;
     if (typeof framedTokens === "number" && framedTokens >= chunk.tokens) {
       throw new Error(`summary is not smaller than the shadowed content (${framedTokens} >= ${chunk.tokens})`);
+    }
+    if (options.drain === true && Number.isFinite(chunk.prefix) && chunk.prefix > 0) {
+      const estimatedSaved = chunk.tokens - Number(framedTokens || 0);
+      const minimumSaved = Math.ceil(chunk.tokens * 0.01);
+      if (estimatedSaved < minimumSaved) {
+        this.ctx.logger?.warn?.(`spine drain stopped: estimated saving ${estimatedSaved} < rewrite guard ${minimumSaved}`);
+        return false;
+      }
     }
     const lifecycle = { compactionId, turn: null };
     let started = false;
@@ -1180,6 +1246,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         } catch {}
       }
       if (!replaced) throw error;
+      this.ctx.logger?.warn?.(`spine compaction persistence unknown after replacement: ${message}`);
+      return false;
     }
   }
 
@@ -1341,13 +1409,31 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     return `${session?.id || DEFAULT_KEY}\0${toolCallId}`;
   }
 
+  cachedCaptureFor(session, event) {
+    const id = event?.data?.message?.toolCallId;
+    if (!id) return null;
+    const key = this.rawKey(session, id);
+    const cached = this.rawSeen.get(key);
+    if (!cached || cached.retryable === true) return cached || null;
+    if (!cached.ok || !Number.isInteger(cached.bytes) || typeof cached.sha256 !== "string") return cached;
+    const text = messageText(event.data?.message);
+    if (String(text).includes(PRUNE_MARKER)) return cached;
+    const bytes = Buffer.byteLength(String(text ?? ""), "utf8");
+    const sha256 = contentHash(String(text ?? ""));
+    if (cached.bytes === bytes && cached.sha256 === sha256) return cached;
+    const refused = { ok: false, reason: "duplicate-tool-call-id", toolCallId: id, retryable: false };
+    this.rawSeen.set(key, refused);
+    return refused;
+  }
+
   captureOne(session, event, access = {}) {
     if (this.standDown?.()) return null;
     const id = event?.data?.message?.toolCallId;
     if (!id) return null;
     const key = session?.id || DEFAULT_KEY;
     const mapKey = this.rawKey(session, id);
-    if (this.rawSeen.get(mapKey)?.ok) return this.rawSeen.get(mapKey);
+    const cached = this.cachedCaptureFor(session, event);
+    if (cached && !cached.retryable) return cached;
     const platform = access.platform ?? process.platform;
     if (!access.runner && platform === "win32" && shadowAccessFused()) {
       const skipped = { ok: false, reason: "unwritable", toolCallId: id };
@@ -1464,6 +1550,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     let next = cursor;
     let retry = null;
     let retryIndex = null;
+    let blocked = null;
     let processed = 0;
     let captures = 0;
     let progressed = false;
@@ -1486,7 +1573,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const id = event.data?.message?.toolCallId;
         if (id && !seen.has(id)) {
           seen.add(id);
-          const cached = this.rawSeen.get(this.rawKey(session, id));
+          const cached = this.cachedCaptureFor(session, event);
           const record = cached && !cached.retryable ? cached : this.captureOne(session, event);
           if (!cached || cached.retryable) {
             if (record?.ok) progressed = true;
@@ -1496,18 +1583,23 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           if (record?.retryable && retry === null) {
             retry = seq;
             retryIndex = index;
+          } else if (record?.ok === false && !record.retryable && blocked === null) {
+            // Never advance a cursor beyond a permanent integrity failure.
+            // The failed event must remain visible for a later repair/retry.
+            blocked = seq;
+            retryIndex = index;
           }
         }
       }
       next = seq + 1;
       processed += 1;
-      if (retry !== null || processed >= eventLimit || captures >= resultLimit) {
+      if (retry !== null || blocked !== null || processed >= eventLimit || captures >= resultLimit) {
         exhausted = false;
         index += 1;
         break;
       }
     }
-    next = retry ?? next;
+    next = retry ?? blocked ?? next;
     this.captureCursor.set(key, next);
     this.writeCaptureCursor(key, next);
     const lastEvent = events.at(-1);
@@ -1516,7 +1608,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       seen,
       progressed,
       retryable: retry !== null,
-      done: exhausted && retry === null && next > lastSeq,
+      blocked: blocked !== null,
+      done: exhausted && retry === null && blocked === null && next > lastSeq,
       nextIndex: retryIndex ?? index,
     };
   }
@@ -1528,6 +1621,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const cursor = this.captureCursorStart(session, events, settings);
     let next = cursor;
     let retry = null;
+    let blocked = null;
     const seen = new Set();
     for (const event of events) {
       const seq = Number.isInteger(event?.seq) ? event.seq : next;
@@ -1537,17 +1631,19 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const id = event.data?.message?.toolCallId;
         if (id && !seen.has(id)) {
           seen.add(id);
-          const cached = this.rawSeen.get(this.rawKey(session, id));
+          const cached = this.cachedCaptureFor(session, event);
           const record = cached && !cached.retryable ? cached : this.captureOne(session, event);
           this.noteCaptureResult(session, event, record);
           if (record?.retryable && retry === null) retry = seq;
+          else if (record?.ok === false && !record.retryable && blocked === null) blocked = seq;
         }
       }
       next = seq + 1;
+      if (blocked !== null) break;
     }
     // Scanning later events is useful, but is not proof of a successful backup.
     // Their completed records stay cached while the first busy result is retried.
-    next = retry ?? next;
+    next = retry ?? blocked ?? next;
     this.captureCursor.set(key, next);
     this.writeCaptureCursor(key, next);
     this.recoverVisibleRaw(session);

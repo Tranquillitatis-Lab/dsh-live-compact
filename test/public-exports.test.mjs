@@ -17,7 +17,7 @@ test("88f7563 public subpaths and named imports remain compatible", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
   for (const [subpath, target] of Object.entries({
     ".": "./shell.js", "./engine": "./index.js", "./gate": "./gate.js",
-    "./shadow-search": "./shadow-search.js",
+    "./shadow-search": "./shadow-search.js", "./package.json": "./package.json",
   })) assert.equal(pkg.exports[subpath], target, subpath);
   for (const value of [Entry, preflightConfig, Engine, freshShadowFile, isCheckpoint,
     planMessages, saveShadow, saveShadowImpl, spineCheckpointSource, Gate,
@@ -36,7 +36,9 @@ test("every current public subpath imports, including the host client bundle", a
   globalThis.window = { __ModuleLoader__: { load: (bundle) => bundles.push(bundle) } };
   try {
     for (const subpath of Object.keys(pkg.exports)) {
-      await import(pkg.name + (subpath === "." ? "" : subpath.slice(1)));
+      const specifier = pkg.name + (subpath === "." ? "" : subpath.slice(1));
+      if (subpath === "./package.json") await import(specifier, { with: { type: "json" } });
+      else await import(specifier);
     }
     assert.equal(pkg.exports["./client"], "./client.js");
     assert.equal(bundles.length, 1);
