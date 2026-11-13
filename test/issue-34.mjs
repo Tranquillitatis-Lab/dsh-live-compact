@@ -237,6 +237,18 @@ test("#34 idle hook does not wait for an unrelated pending capture", async (t) =
   await setImmediate();
 });
 
+test("idle hook ignores an earlier completed turn when a newer turn is unfinished", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  f.add("turn/start", { turn: 2 }, 0, {});
+  const { engine, ctx } = h.engine({ minTokens: 100000 });
+  ctx.emit("agent/status", { agent: f.agent(), status: "idle" });
+  await setImmediate();
+  assert.equal(engine.stateFor(f.agent()).warming, false);
+  assert.equal(f.summaries().length, 0);
+});
+
 test("#34 recovers a large visible-ID snapshot without rebuilding it per batch", () => {
   const engine = Object.create(Spine.prototype);
   engine.rawSeen = new Map();

@@ -39,6 +39,7 @@ import {
 } from "./shadow.js";
 import { buildSendLess, decideThunder } from "./thunder.js";
 import { inCooldown, skipLiveOfficialCompaction } from "./cooldown.js";
+import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
 
 const { BasicCompactionEngine } = await loadBase();
 const { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } = await loadCompaction();
@@ -56,6 +57,7 @@ const CAPTURE_RESULT_BATCH = 1;
 const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
+const SHADOW_WORKER_TIMEOUT_MS = 30000;
 
 const shadowWorkers = new Map();
 
@@ -88,7 +90,10 @@ function shadowWorkerFor(root) {
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
-    for (const { reject } of entry.pending.values()) reject(error);
+    for (const { reject, timer } of entry.pending.values()) {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    }
     entry.pending.clear();
     removeEntry();
     worker.terminate().catch(() => {});
@@ -96,6 +101,7 @@ function shadowWorkerFor(root) {
   worker.on("message", (message) => {
     const task = entry.pending.get(message?.id);
     if (!task) return;
+    if (task.timer) clearTimeout(task.timer);
     entry.pending.delete(message.id);
     if (message?.ok) {
       task.resolve(message.result);
@@ -130,15 +136,39 @@ function runShadowWorker(payload) {
   }
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
-    entry.pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      const error = Object.assign(new Error("spine: shadow worker timed out"), { code: "ESHADOWWORKER" });
+      failShadowWorker(entry, error);
+    }, SHADOW_WORKER_TIMEOUT_MS);
+    timer.unref?.();
+    entry.pending.set(id, { resolve, reject, timer });
     try {
       entry.worker.postMessage({ id, payload });
     } catch (error) {
+      clearTimeout(timer);
       entry.pending.delete(id);
       reject(error);
       entry.scheduleIdleExit();
     }
   });
+}
+
+function failShadowWorker(entry, error) {
+  if (!entry || entry.retired) return;
+  entry.retired = true;
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+  for (const { reject, timer } of entry.pending.values()) {
+    if (timer) clearTimeout(timer);
+    reject(error);
+  }
+  entry.pending.clear();
+  for (const [key, value] of shadowWorkers) {
+    if (value === entry) shadowWorkers.delete(key);
+  }
+  entry.worker.terminate().catch(() => {});
 }
 
 function recoveryRetryable(record, dir, toolCallId) {
@@ -148,6 +178,11 @@ function recoveryRetryable(record, dir, toolCallId) {
   // must remain fail-closed rather than being silently overwritten.
   if (record?.reason === "missing-file") return !existsSync(join(dir, `${rawName(toolCallId)}.meta.json`));
   return false;
+}
+
+function captureErrorRetryable(error) {
+  const code = error?.code;
+  return code === "ESHADOWBUSY" || ["EAGAIN", "EBUSY", "EINTR", "EIO"].includes(code);
 }
 
 function eventContent(session, seq) {
@@ -170,7 +205,27 @@ function isCheckpoint(session, seq) {
   // 自己的卡片，以及已经写过的官方标记，都要停住。新卡片不再用官方标记。
   // Stop on our own cards and on older official markers. New cards do not use the official marker.
   if (kind === SPINE_SOURCE_KIND || kind === "compact-checkpoint") return true;
-  return eventText(session, seq).includes(MARK);
+  // The legacy text marker is only meaningful on a user/message card and only
+  // at the beginning of its text. A tool result or an ordinary sentence that
+  // merely mentions the marker must not create a permanent cut boundary.
+  if (event?.type !== "user/message") return false;
+  const text = eventText(session, seq).trimStart();
+  return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
+}
+
+function latestTurnCompleted(events) {
+  let lastStart = -1;
+  let lastEnd = -1;
+  let reason;
+  for (let index = 0; index < (events || []).length; index += 1) {
+    const event = events[index];
+    if (event?.type === "turn/start") lastStart = index;
+    if (event?.type === "turn/end") {
+      lastEnd = index;
+      reason = event.data?.reason?.kind;
+    }
+  }
+  return lastEnd > lastStart && reason === "completed";
 }
 
 function spineCheckpointSource(compactionId) {
@@ -367,8 +422,6 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   const cutEnd = span ? reservedCutEnd(visible[span.start].index, first) : null;
   if (span && cutEnd === null) return null;
   if (cutEnd !== null) {
-    const keptEnd = visible[span.end].index;
-    for (let index = visible[span.start].index; index <= keptEnd; index += 1) keptTokens += priced[index].tokens;
     end = cutEnd;
     while (end >= first && classifications[end].isGenuineUserBoundary && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
     if (floorCard >= 0 && end <= floorCard) return null;
@@ -456,6 +509,9 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   };
   let usedLongCut = false;
   let picked = null;
+  const fallbackWithoutLongRead = () => context.disableLongRead
+    ? null
+    : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true });
   if (longSpan) {
     const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
     if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
@@ -481,27 +537,39 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
         }
       }
     }
-    if (pairStart < 0) return null;
-    if (usedLongCut && pairStart < longSpan.start) return null;
-    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return null;
-    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return null;
+    if (pairStart < 0) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (usedLongCut && pairStart < longSpan.start) return fallbackWithoutLongRead();
+    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return usedLongCut ? fallbackWithoutLongRead() : null;
     picked.start = pairStart;
   }
-  if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;
+  if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();
   const start = picked.start;
   end = picked.end;
   const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
   const pieces = spanPieces(start, end);
-  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) return null;
+  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) {
+    return usedLongCut ? fallbackWithoutLongRead() : null;
+  }
   let card = picked.pointerOnly
     ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
     : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, end), pieces, extras);
-  if (card.ok !== true) return null;
+  if (card.ok !== true) return usedLongCut ? fallbackWithoutLongRead() : null;
   card = attachBackupHint(card, freshShadowFile("cut", key));
   if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
   if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return null;
   let after = 0;
   for (let index = end + 1; index < priced.length; index += 1) after += priced[index].tokens;
+  // `keptTokens` must describe retained rounds to the right of the actual
+  // cut. A long-read cut can be newer than the ordinary rounds selected above;
+  // counting those older rounds made `tailBeyondKept` negative and disabled
+  // the tail guard.
+  for (const round of rounds) {
+    const roundStart = visible[round.start]?.index;
+    const roundEnd = visible[round.end]?.index;
+    if (!Number.isInteger(roundStart) || !Number.isInteger(roundEnd) || roundStart <= end) continue;
+    for (let index = roundStart; index <= roundEnd; index += 1) keptTokens += priced[index].tokens;
+  }
   let prefix = 0;
   for (let index = 0; index < start; index += 1) prefix += priced[index].tokens;
   return { start: nodes[start], end: nodes[end], tokens, after, keptTokens, card, prefix };
@@ -544,6 +612,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
       ctx.on("session/event", (session, event) => {
         try {
+          if (this.standDown?.()) return;
           this.noteEvent(session, event);
           if (event?.type !== "tool/result") return;
           const id = event.data?.message?.toolCallId;
@@ -557,6 +626,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           job = new Promise((resolve) => {
             scheduleImmediate(() => {
               try {
+                if (this.standDown?.()) return;
                 const current = this.rawSeen.get(key);
                 if (!current || current.retryable) {
                   const record = this.captureOne(session, event);
@@ -580,10 +650,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
       ctx.on("agent/status", ({ agent, status }) => {
         if (status !== "idle") return;
+        if (this.standDown?.()) return;
         const state = this.stateFor(agent);
         if (state.warming) return;
         const events = agent.session.snapshotEvents();
-        const done = events.some((event) => event.type === "turn/end" && event.data?.reason?.kind === "completed");
+        const done = latestTurnCompleted(events);
         if (!done) return;
         state.warming = true;
         const job = this.finishTurn(agent, events, { deferCapture: true })
@@ -598,6 +669,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const message = error instanceof Error ? error.message : String(error);
       ctx.logger?.warn?.(`spine: 本会话未接管自动小切。${message}`);
     }
+  }
+
+  standDown() {
+    const peers = activeCompactionPeers(this.ctx);
+    if (peers.length) warnCompactionStandDown(this.ctx);
+    return peers.length > 0;
+  }
+
+  ownedSignal(signal) {
+    const controller = new AbortController();
+    const dispose = this.ctx.on("internal/status", () => {
+      if (this.standDown?.()) controller.abort();
+    }, { global: true });
+    if (this.standDown?.()) controller.abort();
+    return {
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+      dispose,
+    };
   }
 
   stateFor(agent) {
@@ -700,6 +789,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     scheduleImmediate(() => {
       task.scheduled = false;
       try {
+        if (this.standDown?.()) {
+          this.finishCaptureCatchup(task);
+          return;
+        }
         const latest = task.freezeSnapshot ? null : task.session.snapshotEvents?.();
         const latestTail = Number.isInteger(latest?.at?.(-1)?.seq) ? latest.at(-1).seq : -1;
         const latestSurfaceTail = task.session.surface?.nodes?.at?.(-1) ?? -1;
@@ -779,18 +872,20 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchups.delete(task.key);
     this.pendingCatchupJobs.delete(task.promise);
     task.resolve();
-    if (task.retryRequested && task.progressed) this.scheduleMaintenanceRetry(task.agent);
+    if (!this.standDown?.() && task.retryRequested && task.progressed) this.scheduleMaintenanceRetry(task.agent);
   }
 
   scheduleMaintenanceRetry(agent) {
+    if (this.standDown?.()) return;
     const state = this.stateFor(agent);
     if (state.retryScheduled) return;
     state.retryScheduled = true;
     scheduleImmediate(() => {
       state.retryScheduled = false;
+      if (this.standDown?.()) return;
       if (state.warming) return;
       const events = agent.session.snapshotEvents();
-      const done = events.some((event) => event.type === "turn/end" && event.data?.reason?.kind === "completed");
+      const done = latestTurnCompleted(events);
       if (!done) return;
       state.warming = true;
       const job = this.finishTurn(agent, events, { deferCapture: true })
@@ -804,6 +899,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async finishTurn(agent, events, options = {}) {
+    if (this.standDown?.()) return null;
     const settings = readSettings(this.liveConfig);
     const state = this.stateFor(agent);
     const signal = AbortSignal.timeout(30000);
@@ -824,16 +920,28 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const calls = indexToolCalls(ev);
     try {
       await agent.runMaintenance(async (agentSignal) => {
+        if (this.standDown?.()) return;
         const op = AbortSignal.any([agentSignal, signal]);
         let measurement = this.ctx.tokenMeter.measure(agent.session);
-        if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) return;
+        const settleTurnBaseline = () => {
+          state.turnBase = measurement.totalTokens;
+          state.maxTurnGrowth = 0;
+        };
+        if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) {
+          settleTurnBaseline();
+          return;
+        }
         // Restored cards establish a baseline; a live card still skips once,
         // even when maintenance or engine construction is delayed.
         if (skipLiveOfficialCompaction(agent.session)) {
           this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
+          settleTurnBaseline();
           return;
         }
-        if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) return;
+        if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
+          settleTurnBaseline();
+          return;
+        }
         this.ensurePruneGuard();
         const resolved = this.engineFor(agent);
         if (state.engine !== resolved.engine || state.engineSource !== resolved.source) {
@@ -880,7 +988,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             state.localOnly = true;
             state.approvedCard = chunk.card;
             await this.flushPendingCaptures(agent.session, this.chunkToolCallIds(agent.session, chunk));
-            await this.commitSelectedSpan(agent, chunk, op);
+            const committed = await this.commitSelectedSpan(agent, chunk, op);
+            if (committed === false) break;
             measurement = this.ctx.tokenMeter.measure(agent.session);
             const after = measurement.totalTokens;
             reduced = after < before;
@@ -915,6 +1024,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         if (drainNotes.length) flushDrainStats(shadowDirectory(), drainNotes, { sid: state.key, drain });
         state.turnBase = measurement.totalTokens;
+        state.maxTurnGrowth = 0;
         await this.ctx.sessions?.flush?.(agent.session);
         this.rememberPrefix(agent);
       });
@@ -956,6 +1066,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async commitSelectedSpan(agent, chunk, signal) {
+    if (this.standDown?.()) return false;
     signal?.throwIfAborted();
     const session = agent.session;
     if (chunk.card?.ok !== true || !chunk.card.text) throw new Error("spine: approved card missing; leaving the span");
@@ -1022,6 +1133,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
     signal?.throwIfAborted();
+    if (this.standDown?.()) return false;
     assertCurrentSpan(shadowedSeqs);
     const compactionId = CompactionId(randomUUID());
     const checkpointMessage = createUserMessage({
@@ -1081,11 +1193,27 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async compactIfNeeded(agent, trigger, signal) {
+    if (this.standDown?.()) return null;
     const state = this.stateFor(agent);
     state.liveAgent = agent;
     state.localOnly = false;
     this.ensurePruneGuard();
-    return super.compactIfNeeded(agent, trigger, signal);
+    const owned = this.ownedSignal(signal);
+    try {
+      return await super.compactIfNeeded(agent, trigger, owned.signal);
+    } finally {
+      owned.dispose?.();
+    }
+  }
+
+  async compactNow(agent, signal, sourceCommandId) {
+    if (this.standDown?.()) return null;
+    const owned = this.ownedSignal(signal);
+    try {
+      return await super.compactNow(agent, owned.signal, sourceCommandId);
+    } finally {
+      owned.dispose?.();
+    }
   }
 
   // Preserve explicit URL precedence. Only the exact account provider gets
@@ -1094,9 +1222,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const header = agent?.session?.requestHeader?.()?.config || {};
     const context = agent?.session?.requestContext?.() || {};
     const provider = header.provider || context.provider || "";
+    const model = header.model || context.model || "";
     const listed = this.listedProviders();
     const baseURL = resolveProviderBaseURL({
       provider,
+      model,
       headerURL: header.baseURL || context.baseURL || "",
       listed,
       layers: this.providerLayers(),
@@ -1168,10 +1298,21 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       try {
         const loaded = createRequire(anchor)("@earendil-works/pi-ai/providers/all");
         const list = typeof loaded.builtinProviders === "function" ? loaded.builtinProviders() : [];
-        return list.map((entry) => ({
-          id: entry?.id || "",
-          baseURL: entry?.baseUrl || entry?.baseURL || "",
-        })).filter((entry) => entry.id && entry.baseURL);
+        return list.map((entry) => {
+          let models = [];
+          try {
+            const declared = typeof entry?.getModels === "function" ? entry.getModels() : entry?.models || [];
+            models = (Array.isArray(declared) ? declared : []).map((model) => ({
+              id: model?.id || "",
+              baseURL: model?.baseUrl || model?.baseURL || "",
+            })).filter((model) => model.id && model.baseURL);
+          } catch {}
+          return {
+            id: entry?.id || "",
+            baseURL: entry?.baseUrl || entry?.baseURL || "",
+            models,
+          };
+        }).filter((entry) => entry.id && (entry.baseURL || entry.models.length));
       } catch {}
     }
     return [];
@@ -1201,6 +1342,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureOne(session, event, access = {}) {
+    if (this.standDown?.()) return null;
     const id = event?.data?.message?.toolCallId;
     if (!id) return null;
     const key = session?.id || DEFAULT_KEY;
@@ -1247,7 +1389,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       }
       const message = error instanceof Error ? error.message : String(error);
       this.ctx?.logger?.warn?.(`spine: raw backup failed: ${message}`);
-      const record = { ok: false, reason: "unwritable", toolCallId: id, retryable: error?.code === "ESHADOWBUSY" };
+      const record = { ok: false, reason: "unwritable", toolCallId: id, retryable: captureErrorRetryable(error) };
       this.rawSeen.set(mapKey, record);
       return record;
     }
@@ -1307,6 +1449,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureNewBatch(session, events, settings = readSettings(this.liveConfig), limits = {}) {
+    if (this.standDown?.()) {
+      return {
+        seen: new Set(),
+        progressed: false,
+        retryable: false,
+        done: true,
+        nextIndex: Number.isInteger(limits.startIndex) ? limits.startIndex : 0,
+      };
+    }
     if (!Array.isArray(events)) events = [];
     const key = session?.id || DEFAULT_KEY;
     const cursor = this.captureCursorStart(session, events, settings);
@@ -1371,6 +1522,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureNew(session, events, settings = readSettings(this.liveConfig)) {
+    if (this.standDown?.()) return new Set();
     if (!Array.isArray(events)) events = [];
     const key = session?.id || DEFAULT_KEY;
     const cursor = this.captureCursorStart(session, events, settings);
@@ -1426,6 +1578,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   writeCaptureCursor(key, cursor, access = {}) {
+    if (this.standDown?.()) return;
     if (this.persistCapture !== true || !Number.isSafeInteger(cursor) || cursor < 0) return;
     let tmp;
     let fd;
@@ -1452,6 +1605,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   recoverVisibleRaw(session, access = {}) {
+    if (this.standDown?.()) return;
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
     const ids = [...new Set(this.surfaceToolIds(session))];
     if (ids.length && existsSync(dir)) ensureShadowDir(dir, access);
@@ -1486,6 +1640,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   recoverVisibleRawBatch(session, access = {}, startIndex = 0, limit = RECOVER_RAW_BATCH, visibleIds = null) {
+    if (this.standDown?.()) return { nextIndex: startIndex, done: true, progressed: false };
     const ids = visibleIds || [...new Set(this.surfaceToolIds(session))];
     const dir = sessionDir(shadowDirectory(), session?.id || DEFAULT_KEY);
     if (ids.length && startIndex === 0 && existsSync(dir)) {
@@ -1536,6 +1691,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   captureSession(session) {
+    if (this.standDown?.()) return new Set();
     const key = session?.id || DEFAULT_KEY;
     const events = session?.snapshotEvents?.() || [];
     const fingerprint = this.captureRecoveryFingerprint(session, events);
@@ -1592,6 +1748,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   ensurePruneGuard() {
+    if (this.standDown?.()) return;
     if (this.pruneGuarded) return;
     let pruner;
     try {
@@ -1609,6 +1766,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     function guarded(session) {
       const engine = pruner.__spineEngine;
       try {
+        if (engine.standDown?.()) return;
         engine.captureSession(session);
         return runPruneAfterCapture(engine.surfaceToolIds(session), engine.rawVerifiedSet(session), () => original(session));
       } catch (error) {
@@ -1651,6 +1809,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    if (this.standDown?.()) return { ok: false, reason: "stand-down" };
     return saveShadowImpl.call(
       this,
       messages,
@@ -1672,6 +1831,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    if (this.standDown?.()) return { ok: false, reason: "stand-down" };
     if (!access.runner && (access.platform ?? process.platform) === "win32" && shadowAccessFused()) {
       const error = new Error("spine: shadow permission already failed; backup refused");
       error.code = "ESHADOWACCESS";
@@ -1767,7 +1927,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       role: message?.role ?? message?.message?.role,
       text: messageText(message),
     })));
-    const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
+    const facts = [...(trunk.hardFacts || []), ...(trunk.missingFacts || [])];
     const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
     return this.summarizeOfficial({
       ...input,

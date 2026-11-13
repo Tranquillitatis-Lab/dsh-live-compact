@@ -734,11 +734,18 @@ export function providerURLFromPatch(text, provider) {
 
 // 内置目录只在这家没有自己的地址时使用。调用方传入 {id, baseURL}，这里不读包。
 // Use a built-in catalog URL only when this provider has no URL of its own.
-export function catalogProviderURL(provider, catalog) {
+export function catalogProviderURL(provider, catalog, model = "") {
   const name = String(provider || "");
   if (!name || !catalog) return "";
   const list = Array.isArray(catalog) ? catalog : [];
   const match = list.find((entry) => entry?.id === name || entry?.provider === name);
+  const modelName = String(model || "");
+  if (match && modelName) {
+    const models = Array.isArray(match.models) ? match.models : [];
+    const modelMatch = models.find((entry) => entry?.id === modelName || entry?.model === modelName);
+    const modelURL = modelMatch?.baseURL || modelMatch?.baseUrl || "";
+    if (modelURL) return String(modelURL);
+  }
   return String(match?.baseURL || match?.baseUrl || "");
 }
 
@@ -748,6 +755,7 @@ export function catalogProviderURL(provider, catalog) {
 // Official DeepSeek and the built-in catalog apply only when the profile has no URL. Empty stays unresolved.
 export function resolveProviderBaseURL({
   provider = "",
+  model = "",
   headerURL = "",
   listed = [],
   layers = [],
@@ -775,7 +783,7 @@ export function resolveProviderBaseURL({
   if (provider === "deepseek-account" && launch) return launch;
   const fallback = fallbackProviderURL(provider);
   if (fallback) return fallback;
-  return catalogProviderURL(provider, catalog);
+  return catalogProviderURL(provider, catalog, model);
 }
 
 export function resolveEngine({ provider = "", baseURL = "", env = process.env } = {}) {
@@ -1185,6 +1193,17 @@ function hasProtectedToolFact(line) {
   return /必须|不要|禁止|口令|方案|[a-z]{2,}-[a-z0-9]+-\d+|\bpinned\s+to\b/i.test(line);
 }
 
+// A model/version/region token by itself is ordinary prose. Only retain an
+// assistant line as an unresolved decision when the line contains a decision
+// verb or the explicit Chinese plan form; this avoids treating `us-east-1`
+// and `claude-3-5` as commands that block the cut.
+function unresolvedAssistantDecision(line) {
+  const text = String(line || "");
+  if (/方案\s*[A-Za-z0-9]/.test(text)) return true;
+  if (/(?:决定|采用|选用|选择|固定为|改用|切换到|定为|使用|确定)/.test(text)) return true;
+  return /\b(?:pinned\s+to|decid(?:e|ed|es)|adopt(?:ed|s)?|selected|choose|chosen|will\s+use|must\s+use)\b/i.test(text);
+}
+
 function normalizeSourceLine(role, text) {
   return (role === "tool" ? text.replace(/^[ \t]*\d+:[ \t]*/, "") : text).trim();
 }
@@ -1316,7 +1335,7 @@ export function buildCard(
     if (source.role !== "assistant") continue;
     source.text.split(/\r?\n/).forEach((line) => {
       if (liveLines.has(line.trim())) return;
-      if (/[a-z]{2,}-[a-z0-9]+-\d+/i.test(line) || /方案\s*[A-Za-z0-9]/.test(line)) {
+      if (unresolvedAssistantDecision(line)) {
         coverage.ok = false;
         coverage.missing.push({ sourceId: source.id, text: line, reason: "assistant-decision-not-retained" });
       }
@@ -1373,10 +1392,15 @@ export function buildCard(
     failureDiagnosticsComplete: incompleteFailures.length === 0,
     scope: TRUNK_SCOPE,
     hardLines: hard.map((item) => item.line),
+    hardFacts: hard.map((item) => ({ role: item.role, line: item.line })),
     hardCount: hard.length,
     omittedHard,
     deferred,
     missing,
+    missingFacts: coverage.missing.map((item) => ({
+      role: sourceById.get(item.sourceId)?.role || "unknown",
+      line: item.text,
+    })),
     omittedOrdinaryToolLines: omittedOrdinaryToolLines,
     uncovered: split.uncovered,
     keptChars: used,

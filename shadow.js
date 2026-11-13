@@ -972,7 +972,24 @@ export function ensureShadowDir(dir, access = {}) {
   return dir;
 }
 
-export function tightenCreatedShadow(file, fd, access, { remember = true } = {}) {
+export function tightenCreatedShadow(file, fd, access, { remember = true, skipRunner = false } = {}) {
+  if (skipRunner) {
+    try {
+      const entry = accessEntry(file);
+      const opened = fstatSync(fd, { bigint: true });
+      if (!entry.identity || entry.identity !== accessIdentity(opened) || opened.nlink !== 1n) {
+        throw new Error("spine: shadow published file identity changed");
+      }
+      if (remember) lockedFiles.set(entry.canonical, entry);
+      return;
+    } catch (cause) {
+      tripFuse();
+      const error = new Error("spine: shadow permission action failed; backup refused", { cause });
+      error.code = "ESHADOWACCESS";
+      error.step = "file";
+      throw error;
+    }
+  }
   if ((access.platform ?? process.platform) === "win32" && !access.runner && !shadowAccessFused()) {
     try {
       if (shadowDirLocked(dirname(file))) {
@@ -1043,12 +1060,13 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
   const dir = dirname(file);
   const parentIdentity = rememberShadowParent(dir);
 
-  const target = exclusive
-    ? file
-    : join(
-        dir,
-        `.${basename(file)}-${randomBytes(8).toString("hex")}.tmp`,
-      );
+  // Always stage the body in a private temporary file. Publishing the final
+  // name only after the bytes are flushed prevents readers from observing a
+  // half-written raw or meta file after a process interruption.
+  const target = join(
+    dir,
+    `.${basename(file)}-${randomBytes(8).toString("hex")}.tmp`,
+  );
 
   let fd = null;
   let created = false;
@@ -1058,25 +1076,34 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     fd = openSync(target, "wx", 0o600);
     created = true;
 
-    if (!exclusive) {
-      renameSync(target, file);
-      protectedPath = file;
-    }
-
-    // Keep the caller's spelling for the permission cache/runner.
-    // The opened descriptor and cleanup path remain in the canonical root.
-    tightenCreatedShadow(accessPath, fd, access);
     verifyRotationScope();
     if (parentIdentity && directoryIdentity(dir) !== parentIdentity) {
       retireRotationScope();
       throw coordinationError(new Error("shadow session directory identity changed"));
     }
+    // Confirm ACL/mode before any secret bytes are written to the staged file.
+    tightenCreatedShadow(target, fd, access);
     // Full replacement bytes are a conservative charge, even for overwrites,
     // partial writes and failed cleanup. Metadata/owner/stats are not capacity.
     if (shadowUsage && isPluginShadowName(basename(file))) {
       shadowUsage.bytes += typeof body === "string" ? Buffer.byteLength(body, "utf8") : body.byteLength;
     }
     write(fd, body);
+    fsyncSync(fd);
+
+    // The rotation/root lock provides the no-overwrite boundary for exclusive
+    // raw files. Refuse a file that appeared after admission; never replace it.
+    if (exclusive && existsSync(file)) {
+      const error = new Error("shadow file already exists");
+      error.code = "EEXIST";
+      throw error;
+    }
+    renameSync(target, file);
+    protectedPath = file;
+
+    // Keep the caller's spelling for the permission cache/runner. The opened
+    // descriptor and the final path now refer to the same published object.
+    tightenCreatedShadow(file, fd, access, { skipRunner: true });
 
     const opened = fd;
     fd = null;

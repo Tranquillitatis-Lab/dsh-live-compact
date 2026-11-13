@@ -129,6 +129,35 @@ test("#29 exact account no-address fallback; near names and existing public prov
   assert.deepEqual(resolveEngine({ provider: "strata-box", baseURL: PUBLIC, env: {} }), { engine: "local", source: "provider" });
 });
 
+test("#45 model-level catalog baseURL selects cloud without changing the request route", (t) => {
+  const h = routing(t, {
+    provider: "opencode-go",
+    header: { model: "deepseek-v4.1-flash" },
+    listed: [{ id: "opencode-go", name: "OpenCode Go" }],
+    catalog: [{
+      id: "opencode-go",
+      models: [{ id: "deepseek-v4.1-flash", baseURL: "https://opencode.ai/inference/go/v1" }],
+    }],
+  });
+  assert.equal(resolveProviderBaseURL({
+    provider: "opencode-go",
+    model: "deepseek-v4.1-flash",
+    catalog: h.engine.catalogProviders(),
+  }), "https://opencode.ai/inference/go/v1");
+  assert.deepEqual(h.engine.engineFor(h.agent), { engine: "cloud", source: "address" });
+
+  const unmatched = routing(t, {
+    provider: "opencode-go",
+    header: { model: "unknown-model" },
+    listed: [{ id: "opencode-go", name: "OpenCode Go" }],
+    catalog: [{
+      id: "opencode-go",
+      models: [{ id: "deepseek-v4.1-flash", baseURL: "https://opencode.ai/inference/go/v1" }],
+    }],
+  });
+  assert.deepEqual(unmatched.engine.engineFor(unmatched.agent), { engine: "local", source: "unknown" });
+});
+
 test("#29 header, context, listed URL, generic layers, account root, patch and launch precedence", async (t) => {
   const common = {
     rows: [row({ baseURL: PUBLIC }, { baseURL: LOCAL })], launchURL: LOCAL,

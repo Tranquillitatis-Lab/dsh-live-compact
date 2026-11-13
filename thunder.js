@@ -34,7 +34,14 @@ function estimateTokens(text) {
 }
 
 export function buildSendLess({ taskLine, uncovered, facts, proseTokens = PROSE_TOKEN_CAP }) {
-  const kept = (facts || []).filter(Boolean);
+  const kept = (facts || []).filter(Boolean).map((fact) => {
+    if (typeof fact === "object" && fact !== null) {
+      const role = String(fact.role || "unknown");
+      const line = String(fact.line || "");
+      return line ? `[${role}] ${line}` : "";
+    }
+    return `[unknown] ${String(fact)}`;
+  }).filter(Boolean);
   let prose = uncovered || "";
   if (estimateTokens(prose) > proseTokens) {
     let low = 0;
