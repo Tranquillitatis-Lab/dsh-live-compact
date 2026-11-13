@@ -1,5 +1,13 @@
 # 版本变更
 
+## 1.1.6
+
+- **billion-context 共存**：检测 `bili-native` / `billion-context` 的实际 LOADING/ACTIVE 状态；对方接管官方压缩时，Live Compact 保留官方引擎并让位，finishTurn、compact、shadow 捕获、pruner、cursor 和 recovery 路径均不再改会话。支持 `SPINE_STAND_DOWN=1` 强制让位，并补充一次性告警和回归测试。
+- **P0：隔离组接管与边界修复**：接管直接 `agentPresets.register()` 和 Include 加载的 `compaction` 隔离组，覆盖 Deep PTC 的 compaction 与 toolResultPruner 共存；修复 checkpoint、最新回合和 turn boundary 的误判，不把历史完成回合当成当前未完成回合。
+- **P1：原始结果与压缩路径加固**：同一会话重复 `toolCallId` 对应不同原文时闭合失败，原文、元数据、owner 和卡片采用私有临时文件、权限核验、fsync 和原子发布；临时 I/O 错误可重试，永久 ACL/清理错误保持 fail-closed；增加 30 秒 shadow worker 超时、长 read 非法切点回退、准确 `keptTokens` 和 turn baseline 收敛，并保留 Thunder 事实来源与显式决策边界。
+- **P1：model-level provider endpoint（#45）**：按精确的 provider + model catalog 地址判断 cloud/local，不改变宿主实际请求路由；provider-level 地址继续作为回退。
+- 默认 TUI 行为不变；真实 TUI × Live Compact 联合验收、原用户 Windows 长会话复测和 #27/#34 现场复测仍按开放边界跟进。手动指定切点的 feature request（#48）不纳入本版。
+
 ## 1.1.5
 
 - #27：把默认/共享根的容量扫描、轮换删除和 cut/official 发布事务移入按 root 串行的受管 worker，保留完整扫描与原有协调协议；worker 复用并在空闲时回收。补齐失败派发、迟到退出和 worker 重建的生命周期处理。

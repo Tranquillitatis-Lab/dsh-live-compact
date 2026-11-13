@@ -1,6 +1,6 @@
 {
   "name": "dsh-live-compact",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "In-place newest-turn compaction for DeepSeek Harness. Compress while the task runs and keep the prefix.",
   "license": "MIT",
   "author": "MerkyorLynn <268568828+MerkyorLynn@users.noreply.github.com>",

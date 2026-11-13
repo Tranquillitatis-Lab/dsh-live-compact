@@ -9,7 +9,7 @@
 完整数据、原始口径和限制见 [docs/benchmarks.md](docs/benchmarks.md)，结构化数字见 [docs/benchmark-results.json](docs/benchmark-results.json)。
 
 - **1.0.5 失忆对比**：同一真实 DeepSeek 会话，15 道回忆题两边都是 15/15；Live Compact 的日志中段细节两次都是 3/3，原版一次 1/3、一次 3/3。
-- **历史 DSH 长链路**：早期 150 道短题和 20 道 WebUniverse 连续任务都保留了原版／Live Compact 对照表；它们是历史实测，不是 1.1.5 的新验收。
+- **历史 DSH 长链路**：早期 150 道短题和 20 道 WebUniverse 连续任务都保留了原版／Live Compact 对照表；它们是历史实测，不是 1.1.6 的新验收。
 - **OpenCode 移植参考**：独立项目 [opencode-live-compact](https://github.com/Haoming9527/opencode-live-compact) 把插件移植到 OpenCode，和 OpenCode 自带的 autocompact 做了对照：在 OpenCode 2.2.6 + GPT-6 Luna 上跑 Aider 150 和 Web-Bench React 20，任务分别 150/150、20/20 且最终浏览器测试 59/59；估算费用分别低 14.3% 和 42.1%。这是 OpenCode 项目的结果，用来说明移植后的可复核测评方法，不冒充 DSH 运行结果。
 
 ![早期 DSH 两场实测](docs/slide-results.jpg)
@@ -28,13 +28,13 @@
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.5
+dsh plugin --profile headless add dsh-live-compact@1.1.6
 ```
 
 网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.5
+dsh plugin --profile web add dsh-live-compact@1.1.6
 ```
 
 想先装到本机看版本：
@@ -186,8 +186,8 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.5
-dsh plugin --profile web add dsh-live-compact@1.1.5
+dsh plugin --profile headless add dsh-live-compact@1.1.6
+dsh plugin --profile web add dsh-live-compact@1.1.6
 ```
 
 想先装到本机看版本：
@@ -200,9 +200,9 @@ dsh-live-compact --version
 上不了 npm 时的镜像安装命令：
 
 ```sh
-dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz
-dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz
-npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.5.tgz"
+dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.6.tgz
+dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.6.tgz
+npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.6.tgz"
 dsh-live-compact --version
 ```
 
