@@ -1,5 +1,14 @@
 # 版本变更
 
+## 1.1.7
+
+- **billion-context 兼容**：保留 1.1.6 的让位行为；billion-context 接管官方压缩时 Live Compact 不再同时改写会话。
+- **P1 稳定性修复**：长 read 失败后真正跳过长读分类并回退到普通选点；同一会话重复 `toolCallId` 按原文哈希区分；raw 已写而 meta 未写时可在重启后重建；收窄轮末决策识别并隔离工具证据；避免 shadow worker 超时后留下活动锁。
+- **#49 维护让位修复**：大段 catch-up 期间按会话维护闸让出事件循环，推迟重型补扫，减少跨会话请求在 `step/start` 到 `request/header` 之间等待的风险；原用户现场复测仍需继续。
+- **#53 发布兼容**：导出 `dsh-live-compact/package.json`，让宿主 bundle loader 可以读取包元数据。
+- **测评**：GLM-5.3 Flash Web-Bench React 20 中，原版与 Live Compact 均完成 20/20，浏览器验收均为 59/59；末步缓存命中约为 98.3% / 98.2%。这组数据用于正确率与缓存对照，不替代真实 TUI/Windows 现场验收。
+- #51 轮末决策落盘观测、#48 手动指定切点、#50 pi-ai provider catalog 仍列入后续版本或独立项目，不纳入本版修复承诺。
+
 ## 1.1.6
 
 - **billion-context 共存**：检测 `bili-native` / `billion-context` 的实际 LOADING/ACTIVE 状态；对方接管官方压缩时，Live Compact 保留官方引擎并让位，finishTurn、compact、shadow 捕获、pruner、cursor 和 recovery 路径均不再改会话。支持 `SPINE_STAND_DOWN=1` 强制让位，并补充一次性告警和回归测试。
