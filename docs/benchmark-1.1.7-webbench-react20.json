@@ -10,6 +10,10 @@
   "metrics": {
     "taskPass": {"original": "20/20", "liveCompact": "20/20"},
     "browserAcceptance": {"original": "59/59", "liveCompact": "59/59"},
+    "turn15ContextBeforeTokens": {"original": 124597, "liveCompact": 117432},
+    "turn15ContextAfterTokens": {"original": 47370, "liveCompact": 19361},
+    "originalCompression": "1 model summary at task 15",
+    "liveCompactCutCount": "not captured in the plugin report",
     "wallClockSeconds": {"original": 2657.8, "liveCompact": 2608.4, "liveCompactDelta": "-1.9%"},
     "meanEndContextTokens": {"original": 64290, "liveCompact": 62838, "liveCompactDelta": "-2.3%"},
     "task20EndContextTokens": {"original": 103360, "liveCompact": 102061, "liveCompactDelta": "-1.3%"},

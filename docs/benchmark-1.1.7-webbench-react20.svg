@@ -10,45 +10,53 @@
 <text x="246" y="446" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="30px" font-weight="600" fill="#9eafc3" text-anchor="middle">指标</text>
 <text x="1090" y="446" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="30px" font-weight="600" fill="#9eafc3" text-anchor="middle">原版</text>
 <text x="1490" y="446" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="30px" font-weight="600" fill="#25d4a7" text-anchor="middle">Live Compact</text>
-<line x1="116" y1="470" x2="1684" y2="470" stroke="#293c4d" stroke-width="2"/>
-<line x1="116" y1="542" x2="1684" y2="542" stroke="#293c4d"/>
-<text x="116" y="515" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">任务完成</text>
-<text x="1090" y="530" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">20/20</text>
-<text x="1490" y="530" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">20/20</text>
-<line x1="116" y1="614" x2="1684" y2="614" stroke="#293c4d"/>
-<text x="116" y="587" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">浏览器验收</text>
-<text x="1090" y="602" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">59/59</text>
-<text x="1490" y="602" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">59/59</text>
-<line x1="116" y1="686" x2="1684" y2="686" stroke="#293c4d"/>
-<text x="116" y="659" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">墙钟（20题合计）</text>
-<text x="1090" y="674" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">44分18秒</text>
-<text x="1490" y="674" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">43分28秒</text>
-<text x="1680" y="674" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-1.9%</text>
-<line x1="116" y1="758" x2="1684" y2="758" stroke="#293c4d"/>
-<text x="116" y="731" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">平均题末上下文</text>
-<text x="1090" y="746" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">64,290</text>
-<text x="1490" y="746" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">62,838</text>
-<text x="1680" y="746" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-2.3%</text>
-<line x1="116" y1="830" x2="1684" y2="830" stroke="#293c4d"/>
-<text x="116" y="803" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">第 20 题结束上下文</text>
-<text x="1090" y="818" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">103,360</text>
-<text x="1490" y="818" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">102,061</text>
-<text x="1680" y="818" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-1.3%</text>
-<line x1="116" y1="902" x2="1684" y2="902" stroke="#293c4d"/>
-<text x="116" y="875" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">最高题末上下文</text>
-<text x="1090" y="890" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">124,597</text>
-<text x="1490" y="890" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">117,432</text>
-<text x="1680" y="890" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-5.8%</text>
-<line x1="116" y1="974" x2="1684" y2="974" stroke="#293c4d"/>
-<text x="116" y="947" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">末步缓存命中率*</text>
-<text x="1090" y="962" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">98.3245%</text>
-<text x="1490" y="962" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">98.2054%</text>
-<text x="1680" y="962" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-0.12 pp</text>
-<line x1="116" y1="1046" x2="1684" y2="1046" stroke="#293c4d"/>
-<text x="116" y="1019" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">CUT 现场统计</text>
-<text x="1090" y="1034" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">不适用</text>
-<text x="1490" y="1034" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">未采集</text>
-<rect x="116" y="1111" width="1568" height="94" rx="18" fill="#0d1826" stroke="#203448"/>
-<text x="140" y="1159" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="24px" font-weight="400" fill="#9eafc3" text-anchor="start">* 末步缓存命中率沿用两份 run report 的原始字段。</text>
-<text x="140" y="1197" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="24px" font-weight="400" fill="#9eafc3" text-anchor="start">Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；图中只展示可独立核对的任务、上下文和缓存结果。</text>
+<line x1="116" y1="440" x2="1684" y2="440" stroke="#293c4d" stroke-width="2"/>
+<line x1="116" y1="512" x2="1684" y2="512" stroke="#293c4d"/>
+<text x="116" y="485" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">任务完成</text>
+<text x="1090" y="500" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">20/20</text>
+<text x="1490" y="500" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">20/20</text>
+<line x1="116" y1="574" x2="1684" y2="574" stroke="#293c4d"/>
+<text x="116" y="547" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">浏览器验收</text>
+<text x="1090" y="562" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">59/59</text>
+<text x="1490" y="562" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">59/59</text>
+<line x1="116" y1="636" x2="1684" y2="636" stroke="#293c4d"/>
+<text x="116" y="609" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">压缩次数 / 方式</text>
+<text x="1090" y="624" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">1 次 · 第 15 题模型摘要</text>
+<text x="1490" y="624" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">CUT 计数未采集</text>
+<line x1="116" y1="698" x2="1684" y2="698" stroke="#293c4d"/>
+<text x="116" y="671" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">第 15 题：压缩前 → 后</text>
+<text x="1090" y="686" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">124,597 → 47,370</text>
+<text x="1490" y="686" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">117,432 → 19,361</text>
+<line x1="116" y1="760" x2="1684" y2="760" stroke="#293c4d"/>
+<text x="116" y="733" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">墙钟（20题合计）</text>
+<text x="1090" y="748" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">44分18秒</text>
+<text x="1490" y="748" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">43分28秒</text>
+<text x="1680" y="748" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-1.9%</text>
+<line x1="116" y1="822" x2="1684" y2="822" stroke="#293c4d"/>
+<text x="116" y="795" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">平均题末上下文</text>
+<text x="1090" y="810" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">64,290</text>
+<text x="1490" y="810" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">62,838</text>
+<text x="1680" y="810" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-2.3%</text>
+<line x1="116" y1="884" x2="1684" y2="884" stroke="#293c4d"/>
+<text x="116" y="857" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">第 20 题结束上下文</text>
+<text x="1090" y="872" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">103,360</text>
+<text x="1490" y="872" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">102,061</text>
+<text x="1680" y="872" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-1.3%</text>
+<line x1="116" y1="946" x2="1684" y2="946" stroke="#293c4d"/>
+<text x="116" y="919" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">最高题末上下文</text>
+<text x="1090" y="934" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">124,597</text>
+<text x="1490" y="934" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">117,432</text>
+<text x="1680" y="934" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-5.8%</text>
+<line x1="116" y1="1008" x2="1684" y2="1008" stroke="#293c4d"/>
+<text x="116" y="981" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">末步缓存命中率*</text>
+<text x="1090" y="996" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">98.3245%</text>
+<text x="1490" y="996" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#25d4a7" text-anchor="middle">98.2054%</text>
+<text x="1680" y="996" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="25px" font-weight="500" fill="#25d4a7" text-anchor="middle">-0.12 pp</text>
+<line x1="116" y1="1070" x2="1684" y2="1070" stroke="#293c4d"/>
+<text x="116" y="1043" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="31px" font-weight="400" fill="#e8edf4" text-anchor="start">CUT 现场统计</text>
+<text x="1090" y="1058" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="500" fill="#f3f6fb" text-anchor="middle">不适用</text>
+<text x="1490" y="1058" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="38px" font-weight="600" fill="#f3f6fb" text-anchor="middle">未采集</text>
+<rect x="116" y="1125" width="1568" height="95" rx="18" fill="#0d1826" stroke="#203448"/>
+<text x="140" y="1173" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="24px" font-weight="400" fill="#9eafc3" text-anchor="start">* 末步缓存命中率沿用两份 run report 的原始字段。</text>
+<text x="140" y="1211" font-family="-apple-system,BlinkMacSystemFont,PingFang SC,Microsoft YaHei,sans-serif" font-size="24px" font-weight="400" fill="#9eafc3" text-anchor="start">Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；第 15 题数值是逐题末上下文变化，不等同于 CUT 刀数。</text>
 </svg>

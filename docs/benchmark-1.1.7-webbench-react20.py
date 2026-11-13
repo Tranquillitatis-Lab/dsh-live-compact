@@ -54,6 +54,8 @@ def svg_text(x, y, text, size, fill, anchor='start', weight=400):
 rows = [
     ('任务完成', '20/20', '20/20', ''),
     ('浏览器验收', '59/59', '59/59', ''),
+    ('压缩次数 / 方式', '1 次 · 第 15 题模型摘要', 'CUT 计数未采集', ''),
+    ('第 15 题：压缩前 → 后', '124,597 → 47,370', '117,432 → 19,361', ''),
     ('墙钟（20题合计）', fmt_sec(2657.8), fmt_sec(2608.4), '-1.9%'),
     ('平均题末上下文', '64,290', '62,838', '-2.3%'),
     ('第 20 题结束上下文', '103,360', '102,061', '-1.3%'),
@@ -84,14 +86,14 @@ d.text((left, 205), 'Web-Bench React 20', font=F_TITLE, fill=WHITE)
 d.text((left, 286), 'GLM-5.3 Flash · 原版 DSH vs Live Compact', font=F_SUB, fill=MUTED)
 d.text((left, 335), '同一 fixture · 20 个任务 · 只比较实际可回读的运行指标', font=F_SMALL, fill=MUTED)
 # headers
-header_y = 430
+header_y = 415
 centered(d, (left+130, header_y), '指标', F_HEAD, MUTED)
 centered(d, (center_o, header_y), '原版', F_HEAD, MUTED)
 centered(d, (center_l, header_y), 'Live Compact', F_HEAD, GREEN)
-d.line((left, 470, W-left, 470), fill=GRID, width=2)
+d.line((left, 440, W-left, 440), fill=GRID, width=2)
 
-row_y = 500
-row_h = 72
+row_y = 470
+row_h = 62
 for idx, (label, original, live, delta) in enumerate(rows):
     y = row_y + idx*row_h
     d.line((left, y+42, W-left, y+42), fill=GRID, width=1)
@@ -102,9 +104,9 @@ for idx, (label, original, live, delta) in enumerate(rows):
         centered(d, (center_l+190, y+16), delta, F_SMALL, GREEN)
 # footnote panel
 note_y = row_y + len(rows)*row_h + 35
-rounded(d, (left, note_y, W-left, H-75), 18, '#0d1826', '#203448', 1)
+rounded(d, (left, note_y, W-left, H-60), 18, '#0d1826', '#203448', 1)
 d.text((left+24, note_y+20), '* 末步缓存命中率沿用两份 run report 的原始字段。', font=F_NOTE, fill=MUTED)
-d.text((left+24, note_y+58), 'Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；图中只展示可独立核对的任务、上下文和缓存结果。', font=F_NOTE, fill=MUTED)
+d.text((left+24, note_y+58), 'Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；第 15 题数值是逐题末上下文变化，不等同于 CUT 刀数。', font=F_NOTE, fill=MUTED)
 # save
 im.save(OUT, quality=95)
 
@@ -115,12 +117,12 @@ parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" view
          f'<rect x="72" y="70" width="{W-144}" height="8" rx="4" fill="url(#top)"/>',
          '<defs><linearGradient id="top" x1="0" x2="1"><stop stop-color="#874aff"/><stop offset="1" stop-color="#d47bff"/></linearGradient></defs>']
 parts += [svg_text(left+160, 165, '长任务 · 20 题', 42, PURPLE, 'middle', 600), svg_text(left, 258, 'Web-Bench React 20', 62, WHITE, 'start', 700), svg_text(left, 320, 'GLM-5.3 Flash · 原版 DSH vs Live Compact', 32, MUTED), svg_text(left, 360, '同一 fixture · 20 个任务 · 只比较实际可回读的运行指标', 25, MUTED)]
-parts += [svg_text(left+130, 446, '指标', 30, MUTED, 'middle', 600), svg_text(center_o, 446, '原版', 30, MUTED, 'middle', 600), svg_text(center_l, 446, 'Live Compact', 30, GREEN, 'middle', 600), f'<line x1="{left}" y1="470" x2="{W-left}" y2="470" stroke="{GRID}" stroke-width="2"/>']
+parts += [svg_text(left+130, 446, '指标', 30, MUTED, 'middle', 600), svg_text(center_o, 446, '原版', 30, MUTED, 'middle', 600), svg_text(center_l, 446, 'Live Compact', 30, GREEN, 'middle', 600), f'<line x1="{left}" y1="440" x2="{W-left}" y2="440" stroke="{GRID}" stroke-width="2"/>']
 for idx, (label, original, live, delta) in enumerate(rows):
     y = row_y + idx*row_h
     parts += [f'<line x1="{left}" y1="{y+42}" x2="{W-left}" y2="{y+42}" stroke="{GRID}"/>', svg_text(left, y+15, label, 31, TEXT), svg_text(center_o, y+30, original, 38, WHITE, 'middle', 500), svg_text(center_l, y+30, live, 38, GREEN if live not in ('20/20','59/59','未采集') else WHITE, 'middle', 600)]
     if delta: parts.append(svg_text(center_l+190, y+30, delta, 25, GREEN, 'middle', 500))
-parts += [f'<rect x="{left}" y="{note_y}" width="{W-2*left}" height="{H-75-note_y}" rx="18" fill="#0d1826" stroke="#203448"/>', svg_text(left+24, note_y+48, '* 末步缓存命中率沿用两份 run report 的原始字段。', 24, MUTED), svg_text(left+24, note_y+86, 'Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；图中只展示可独立核对的任务、上下文和缓存结果。', 24, MUTED), '</svg>']
+parts += [f'<rect x="{left}" y="{note_y}" width="{W-2*left}" height="{H-60-note_y}" rx="18" fill="#0d1826" stroke="#203448"/>', svg_text(left+24, note_y+48, '* 末步缓存命中率沿用两份 run report 的原始字段。', 24, MUTED), svg_text(left+24, note_y+86, 'Live Compact 这次报告未生成有效 spine stats，CUT 不写成 0；第 15 题数值是逐题末上下文变化，不等同于 CUT 刀数。', 24, MUTED), '</svg>']
 SVG.write_text('\n'.join(parts))
 print(OUT)
 print(SVG)
