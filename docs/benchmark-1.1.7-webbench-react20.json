@@ -1,0 +1,25 @@
+{
+  "version": "1.1.7",
+  "model": "glm-5.3-flash",
+  "suite": "Web-Bench React 20",
+  "fixtureCommit": "7b31ca2b786eef120dd49ce63dd03d0c0006046d",
+  "sourceReports": {
+    "original": "glm53-webbench-react20-original-dsh-20261113.json",
+    "liveCompact": "glm53-webbench-react20-20261113.json"
+  },
+  "metrics": {
+    "taskPass": {"original": "20/20", "liveCompact": "20/20"},
+    "browserAcceptance": {"original": "59/59", "liveCompact": "59/59"},
+    "wallClockSeconds": {"original": 2657.8, "liveCompact": 2608.4, "liveCompactDelta": "-1.9%"},
+    "meanEndContextTokens": {"original": 64290, "liveCompact": 62838, "liveCompactDelta": "-2.3%"},
+    "task20EndContextTokens": {"original": 103360, "liveCompact": 102061, "liveCompactDelta": "-1.3%"},
+    "peakEndContextTokens": {"original": 124597, "liveCompact": 117432, "liveCompactDelta": "-5.8%"},
+    "lastStepCacheHitRatio": {"original": 0.983245, "liveCompact": 0.982054, "liveCompactDelta": "-0.12 pp"},
+    "cutStats": {"original": null, "liveCompact": null, "status": "not captured in the plugin report; do not interpret null as zero"}
+  },
+  "notes": [
+    "Both runs completed all 20 tasks and all 59 browser checks.",
+    "The image reports only fields independently present in the two run reports.",
+    "This controlled run does not close real TUI, Windows, or original-user field reports."
+  ]
+}

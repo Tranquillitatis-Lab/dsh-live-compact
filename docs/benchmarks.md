@@ -12,6 +12,23 @@
 
 ![OpenCode Aider / Web-Bench 对照](benchmarks-opencode-2026-11-09.png)
 
+## 1.1.7 GLM-5.3 Flash Web-Bench React 20
+
+这是 2026-11-13 在同一 fixture（`7b31ca2b786eef120dd49ce63dd03d0c0006046d`）上的原版 DSH / Live Compact 对照。两边都完成 20/20 任务和 59/59 浏览器验收。
+
+![1.1.7 GLM-5.3 Flash Web-Bench React 20 对照](benchmark-1.1.7-webbench-react20.png)
+
+| 指标 | 原版 DSH | Live Compact |
+|---|---:|---:|
+| 墙钟（20 题合计） | 44 分 18 秒 | 43 分 28 秒（低 1.9%） |
+| 平均题末上下文 | 64,290 | 62,838（低 2.3%） |
+| 第 20 题结束上下文 | 103,360 | 102,061（低 1.3%） |
+| 最高题末上下文 | 124,597 | 117,432（低 5.8%） |
+| 末步缓存命中率 | 98.3245% | 98.2054%（低 0.12 个百分点） |
+| CUT 现场统计 | 不适用 | 本次报告未采集 |
+
+CUT 统计没有写成 0：这次插件报告没有有效 `spine-stats`/cut 文件，图和表只展示两份报告都有的可回读字段。完整结构化数据见 [`benchmark-1.1.7-webbench-react20.json`](benchmark-1.1.7-webbench-react20.json)。这组受控对照不替代真实 TUI、Windows 或原用户现场验收。
+
 ## DSH Live Compact 历史实测
 
 ### 1.0.5 失忆对比
