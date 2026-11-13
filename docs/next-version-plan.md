@@ -130,3 +130,40 @@
 [1.1.5 已正式发布](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.5)。GitHub、npm 官方 registry、下载镜像的实际 tarball 均重新下载并匹配冻结 SHA256；公网裸下载页与候选页面逐字节一致。npm 与镜像的 global/headless/web 共六次隔离全新安装均通过，每次核对 19 个文件；README/CHANGELOG 拆分已随版交付。
 
 详见 [publication receipt](release-1.1.5-publication.json)。发布 tag 固定在 `b6b7c61`，后续发布记录只更新文档，不改变已验收包。#27/#34 仍为原现场待复测，不以发布完成冒充公开 P0 已关单。
+
+## 1.1.7 review-derived fixes
+
+本节依据 `/Users/lynn/Downloads/dsh-live-compact-Opus5.5-review.md`（2026-11-12 对 `8f3766e` 的静态复核）和当前 1.1.6 源码整理，只保留有具体运行触发路径、会影响稳定性、数据完整性或用户体验的事项。1.1.6 的 CHANGELOG 和 P1 计划把其中三项写成已实现，但下面的源码证据显示它们不能直接视为关闭；本节把三项旧清单合并为各一条，避免重复记账。
+
+### P1：优先修复或完成定向复测
+
+1. **长 read fallback（旧清单项，尚未真正关闭）**：`selectNewestChunk()` 在 `index.js:435-437` 无条件计算 `longSpan`，而回退只在 `index.js:512-514` 传入 `disableLongRead: true`。因此长读切点在配对、指针、卡片或诊断校验失败时，递归回退仍可能再次选中同一长读；当前 `test/p1-fable-review.mjs` 没有覆盖这条行为路径。修复必须让 `disableLongRead` 参与 `longSpan` 选择，并用一个长读非法切点后能选普通合法切点的行为夹具验收，不能只匹配函数源码。
+
+2. **同会话重复 `toolCallId`（旧清单项，内存路径仍未关闭）**：磁盘层 `raw.js:172-187` 会比较已有正文哈希，但实时事件在 `index.js:617-623` 命中 `rawSeen` 的不可重试记录就直接返回，批量捕获在 `index.js:1485-1495` 也会复用缓存而不再比较正文。宿主或本地 provider 若复用 ID，第二份结果可能被还原成第一份原文。命中缓存时必须比较当前正文的 bytes/SHA256（相同内容保持幂等，冲突内容 fail-closed 且不可切片/删改），并分别覆盖实时捕获、批量 catch-up 和重启恢复。
+
+3. **incomplete raw/meta 恢复**：`raw.js:37-54` 将 raw 存在而 meta 缺失标为 `missing-meta`，虽然当前事件仍有原文时 `raw.js:172-183` 可以重建，但重启恢复在 `index.js:1616-1621` 调用 `recoveryRetryable()`，而 `index.js:174-180` 没有把 `missing-meta` 视为可重试，随后缓存成不可重试记录，`captureNewBatch()` 会跳过重建。这会让崩溃窗口留下的半成品长期阻塞 prune/cut。只允许在当前事件正文可得且未带 prune marker 时重建；坏 meta、哈希冲突或原文不可得继续 fail-closed。验收需覆盖 raw-only、meta-only、meta-first、重启后 cursor 不越过失败记录等场景。
+
+4. **worker timeout 的 stale lock/owner（旧清单项，机制成立但需运行复测）**：`index.js:139-142` 超时后终止 worker，`index.js:156-171` 清理 pending 并调用 `terminate()`；rotation owner 在 `shadow.js:296-303` 只记录 `process.pid`，恢复在 `shadow.js:335-360` 以 PID 存活判断并保守保留锁。若 worker 在持有 rotation 锁时超时，worker 与主线程共用 PID，后续进程可能持续看到 “holder is live or its death is unknown” 而无法恢复。应优先改为超时只放弃等待、让持锁事务自然释放，或给锁记录加入 isolate nonce/fence 并按 nonce 回收；必须用“持锁超时→新请求/重启→恢复”夹具读回 owner、锁和最终事务状态后，才能关闭此项。
+
+5. **工具原文隔离与 user 卡片指令边界**：`plan.js:1034-1057` 将工具原文和“可以接着用”前缀放入卡片，`plan.js:1192-1204`、`1263-1275` 还会把包含“必须/不要/口令”或类似事实的工具行送入顶层 `Kept lines`；`plan.js:1361-1374` 虽有免责声明，但原文仍以 user 卡片内容出现。外部网页或命令输出中的伪指令可因此获得过高的提示权重。保留 `[tool]` 来源和可召回指针，但把工具正文放进明确的“不可信工具证据”围栏，移除“可以接着用”措辞，不让工具行升级为顶层用户硬行；用伪造命令、网页指令、错误输出和普通事实夹具验证。
+
+### P2：防止常见会话退化
+
+6. **决策正则和工具事实过宽**：`plan.js:1200-1204` 把单独的“使用/确定”当成未决策项（例如“使用 grep”“我不确定”），`plan.js:1192-1194` 仍把 `us-east-1` 等普通工具输出识别成硬事实。中文会话和基础设施输出中这些文本很常见，会让卡片 `ok=false`、保留预算膨胀并延迟后续切片。收紧助手和工具两侧的词表，区分真正的决定/约束与普通动词、否定句、region/version 字符串，并加入中文负例和工具输出负例。
+
+7. **前缀缓存收益门槛与无收益切片**：`plan.js:899-935` 只按 `chunkMin`/`chunkMax` 选段；`index.js:960-1025` 的 cloud drain 最多连续八刀，没有“本刀节省至少覆盖从切点起重写前缀成本”的门槛，且 `index.js:1019-1021` 只在提交后记录 `did not reduce`。在 drain、`chunkMin` 较小时可能为省少量 token 反复失效并重算大段 KV，用户看到延迟却没有净收益。为 drain 增加收益/重写估算（紧急线可明确豁免），无净收益时在提交前停下；同时记录每刀 saved、rewrite 和耗时，作为性能回归证据。
+
+8. **stand-down 无对端的 P2 保护**：`index.js:902`、`1195-1213` 在 `SPINE_STAND_DOWN=1` 时让 compact 返回 `null`，`index.js:1750-1777` 也不安装/调用 pruner guard；这与 1.1.6 CHANGELOG 中“让位时不改会话”的设计一致，但若误设环境变量且没有实际接管方，会话既不压缩也不修剪而持续增长。保留有对端时的零改动语义，增加一次性“stand-down 无 owner”可见告警或状态指标，并在启动/维护验收中证明 owner 存在；不要把误配静默当作正常运行。
+
+9. **提交大小守门和 flush 可见性**：`index.js:1146-1149` 在宿主没有 `estimateMessage()` 时跳过“卡片更小”检查；`index.js:1174-1183` 在 `replaced=true` 后 flush 失败会落入 catch 而不抛错，`index.js:1019-1021` 对“没有减少”也只写日志。缺失估算器或持久化失败时，用户可能看到压缩已完成但卡片更大或尚未可靠落盘。没有估算器时应在提交前采用可验证的替代测量/明确拒绝切片，flush 失败需发出结构化 warning 并标记持久化未知，`did not reduce` 不得作为成功结果继续 drain。
+
+### 1.1.7 验收边界
+
+- 每项先有定向行为夹具和失败证据，再进入完整门禁；静态复核或源码正则匹配不能写成修复完成。
+- raw/meta、重复 ID、锁 owner 和工具卡片场景必须同时覆盖实时、批量、重启和强杀边界；任何 hash/bytes 不一致都保持 fail-closed，不能让 cursor 越过失败记录。
+- 中文决策、工具事实、drain 收益和 stand-down owner 需记录卡片大小、切片次数、耗时、flush 状态和告警；性能改进不能以改变 checkpoint、tool pairing 或官方 compaction 边界为代价。
+- 这些条目不替代公开 #27/#34 的原用户 Windows 冷装/长会话复测；受控夹具通过后仍保持现场证据门槛。
+
+### 当前候选状态（fix/1.1.7-review-derived）
+
+上述 9 项已在本候选分支落地，并加入重复 `toolCallId`、raw-only 恢复、长 read fallback、工具证据隔离、决策负例、维护闸让位和 worker timeout 的定向回归。当前证据为：完整门禁 571/571、Cordis 4.1.0 / DSH 0.2.2-rc.1 兼容门禁 22/22（脚本随后再次通过完整门禁 571/571）、离线 live-fill 214/214。真实 Windows 双会话冷装/长任务和宿主侧现场数据仍需在对应机器上验收，不能由这些受控夹具替代。

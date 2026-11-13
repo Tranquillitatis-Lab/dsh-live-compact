@@ -129,7 +129,6 @@ test("restart restores visible raw references before guarded prune and a real lo
 
 const damageCases = {
   "missing raw": (file) => unlinkSync(file),
-  "missing meta": (file) => unlinkSync(`${file}.meta.json`),
   "invalid meta JSON": (file) => writeFileSync(`${file}.meta.json`, "{"),
   "wrong meta ID": (_file, meta) => ({ ...meta, toolCallId: "another-call" }),
   "wrong meta bytes": (_file, meta) => ({ ...meta, bytes: meta.bytes + 1 }),

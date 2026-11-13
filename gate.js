@@ -48,7 +48,9 @@ export function warnCompactionStandDown(ctx, logger = ctx?.logger) {
   if (root && standDownNotices.get(root) === key) return peers;
   if (root) standDownNotices.set(root, key);
   logger?.warn?.(peers[0] === "SPINE_STAND_DOWN"
-    ? "spine: SPINE_STAND_DOWN=1，已有压缩插件接管，本插件不切、不改预设。"
+    ? peers.length === 1
+      ? "spine: SPINE_STAND_DOWN=1，但未检测到活跃对端；本插件保持让位，请确认 owner 配置。"
+      : `spine: SPINE_STAND_DOWN=1，已有压缩插件接管（${peers.slice(1).join(", ")}），本插件不切、不改预设。`
     : `spine: 已有压缩插件接管（${peers.join(", ")}），本插件不切、不改预设。`);
   return peers;
 }
