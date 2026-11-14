@@ -1,0 +1,1085 @@
+{
+  "benchmark": "WebUniverse fixed long20",
+  "date": "2026-11-14",
+  "selectionFile": "/tmp/pi-webuniverse-long20-selection.json",
+  "selection": [
+    "webuniverse-11057",
+    "webuniverse-00732",
+    "webuniverse-03875",
+    "webuniverse-09595",
+    "webuniverse-11860",
+    "webuniverse-04806",
+    "webuniverse-12054",
+    "webuniverse-13500",
+    "webuniverse-00841",
+    "webuniverse-12954",
+    "webuniverse-11099",
+    "webuniverse-06559",
+    "webuniverse-06972",
+    "webuniverse-09805",
+    "webuniverse-12059",
+    "webuniverse-05683",
+    "webuniverse-14033",
+    "webuniverse-10340",
+    "webuniverse-08083",
+    "webuniverse-00219"
+  ],
+  "modelPriorityUsed": "GLM 5.3 Flash",
+  "sameTaskSet": true,
+  "sameGrader": true,
+  "cacheHitFormula": "cacheReadTokens / (cacheReadTokens + inputTokens)",
+  "notes": [
+    "Raw model stdout, credentials, session IDs, and temporary workspaces are intentionally excluded.",
+    "Task 18 has a verifier-only failure in tc_13: the verifier tries to select .step-status-select after the app has switched views; the model self-test reported 71/71 browser checks."
+  ],
+  "arms": [
+    {
+      "id": "stock",
+      "label": "DSH stock",
+      "model": "glm-5.3-flash",
+      "provider": "glm-coding",
+      "profile": "glm53",
+      "compaction": "none",
+      "aggregate": {
+        "tasks": 20,
+        "taskPass": 9,
+        "taskFail": 11,
+        "rubricPassed": 370,
+        "rubricChecks": 391,
+        "rubricPct": 94.63,
+        "reward": 18.8862,
+        "seconds": 7559.6
+      },
+      "cache": {
+        "cacheReadTokens": 40100736,
+        "inputTokens": 1303017,
+        "outputTokens": 405308,
+        "totalTokens": 41809061,
+        "hitPct": 96.85
+      },
+      "maxObservedTotalTokens": 127459,
+      "failedChecks": {
+        "webuniverse-00219": [
+          {
+            "id": "tc_3",
+            "check": "The checkout summary lists every crate row",
+            "error": ""
+          },
+          {
+            "id": "sc_2",
+            "check": "Checkout initially presents market-converted shipping choices and the correct total",
+            "error": ""
+          },
+          {
+            "id": "sc_3",
+            "check": "Selecting partner lab pickup updates the checkout total",
+            "error": ""
+          },
+          {
+            "id": "tc_5",
+            "check": "A valid submission produces the complete confirmation state",
+            "error": ""
+          }
+        ],
+        "webuniverse-06972": [
+          {
+            "id": "vf_1",
+            "check": "The JSON workspace uses the requested two-column layout",
+            "error": ""
+          }
+        ],
+        "webuniverse-10340": [
+          {
+            "id": "tc_4",
+            "check": "Inspector edits create undoable history",
+            "error": ""
+          },
+          {
+            "id": "tc_13",
+            "check": "A new mutation after undo clears the redo history",
+            "error": ""
+          }
+        ],
+        "webuniverse-13500": [
+          {
+            "id": "sc_8",
+            "check": "Planner state is retained across navigation without a full app reset",
+            "error": ""
+          }
+        ],
+        "webuniverse-00841": [
+          {
+            "id": "tc_7",
+            "check": "PerformancePage provides the required return link",
+            "error": ""
+          }
+        ],
+        "webuniverse-09595": [
+          {
+            "id": "sc_5",
+            "check": "Saving with a non-empty snapshot name appends and selects a trimmed plan",
+            "error": ""
+          },
+          {
+            "id": "sc_6",
+            "check": "Saving with an empty snapshot name uses the required default naming rule",
+            "error": ""
+          }
+        ],
+        "webuniverse-08083": [
+          {
+            "id": "tc_2",
+            "check": "PricingPage shows the required initial controls and empty import state",
+            "error": ""
+          },
+          {
+            "id": "tc_3",
+            "check": "Importing the sample price sheet renders the pricing table",
+            "error": ""
+          }
+        ],
+        "webuniverse-00732": [
+          {
+            "id": "sc_8",
+            "check": "Confirming deletion removes the packet from the current vault page and shows the required toast",
+            "error": ""
+          },
+          {
+            "id": "sc_9",
+            "check": "Deleted packets remain excluded after reload",
+            "error": ""
+          },
+          {
+            "id": "sc_10",
+            "check": "Deleted packets are removed from collection displays",
+            "error": ""
+          },
+          {
+            "id": "sc_11",
+            "check": "Saved-search runs exclude deleted packets",
+            "error": ""
+          },
+          {
+            "id": "sc_12",
+            "check": "Relation lists exclude deleted packets",
+            "error": ""
+          }
+        ],
+        "webuniverse-12054": [
+          {
+            "id": "tc_1",
+            "check": "The app initially opens on the Studio route",
+            "error": ""
+          }
+        ],
+        "webuniverse-14033": [
+          {
+            "id": "sc_1",
+            "check": "Opening the sent dispatch portal marks it viewed and logs the portal open event",
+            "error": ""
+          }
+        ],
+        "webuniverse-06559": [
+          {
+            "id": "mp_2",
+            "check": "The Builder page includes the finishing details panel in the requested location",
+            "error": ""
+          }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "webuniverse-11057",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 437.5,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 30,
+          "nChecks": 30,
+          "clean": true,
+          "usage": {
+            "inputTokens": 52375,
+            "cacheReadTokens": 1319872,
+            "outputTokens": 26091,
+            "totalTokens": 1398338,
+            "steps": 40,
+            "maxTotalTokens": 51996,
+            "cacheHitPct": 96.18
+          }
+        },
+        {
+          "id": "webuniverse-00732",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 623.2,
+          "attempts": 1,
+          "reward": 0.7916666666666666,
+          "nPassed": 19,
+          "nChecks": 24,
+          "clean": true,
+          "usage": {
+            "inputTokens": 52869,
+            "cacheReadTokens": 3446144,
+            "outputTokens": 37521,
+            "totalTokens": 3536534,
+            "steps": 41,
+            "maxTotalTokens": 103648,
+            "cacheHitPct": 98.49
+          }
+        },
+        {
+          "id": "webuniverse-03875",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 269.9,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 22,
+          "nChecks": 22,
+          "clean": true,
+          "usage": {
+            "inputTokens": 144581,
+            "cacheReadTokens": 2308288,
+            "outputTokens": 16184,
+            "totalTokens": 2469053,
+            "steps": 21,
+            "maxTotalTokens": 126665,
+            "cacheHitPct": 94.11
+          }
+        },
+        {
+          "id": "webuniverse-09595",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 584.2,
+          "attempts": 2,
+          "reward": 0.9047619047619048,
+          "nPassed": 19,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 78504,
+            "cacheReadTokens": 2376000,
+            "outputTokens": 28805,
+            "totalTokens": 2483309,
+            "steps": 36,
+            "maxTotalTokens": 125221,
+            "cacheHitPct": 96.8
+          }
+        },
+        {
+          "id": "webuniverse-11860",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 626.3,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 21,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 123283,
+            "cacheReadTokens": 5558400,
+            "outputTokens": 36225,
+            "totalTokens": 5717908,
+            "steps": 53,
+            "maxTotalTokens": 121684,
+            "cacheHitPct": 97.83
+          }
+        },
+        {
+          "id": "webuniverse-04806",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 637.0,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 21,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 83983,
+            "cacheReadTokens": 1744128,
+            "outputTokens": 32430,
+            "totalTokens": 1860541,
+            "steps": 27,
+            "maxTotalTokens": 121739,
+            "cacheHitPct": 95.41
+          }
+        },
+        {
+          "id": "webuniverse-12054",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 346.4,
+          "attempts": 1,
+          "reward": 0.9523809523809523,
+          "nPassed": 20,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 31252,
+            "cacheReadTokens": 1976768,
+            "outputTokens": 20101,
+            "totalTokens": 2028121,
+            "steps": 20,
+            "maxTotalTokens": 112663,
+            "cacheHitPct": 98.44
+          }
+        },
+        {
+          "id": "webuniverse-13500",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 366.4,
+          "attempts": 1,
+          "reward": 0.95,
+          "nPassed": 19,
+          "nChecks": 20,
+          "clean": true,
+          "usage": {
+            "inputTokens": 103144,
+            "cacheReadTokens": 1294784,
+            "outputTokens": 17643,
+            "totalTokens": 1415571,
+            "steps": 16,
+            "maxTotalTokens": 127459,
+            "cacheHitPct": 92.62
+          }
+        },
+        {
+          "id": "webuniverse-00841",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 384.0,
+          "attempts": 1,
+          "reward": 0.95,
+          "nPassed": 19,
+          "nChecks": 20,
+          "clean": true,
+          "usage": {
+            "inputTokens": 39935,
+            "cacheReadTokens": 2126720,
+            "outputTokens": 24086,
+            "totalTokens": 2190741,
+            "steps": 32,
+            "maxTotalTokens": 87498,
+            "cacheHitPct": 98.16
+          }
+        },
+        {
+          "id": "webuniverse-12954",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 346.4,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 19,
+          "nChecks": 19,
+          "clean": true,
+          "usage": {
+            "inputTokens": 30310,
+            "cacheReadTokens": 2503104,
+            "outputTokens": 22466,
+            "totalTokens": 2555880,
+            "steps": 25,
+            "maxTotalTokens": 117225,
+            "cacheHitPct": 98.8
+          }
+        },
+        {
+          "id": "webuniverse-11099",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 311.8,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 147974,
+            "cacheReadTokens": 1679616,
+            "outputTokens": 15868,
+            "totalTokens": 1843458,
+            "steps": 23,
+            "maxTotalTokens": 126341,
+            "cacheHitPct": 91.9
+          }
+        },
+        {
+          "id": "webuniverse-06559",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 146.3,
+          "attempts": 1,
+          "reward": 0.9444444444444444,
+          "nPassed": 17,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 14366,
+            "cacheReadTokens": 723392,
+            "outputTokens": 8000,
+            "totalTokens": 745758,
+            "steps": 12,
+            "maxTotalTokens": 67661,
+            "cacheHitPct": 98.05
+          }
+        },
+        {
+          "id": "webuniverse-06972",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 143.8,
+          "attempts": 1,
+          "reward": 0.9444444444444444,
+          "nPassed": 17,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 12241,
+            "cacheReadTokens": 727168,
+            "outputTokens": 7918,
+            "totalTokens": 747327,
+            "steps": 10,
+            "maxTotalTokens": 79670,
+            "cacheHitPct": 98.34
+          }
+        },
+        {
+          "id": "webuniverse-09805",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 286.1,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 24163,
+            "cacheReadTokens": 1627520,
+            "outputTokens": 14643,
+            "totalTokens": 1666326,
+            "steps": 18,
+            "maxTotalTokens": 103562,
+            "cacheHitPct": 98.54
+          }
+        },
+        {
+          "id": "webuniverse-12059",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 217.7,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 17,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 18055,
+            "cacheReadTokens": 1796736,
+            "outputTokens": 10732,
+            "totalTokens": 1825523,
+            "steps": 16,
+            "maxTotalTokens": 121041,
+            "cacheHitPct": 99.01
+          }
+        },
+        {
+          "id": "webuniverse-05683",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 269.3,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 17,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 120945,
+            "cacheReadTokens": 1286336,
+            "outputTokens": 10459,
+            "totalTokens": 1417740,
+            "steps": 14,
+            "maxTotalTokens": 126346,
+            "cacheHitPct": 91.41
+          }
+        },
+        {
+          "id": "webuniverse-14033",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 182.9,
+          "attempts": 1,
+          "reward": 0.9411764705882353,
+          "nPassed": 16,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 16551,
+            "cacheReadTokens": 870976,
+            "outputTokens": 9220,
+            "totalTokens": 896747,
+            "steps": 16,
+            "maxTotalTokens": 62442,
+            "cacheHitPct": 98.14
+          }
+        },
+        {
+          "id": "webuniverse-10340",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 298.2,
+          "attempts": 1,
+          "reward": 0.8823529411764706,
+          "nPassed": 15,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 22486,
+            "cacheReadTokens": 1046720,
+            "outputTokens": 15448,
+            "totalTokens": 1084654,
+            "steps": 14,
+            "maxTotalTokens": 84359,
+            "cacheHitPct": 97.9
+          }
+        },
+        {
+          "id": "webuniverse-08083",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 615.6,
+          "attempts": 1,
+          "reward": 0.875,
+          "nPassed": 14,
+          "nChecks": 16,
+          "clean": true,
+          "usage": {
+            "inputTokens": 116627,
+            "cacheReadTokens": 4126272,
+            "outputTokens": 31926,
+            "totalTokens": 4274825,
+            "steps": 39,
+            "maxTotalTokens": 126791,
+            "cacheHitPct": 97.25
+          }
+        },
+        {
+          "id": "webuniverse-00219",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 466.6,
+          "attempts": 1,
+          "reward": 0.75,
+          "nPassed": 12,
+          "nChecks": 16,
+          "clean": true,
+          "usage": {
+            "inputTokens": 69373,
+            "cacheReadTokens": 1561792,
+            "outputTokens": 19542,
+            "totalTokens": 1650707,
+            "steps": 25,
+            "maxTotalTokens": 125461,
+            "cacheHitPct": 95.75
+          }
+        }
+      ]
+    },
+    {
+      "id": "live117",
+      "label": "DSH + Live Compact 1.1.7",
+      "model": "glm-5.3-flash",
+      "provider": "glm-coding",
+      "profile": "glm53",
+      "compaction": "dsh-live-compact 1.1.7 compaction-spine",
+      "aggregate": {
+        "tasks": 20,
+        "taskPass": 13,
+        "taskFail": 7,
+        "rubricPassed": 383,
+        "rubricChecks": 391,
+        "rubricPct": 97.95,
+        "reward": 19.5533,
+        "seconds": 8243.4
+      },
+      "cache": {
+        "cacheReadTokens": 38464640,
+        "inputTokens": 948520,
+        "outputTokens": 401981,
+        "totalTokens": 39815141,
+        "hitPct": 97.59
+      },
+      "maxObservedTotalTokens": 129585,
+      "failedChecks": {
+        "webuniverse-00219": [
+          {
+            "id": "sc_2",
+            "check": "Checkout initially presents market-converted shipping choices and the correct total",
+            "error": ""
+          },
+          {
+            "id": "tc_5",
+            "check": "A valid submission produces the complete confirmation state",
+            "error": ""
+          }
+        ],
+        "webuniverse-12059": [
+          {
+            "id": "sc_1",
+            "check": "Submitting a valid activity records the selected values, resets the specified fields, and shows success",
+            "error": ""
+          }
+        ],
+        "webuniverse-10340": [
+          {
+            "id": "tc_13",
+            "check": "A new mutation after undo clears the redo history",
+            "error": ""
+          }
+        ],
+        "webuniverse-13500": [
+          {
+            "id": "sc_8",
+            "check": "Planner state is retained across navigation without a full app reset",
+            "error": ""
+          }
+        ],
+        "webuniverse-09595": [
+          {
+            "id": "sc_5",
+            "check": "Saving with a non-empty snapshot name appends and selects a trimmed plan",
+            "error": ""
+          }
+        ],
+        "webuniverse-12054": [
+          {
+            "id": "tc_1",
+            "check": "The app initially opens on the Studio route",
+            "error": ""
+          }
+        ],
+        "webuniverse-14033": [
+          {
+            "id": "sc_1",
+            "check": "Opening the sent dispatch portal marks it viewed and logs the portal open event",
+            "error": ""
+          }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "webuniverse-11057",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 98.6,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 30,
+          "nChecks": 30,
+          "clean": true,
+          "usage": {
+            "inputTokens": 9395,
+            "cacheReadTokens": 974528,
+            "outputTokens": 13352,
+            "totalTokens": 997275,
+            "steps": 15,
+            "maxTotalTokens": 76047,
+            "cacheHitPct": 99.05
+          }
+        },
+        {
+          "id": "webuniverse-00732",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 781.9,
+          "attempts": 2,
+          "reward": 1.0,
+          "nPassed": 24,
+          "nChecks": 24,
+          "clean": true,
+          "usage": {
+            "inputTokens": 159089,
+            "cacheReadTokens": 2473280,
+            "outputTokens": 39867,
+            "totalTokens": 2672236,
+            "steps": 42,
+            "maxTotalTokens": 116116,
+            "cacheHitPct": 93.96
+          }
+        },
+        {
+          "id": "webuniverse-03875",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 274.3,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 22,
+          "nChecks": 22,
+          "clean": true,
+          "usage": {
+            "inputTokens": 31700,
+            "cacheReadTokens": 857024,
+            "outputTokens": 17964,
+            "totalTokens": 906688,
+            "steps": 17,
+            "maxTotalTokens": 66775,
+            "cacheHitPct": 96.43
+          }
+        },
+        {
+          "id": "webuniverse-09595",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 448.5,
+          "attempts": 1,
+          "reward": 0.9523809523809523,
+          "nPassed": 20,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 44221,
+            "cacheReadTokens": 2348736,
+            "outputTokens": 26450,
+            "totalTokens": 2419407,
+            "steps": 26,
+            "maxTotalTokens": 110192,
+            "cacheHitPct": 98.15
+          }
+        },
+        {
+          "id": "webuniverse-11860",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 1161.7,
+          "attempts": 2,
+          "reward": 1.0,
+          "nPassed": 21,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 20914,
+            "cacheReadTokens": 2417472,
+            "outputTokens": 11768,
+            "totalTokens": 2450154,
+            "steps": 26,
+            "maxTotalTokens": 100741,
+            "cacheHitPct": 99.14
+          }
+        },
+        {
+          "id": "webuniverse-04806",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 602.8,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 21,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 71928,
+            "cacheReadTokens": 3721664,
+            "outputTokens": 29385,
+            "totalTokens": 3822977,
+            "steps": 52,
+            "maxTotalTokens": 129585,
+            "cacheHitPct": 98.1
+          }
+        },
+        {
+          "id": "webuniverse-12054",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 387.9,
+          "attempts": 1,
+          "reward": 0.9523809523809523,
+          "nPassed": 20,
+          "nChecks": 21,
+          "clean": true,
+          "usage": {
+            "inputTokens": 36785,
+            "cacheReadTokens": 1776256,
+            "outputTokens": 23238,
+            "totalTokens": 1836279,
+            "steps": 32,
+            "maxTotalTokens": 68224,
+            "cacheHitPct": 97.97
+          }
+        },
+        {
+          "id": "webuniverse-13500",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 338.9,
+          "attempts": 1,
+          "reward": 0.95,
+          "nPassed": 19,
+          "nChecks": 20,
+          "clean": true,
+          "usage": {
+            "inputTokens": 29629,
+            "cacheReadTokens": 1826496,
+            "outputTokens": 19718,
+            "totalTokens": 1875843,
+            "steps": 22,
+            "maxTotalTokens": 97309,
+            "cacheHitPct": 98.4
+          }
+        },
+        {
+          "id": "webuniverse-00841",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 619.0,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 20,
+          "nChecks": 20,
+          "clean": true,
+          "usage": {
+            "inputTokens": 93958,
+            "cacheReadTokens": 2404864,
+            "outputTokens": 29803,
+            "totalTokens": 2528625,
+            "steps": 31,
+            "maxTotalTokens": 126945,
+            "cacheHitPct": 96.24
+          }
+        },
+        {
+          "id": "webuniverse-12954",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 220.1,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 19,
+          "nChecks": 19,
+          "clean": true,
+          "usage": {
+            "inputTokens": 24837,
+            "cacheReadTokens": 893056,
+            "outputTokens": 13573,
+            "totalTokens": 931466,
+            "steps": 16,
+            "maxTotalTokens": 67689,
+            "cacheHitPct": 97.29
+          }
+        },
+        {
+          "id": "webuniverse-11099",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 356.1,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 36018,
+            "cacheReadTokens": 3320000,
+            "outputTokens": 20678,
+            "totalTokens": 3376696,
+            "steps": 38,
+            "maxTotalTokens": 102577,
+            "cacheHitPct": 98.93
+          }
+        },
+        {
+          "id": "webuniverse-06559",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 221.5,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 23058,
+            "cacheReadTokens": 2631296,
+            "outputTokens": 12130,
+            "totalTokens": 2666484,
+            "steps": 23,
+            "maxTotalTokens": 124727,
+            "cacheHitPct": 99.13
+          }
+        },
+        {
+          "id": "webuniverse-06972",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 463.4,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 68236,
+            "cacheReadTokens": 1465920,
+            "outputTokens": 21576,
+            "totalTokens": 1555732,
+            "steps": 36,
+            "maxTotalTokens": 126412,
+            "cacheHitPct": 95.55
+          }
+        },
+        {
+          "id": "webuniverse-09805",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 283.3,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 18,
+          "nChecks": 18,
+          "clean": true,
+          "usage": {
+            "inputTokens": 27904,
+            "cacheReadTokens": 1331712,
+            "outputTokens": 16598,
+            "totalTokens": 1376214,
+            "steps": 20,
+            "maxTotalTokens": 79511,
+            "cacheHitPct": 97.95
+          }
+        },
+        {
+          "id": "webuniverse-12059",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 230.5,
+          "attempts": 1,
+          "reward": 0.9411764705882353,
+          "nPassed": 16,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 22113,
+            "cacheReadTokens": 2078336,
+            "outputTokens": 13500,
+            "totalTokens": 2113949,
+            "steps": 23,
+            "maxTotalTokens": 100999,
+            "cacheHitPct": 98.95
+          }
+        },
+        {
+          "id": "webuniverse-05683",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 184.2,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 17,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 20055,
+            "cacheReadTokens": 1666560,
+            "outputTokens": 12056,
+            "totalTokens": 1698671,
+            "steps": 15,
+            "maxTotalTokens": 120520,
+            "cacheHitPct": 98.81
+          }
+        },
+        {
+          "id": "webuniverse-14033",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 331.8,
+          "attempts": 1,
+          "reward": 0.9411764705882353,
+          "nPassed": 16,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 62185,
+            "cacheReadTokens": 1070464,
+            "outputTokens": 16658,
+            "totalTokens": 1149307,
+            "steps": 29,
+            "maxTotalTokens": 121576,
+            "cacheHitPct": 94.51
+          }
+        },
+        {
+          "id": "webuniverse-10340",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 39.9,
+          "attempts": 1,
+          "reward": 0.9411764705882353,
+          "nPassed": 16,
+          "nChecks": 17,
+          "clean": true,
+          "usage": {
+            "inputTokens": 2486,
+            "cacheReadTokens": 423936,
+            "outputTokens": 1565,
+            "totalTokens": 427987,
+            "steps": 5,
+            "maxTotalTokens": 86426,
+            "cacheHitPct": 99.42
+          }
+        },
+        {
+          "id": "webuniverse-08083",
+          "status": "pass",
+          "promptStatus": "ok",
+          "seconds": 808.3,
+          "attempts": 1,
+          "reward": 1.0,
+          "nPassed": 16,
+          "nChecks": 16,
+          "clean": true,
+          "usage": {
+            "inputTokens": 130849,
+            "cacheReadTokens": 3197696,
+            "outputTokens": 40764,
+            "totalTokens": 3369309,
+            "steps": 43,
+            "maxTotalTokens": 126027,
+            "cacheHitPct": 96.07
+          }
+        },
+        {
+          "id": "webuniverse-00219",
+          "status": "fail",
+          "promptStatus": "ok",
+          "seconds": 390.7,
+          "attempts": 1,
+          "reward": 0.875,
+          "nPassed": 14,
+          "nChecks": 16,
+          "clean": true,
+          "usage": {
+            "inputTokens": 33160,
+            "cacheReadTokens": 1585344,
+            "outputTokens": 21338,
+            "totalTokens": 1639842,
+            "steps": 25,
+            "maxTotalTokens": 75975,
+            "cacheHitPct": 97.95
+          }
+        }
+      ]
+    }
+  ],
+  "delta": {
+    "taskPass": 4,
+    "rubricPassed": 13,
+    "reward": 0.6671,
+    "cacheHitPctPoints": 0.74
+  },
+  "repositoryCommit": "70a99975be84099ee3881fbc3cb7423a0da9a751"
+}
