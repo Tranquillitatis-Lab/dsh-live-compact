@@ -134,6 +134,17 @@ test("a nested group follows parent.fiber for allowlist selection", () => {
   owner.dispose();
 });
 
+test("a nested group follows an arbitrary outer preset ID", () => {
+  const host = gateHost();
+  const owner = host.mount();
+  installPresetGate(owner, { takeoverPresets: { get: () => ["deep-ptc"] } });
+  const rows = groupRows();
+  const nested = { entry: { options: groupEntry }, parent: { fiber: { entry: { options: { id: "deep-ptc" } } } } };
+  const selected = host.load(rows, nested);
+  assert.equal(selected[0].name, "dsh-live-compact");
+  owner.dispose();
+});
+
 test("ordinary arrays and non-isolated groups are not takeover targets", () => {
   const rows = groupRows();
   for (const entry of [undefined, {}, { id: "compaction", group: true },

@@ -96,6 +96,7 @@ function takeoverSelected(config, entry, selector) {
 function outerPresetId(fiber) {
   const seen = new Set();
   const queue = [];
+  let found = "";
   const push = (value) => {
     if (value && (typeof value === "object" || typeof value === "function") && !seen.has(value)) queue.push(value);
   };
@@ -108,21 +109,20 @@ function outerPresetId(fiber) {
     let ids = [];
     try {
       ids = [
-        current?.id,
-        current?.config?.id,
         current?.entry?.options?.id,
         current?.fiber?.entry?.options?.id,
+        current?.config?.id,
+        current?.id,
       ];
     } catch {}
-    if (ids.some((id) => typeof id === "string" && PRESET_IDS.has(id))) {
-      return ids.find((id) => typeof id === "string" && PRESET_IDS.has(id));
-    }
+    const candidate = ids.find((id) => typeof id === "string" && id.length > 0);
+    if (candidate) found = candidate;
     try { push(current.parent); } catch {}
     try { push(current.fiber); } catch {}
     try { push(current.parent?.fiber); } catch {}
     try { push(current.fiber?.parent); } catch {}
   }
-  return "";
+  return found;
 }
 
 function withEngineConfig(entry, rootConfig) {

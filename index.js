@@ -1064,29 +1064,34 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const timeoutMs = Number.isFinite(this.prestepWaitTimeoutMs)
       ? Math.max(1, this.prestepWaitTimeoutMs)
       : PRESTEP_WAIT_TIMEOUT_MS;
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const waitSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    while (!waitSignal.aborted) {
-      const jobs = [];
-      if (state.maintenanceJob) jobs.push(state.maintenanceJob);
-      const catchup = this.pendingCatchups.get(state.key);
-      if (catchup?.promise) jobs.push(catchup.promise);
-      if (!jobs.length) break;
-      const settled = Promise.allSettled(jobs);
-      let abort;
-      const aborted = new Promise((resolve) => {
-        abort = () => resolve();
-        waitSignal.addEventListener("abort", abort, { once: true });
-      });
-      await Promise.race([settled, aborted]);
-      waitSignal.removeEventListener("abort", abort);
-      if (timeout.aborted && !signal?.aborted) {
-        state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
-        this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs });
-        this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${timeoutMs}ms; letting provider request continue`);
-        return;
+    const timeoutController = new AbortController();
+    const timeoutTimer = setTimeout(() => timeoutController.abort({ kind: "prestep-timeout" }), timeoutMs);
+    try {
+      const waitSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
+      while (!waitSignal.aborted) {
+        const jobs = [];
+        if (state.maintenanceJob) jobs.push(state.maintenanceJob);
+        const catchup = this.pendingCatchups.get(state.key);
+        if (catchup?.promise) jobs.push(catchup.promise);
+        if (!jobs.length) break;
+        const settled = Promise.allSettled(jobs);
+        let abort;
+        const aborted = new Promise((resolve) => {
+          abort = () => resolve();
+          waitSignal.addEventListener("abort", abort, { once: true });
+        });
+        await Promise.race([settled, aborted]);
+        waitSignal.removeEventListener("abort", abort);
+        if (timeoutController.signal.aborted && !signal?.aborted) {
+          state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
+          this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs });
+          this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${timeoutMs}ms; letting provider request continue`);
+          return;
+        }
+        if (signal?.aborted) return;
       }
-      if (signal?.aborted) return;
+    } finally {
+      clearTimeout(timeoutTimer);
     }
   }
 
