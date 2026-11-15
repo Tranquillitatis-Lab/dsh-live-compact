@@ -863,7 +863,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       ctx.on("agent/pre-step", async ({ agent, signal }, next) => {
         await this.waitForMaintenance(agent, signal);
         return typeof next === "function" ? next() : undefined;
-      });
+      }, { prepend: true });
       ctx.on("agent/turn-stopping", async ({ agent, signal }) => {
         await this.runTurnStoppingMaintenance(agent, signal);
       });
@@ -922,6 +922,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       turnEndSeq: -1,
       lastMaintenanceTurnEndSeq: -1,
       lastStoppingTurnEndSeq: -1,
+      rawCutRetryAttempts: 0,
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -1533,9 +1534,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             this.ctx.logger?.info?.(`spine cut ${Date.now() - started}ms ${before} -> ${after} chunk=${chunk.tokens} saved=${saved}`);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("raw backup missing before cut")) {
+            if (message.includes("raw backup missing before cut") && error?.retryable === true) {
               catchup.retryRequested = true;
-              if (catchup.finished) this.scheduleMaintenanceRetry(agent);
+              if (catchup.finished && state.rawCutRetryAttempts < CAPTURE_RETRY_LIMIT) {
+                state.rawCutRetryAttempts += 1;
+                this.scheduleMaintenanceRetry(agent);
+              }
             }
             maintenanceFailed = true;
             this.recordDecision(state, { phase: "cut", result: "failed", reason: message, drain });
@@ -1554,7 +1558,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         state.maxTurnGrowth = 0;
         await this.ctx.sessions?.flush?.(agent.session);
         this.rememberPrefix(agent);
-        if (!maintenanceFailed) markCompleted();
+        if (!maintenanceFailed) {
+          state.rawCutRetryAttempts = 0;
+          markCompleted();
+        }
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1651,7 +1658,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           }
         }
         if (!id || !verifiedRaw(raw).ok) {
-          throw new Error(`spine: raw backup missing before cut: ${id || "unknown"}`);
+          const missing = new Error(`spine: raw backup missing before cut: ${id || "unknown"}`);
+          missing.retryable = raw == null || raw.retryable === true;
+          throw missing;
         }
       }
       messages.push({
@@ -1869,6 +1878,13 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const key = this.rawKey(session, id);
     const cached = this.rawSeen.get(key);
     if (!cached || cached.retryable === true) return cached || null;
+    if (cached.unrecoverable) {
+      const text = messageText(event.data?.message);
+      if (String(text).includes(PRUNE_MARKER)) return cached;
+      const refused = { ok: false, reason: "duplicate-tool-call-id", toolCallId: id, retryable: false };
+      this.rawSeen.set(key, refused);
+      return refused;
+    }
     if (!cached.ok || !Number.isInteger(cached.bytes) || typeof cached.sha256 !== "string") return cached;
     const text = messageText(event.data?.message);
     if (String(text).includes(PRUNE_MARKER)) return cached;

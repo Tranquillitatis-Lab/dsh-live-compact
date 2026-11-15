@@ -485,6 +485,21 @@ test("raw corruption after selection is rechecked before any cut or backup claim
   assert.equal(readdirSync(sessionDir(h.root, f.session.id)).some((name) => name.startsWith("cut-")), false);
 });
 
+test("permanent raw cut failure does not schedule an unbounded retry", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine({ minTokens: 20000 }, "cloud");
+  h.capture(engine, f);
+  ctx.tokenMeter.measure = () => ({ nodes: f.measure().nodes, totalTokens: 60000, totalHeuristicTokens: 60000 });
+  let retries = 0;
+  engine.scheduleMaintenanceRetry = () => { retries += 1; };
+  engine.commitSelectedSpan = async () => {
+    throw Object.assign(new Error("spine: raw backup missing before cut: long"), { retryable: false });
+  };
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { skipCapture: true });
+  assert.equal(retries, 0);
+});
+
 test("#34 defers tool-result shadow capture and coalesces duplicate events", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());

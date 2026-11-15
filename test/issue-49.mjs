@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import Spine from "../index.js";
+
+test("#49 pre-step barrier is registered before the stock pressure hook", () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf('ctx.on("agent/pre-step"'), source.indexOf('ctx.on("agent/turn-stopping"'));
+  assert.match(body, /prepend: true/);
+});
 
 test("#49 deferred catch-up never enters a serialized maintenance gate", async () => {
   const engine = Object.create(Spine.prototype);

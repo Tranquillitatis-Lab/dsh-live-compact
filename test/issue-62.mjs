@@ -45,6 +45,26 @@ test("#62 advances past an already-pruned result and captures later results", ()
   assert.equal(engine.captureCursor.get("session-pruned"), 2);
 });
 
+test("#62 blocks a new body after an unrecoverable duplicate ID", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map([["session-pruned\0call-0", {
+    ok: false, reason: "already-pruned", toolCallId: "call-0", unrecoverable: true,
+  }]]);
+  engine.callIndex = new Map();
+  engine.captureCursor = new Map([["session-pruned", 0]]);
+  engine.persistCapture = false;
+  engine.writeCaptureCursor = () => {};
+  engine.noteEvent = () => {};
+  engine.captureOne = () => { throw new Error("must not recapture an unrecoverable duplicate"); };
+  const session = { id: "session-pruned", surface: { nodes: [] }, eventAt() { return undefined; } };
+  const events = [
+    { seq: 0, type: "tool/result", data: { message: { toolCallId: "call-0", content: [{ type: "text", text: "new body" }] } } },
+  ];
+  const result = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128 });
+  assert.equal(result.blocked, true);
+  assert.equal(engine.captureCursor.get("session-pruned"), 0);
+});
+
 test("#62 merges maintenanceRequested when reusing an in-flight catch-up", () => {
   const engine = Object.create(Spine.prototype);
   const task = {
