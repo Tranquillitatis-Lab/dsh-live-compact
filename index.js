@@ -571,19 +571,34 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   };
   let usedLongCut = false;
   let picked = null;
+  let longPicked = null;
   const fallbackWithoutLongRead = () => context.disableLongRead
     ? null
     : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true });
   if (longSpan) {
-    const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
-    if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
+    const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
+    if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
+      longPicked = candidate;
+    }
+  }
+  let ordinaryPicked = null;
+  if (end >= first && !isCheckpoint(session, nodes[end])) {
+    ordinaryPicked = selectCutIndexes(items, cutOptions);
+  }
+  if (longPicked && ordinaryPicked) {
+    const longTokens = longPicked.tokens || 0;
+    const ordinaryTokens = ordinaryPicked.tokens || 0;
+    if (ordinaryTokens >= longTokens) {
+      picked = ordinaryPicked;
+    } else {
       picked = longPicked;
       usedLongCut = true;
     }
-  }
-  if (!picked) {
-    if (end < first || isCheckpoint(session, nodes[end])) return null;
-    picked = selectCutIndexes(items, cutOptions);
+  } else if (ordinaryPicked) {
+    picked = ordinaryPicked;
+  } else if (longPicked) {
+    picked = longPicked;
+    usedLongCut = true;
   }
   if (!picked) return null;
   if (picked.pointerOnly) {
@@ -606,6 +621,42 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
     picked.start = pairStart;
   }
   if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();
+
+  // 1.0.6 selected the newest legal end, then grew the cut left until the
+  // 32K rail, a user/checkpoint, an unbalanced tool pair, or an incomplete
+  // card stopped it. Returning the first >= CHUNK_MIN phase leaves a tiny
+  // 1.9K tail in a long drain and defeats the low-water goal. Restore that
+  // core selection rule while keeping the newer source and checkpoint guards.
+  if (!picked.pointerOnly) {
+    let expandedStart = picked.start;
+    let expandedTokens = items.slice(expandedStart, picked.end + 1)
+      .reduce((sum, item) => sum + (item.tokens || 0), 0);
+    while (expandedStart > first) {
+      const previous = expandedStart - 1;
+      if (isCheckpoint(session, nodes[previous])) break;
+      if (classifications[previous].isGenuineUserBoundary) break;
+      if (usedLongCut && previous < longSpan.start) break;
+      const nextTokens = expandedTokens + (priced[previous].tokens || 0);
+      if (nextTokens > settings.chunkMax) break;
+      const trialPieces = spanPieces(previous, picked.end);
+      const trialCard = buildCard(
+        trialPieces.map((piece) => piece.text).join("\n"),
+        liveText(previous, picked.end),
+        trialPieces,
+        extras,
+      );
+      if (trialCard.ok !== true) break;
+      expandedStart = previous;
+      expandedTokens = nextTokens;
+    }
+    while (expandedStart <= picked.end &&
+        !cutOk(toolPairingBalancedBefore, session, nodes[expandedStart])) {
+      expandedTokens -= priced[expandedStart].tokens || 0;
+      expandedStart += 1;
+    }
+    if (expandedStart > picked.end) return usedLongCut ? fallbackWithoutLongRead() : null;
+    picked.start = expandedStart;
+  }
   const start = picked.start;
   end = picked.end;
   const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
