@@ -884,8 +884,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const prefix = `${key}\0`;
     const protectPaths = [];
     if (state?.lastCardPath) protectPaths.push(state.lastCardPath);
+    const liveIds = new Set();
+    const session = state?.liveAgent?.session;
+    for (const seq of session?.surface?.nodes || []) {
+      const event = session.eventAt?.(seq);
+      const id = event?.type === "tool/result" ? event.data?.message?.toolCallId : "";
+      if (id) liveIds.add(id);
+    }
     for (const [rawKey, raw] of this.rawSeen || []) {
-      if (!rawKey.startsWith(prefix) || !raw?.path) continue;
+      if (!rawKey.startsWith(prefix) || !raw?.path || !liveIds.has(rawKey.slice(prefix.length))) continue;
       protectPaths.push(raw.path, `${raw.path}.meta.json`);
     }
     appendDecision(shadowDirectory(), { sid: key, ...record }, { protectPaths });
@@ -1097,6 +1104,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         waitSignal.removeEventListener("abort", abort);
         if (timeoutController.signal.aborted && !signal?.aborted) {
           state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
+          if (Number.isInteger(state.turnEndSeq)) {
+            state.lastMaintenanceTurnEndSeq = state.turnEndSeq - 1;
+            state.turnEndPending = true;
+            this.scheduleTurnEndMaintenance(agent, state.turnEndSeq, state.turnEndEvent);
+          }
           this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs });
           this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${timeoutMs}ms; letting provider request continue`);
           return;
@@ -1695,7 +1707,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
-    this.stateFor(agent).lastCardPath = chunk.card?.shadowFile || "";
+    if (typeof this.stateFor === "function") this.stateFor(agent).lastCardPath = chunk.card?.shadowFile || "";
     signal?.throwIfAborted();
     if (this.standDown?.()) return false;
     assertCurrentSpan(shadowedSeqs);
