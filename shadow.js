@@ -699,15 +699,50 @@ function acquireStatsLock(lock) {
       }
       if (error?.code !== "EEXIST") return null;
       let pid = null;
+      let observedText = "";
       try {
-        const text = readFileSync(lock, "utf8").trim();
-        pid = /^[1-9]\d*$/.test(text) ? Number(text) : null;
+        observedText = readFileSync(lock, "utf8").trim();
+        pid = /^[1-9]\d*$/.test(observedText) ? Number(observedText) : null;
       } catch {
         return null;
       }
       if (pid !== null && processAlive(pid) === false) {
-        try { unlinkSync(lock); } catch {}
-        continue;
+        const recovery = `${lock}.recover`;
+        let recoveryFd;
+        let removed = false;
+        try {
+          recoveryFd = openSync(recovery, "wx", 0o600);
+          writeFileSync(recoveryFd, String(process.pid));
+          fsyncSync(recoveryFd);
+        } catch (recoveryError) {
+          if (recoveryFd !== undefined) {
+            try { closeSync(recoveryFd); } catch {}
+            try { unlinkSync(recovery); } catch {}
+          }
+          if (recoveryError?.code === "EEXIST") {
+            let recoveryPid = null;
+            try {
+              const text = readFileSync(recovery, "utf8").trim();
+              recoveryPid = /^[1-9]\d*$/.test(text) ? Number(text) : null;
+            } catch {}
+            if (recoveryPid !== null && processAlive(recoveryPid) === false) {
+              try { unlinkSync(recovery); } catch {}
+              continue;
+            }
+          }
+          return null;
+        }
+        try {
+          let current = "";
+          try { current = readFileSync(lock, "utf8").trim(); } catch {}
+          if (current === observedText && processAlive(pid) === false) {
+            try { unlinkSync(lock); removed = true; } catch {}
+          }
+        } finally {
+          try { closeSync(recoveryFd); } catch {}
+          try { unlinkSync(recovery); } catch {}
+        }
+        if (removed) continue;
       }
       return null;
     }

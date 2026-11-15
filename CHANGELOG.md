@@ -11,8 +11,9 @@
 - **跨会话维护与门禁**：pending capture flush 按当前 session 收敛，避免一个会话的补扫拖住另一个会话；`test:gate` 现在实际执行 `test/turn-end-bridge.mjs` 与 `test/v107.mjs`，并补充跨会话等待回归。
 - **状态机与首轮路由加固**：复用中的 catch-up 合并维护请求；blocked/retry 超限先恢复可见 raw；turn-stopping 任务纳入维护 barrier，并跳过同一完成边界的第二次 turn/end；首次 provider catalog 未就绪前不会误判为 local。Windows Worker 空闲缓存延长到 60 秒，统计锁可恢复明确死亡 PID。
 - **worker 与决策日志生命周期**：无 pending 写入时解除空闲 shadow worker 的事件循环引用；`spine-decisions.jsonl` 通过 shadow root 事务追加并计入容量快照，避免轮换竞态和快路径漏计。
-- **维护 retry fencing**：turn-stopping owner 活跃时，blocked/retry catch-up 只排队到 owner 之后，不覆盖其 abort controller 或启动重叠维护。
-- **shadow 目标保护**：stats 锁创建后的写入/fsync 失败会清理本次锁；决策日志拒绝 symlink、hardlink 和非普通文件目标。
+- **维护 retry fencing**：turn-stopping owner 活跃时，blocked/retry catch-up 和暂时缺失完成边界都只排队到 owner 之后，不清掉 barrier、不覆盖 abort controller，也不启动重叠维护。
+- **shadow 目标保护**：stats 锁创建后的写入/fsync 失败会清理本次锁；死 PID 恢复用 recovery lock 二次确认；决策日志拒绝 symlink、hardlink 和非普通文件目标。
+- **worker 生命周期**：空闲 worker 解除引用，复用时先重新引用，保证 one-shot 宿主也能完成下一次 shadow 写入。
 - **回归**：补充已剪游标推进、Worker 启动、维护状态、同轮去重、preset 白名单、长失败诊断、真实 #61 硬事实预算和决策日志测试。
 
 ## 1.1.11

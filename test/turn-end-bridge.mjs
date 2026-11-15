@@ -208,6 +208,36 @@ test("catch-up retry defers behind an active turn-stopping owner", () => {
   assert.equal(state.maintenanceOwner != null, true);
 });
 
+test("owner keeps the barrier when catch-up temporarily lacks a completed boundary", () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "owner-boundary-gap",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceOwner: {},
+    turnEndPending: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [] } };
+  engine.stateFor = () => state;
+  engine.standDown = () => false;
+  engine.pendingCatchups = new Map([[state.key, {}]]);
+  engine.pendingCatchupJobs = new Map();
+  const task = {
+    key: state.key,
+    agent,
+    finished: false,
+    captureBlocked: false,
+    retryRequested: false,
+    maintenanceRequested: false,
+    promise: Promise.resolve(),
+    resolve() {},
+  };
+  engine.finishCaptureCatchup(task);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+  assert.equal(state.turnEndPending, true);
+});
+
 test("turn/end does not run a second maintenance pass after turn-stopping handled its boundary", async () => {
   const engine = Object.create(Spine.prototype);
   const event = { seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } };

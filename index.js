@@ -193,6 +193,7 @@ function runShadowWorker(payload) {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
+    entry.worker.ref?.();
   }
   const id = entry.nextId++;
   return new Promise((resolve, reject) => {
@@ -1284,8 +1285,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       // A catch-up can finish after the next turn has already started. Do not
       // leave the session permanently warming; the next persisted turn/end
       // must be allowed to schedule a fresh maintenance pass.
-      state.pendingMaintenance = false;
-      state.warming = false;
+      if (state.maintenanceOwner) {
+        state.turnEndPending = true;
+      } else {
+        state.pendingMaintenance = false;
+        state.warming = false;
+      }
     } else if (!state.maintenanceOwner) {
       // A reused catch-up can finish without a retry request after a newer
       // maintenance caller has already dropped its barrier. Do not retain a

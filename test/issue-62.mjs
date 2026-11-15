@@ -14,6 +14,7 @@ test("#62 starts the shadow worker through an eval import bootstrap", () => {
   assert.match(indexSource, /const workerBootstrap = `import\(/);
   assert.match(indexSource, /eval: true/);
   assert.match(indexSource, /worker\.unref\?\.\(\)/);
+  assert.match(indexSource, /entry\.worker\.ref\?\.\(\)/);
   assert.doesNotMatch(indexSource, /execArgv: process\.execArgv\.filter/);
 });
 
