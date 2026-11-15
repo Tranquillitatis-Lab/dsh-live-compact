@@ -123,6 +123,17 @@ test("a group inherits the outer preset ID for allowlist selection", () => {
   assert.equal(selected[0].name, "dsh-live-compact");
 });
 
+test("a nested group follows parent.fiber for allowlist selection", () => {
+  const host = gateHost();
+  const owner = host.mount();
+  installPresetGate(owner, { takeoverPresets: { get: () => ["standard"] } });
+  const rows = groupRows();
+  const nested = { entry: { options: groupEntry }, parent: { fiber: { entry: { options: { id: "standard" } } } } };
+  const selected = host.load(rows, nested);
+  assert.equal(selected[0].name, "dsh-live-compact");
+  owner.dispose();
+});
+
 test("ordinary arrays and non-isolated groups are not takeover targets", () => {
   const rows = groupRows();
   for (const entry of [undefined, {}, { id: "compaction", group: true },

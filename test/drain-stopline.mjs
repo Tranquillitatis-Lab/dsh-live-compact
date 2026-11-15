@@ -128,6 +128,8 @@ test("decision append is coordinated with the shadow root transaction", () => {
   const source = readFileSync(new URL("../shadow.js", import.meta.url), "utf8");
   const body = source.slice(source.indexOf("export function appendDecision"), source.indexOf("export function readCutStats"));
   assert.match(body, /withShadowRoot\(dir/);
+  assert.match(body, /O_NOFOLLOW/);
+  assert.match(body, /fstatSync\(fd/);
   assert.match(body, /shadowUsage\.bytes \+=/);
 });
 

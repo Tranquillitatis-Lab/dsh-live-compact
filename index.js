@@ -1464,6 +1464,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const projected = state.maxTurnGrowth > 0 && last + state.maxTurnGrowth > settings.keepRoundTokens;
         const drain = cloud && (projected || last >= URGENT_TOKENS);
         const drainNotes = [];
+        let maintenanceFailed = false;
         for (let pass = 0; pass < 8; pass += 1) {
           const measured = measurement;
           if (drain && measured.totalTokens <= settings.keepRoundTokens) break;
@@ -1500,7 +1501,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             state.localOnly = true;
             state.approvedCard = chunk.card;
             const committed = await this.commitSelectedSpan(agent, chunk, op, { drain });
-            if (committed === false) break;
+            if (committed === false) {
+              maintenanceFailed = true;
+              break;
+            }
             measurement = this.ctx.tokenMeter.measure(agent.session);
             const after = measurement.totalTokens;
             reduced = after < before;
@@ -1531,13 +1535,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             const message = error instanceof Error ? error.message : String(error);
             if (message.includes("raw backup missing before cut")) {
               catchup.retryRequested = true;
-              if (catchup.finished && catchup.progressed) this.scheduleMaintenanceRetry(agent);
+              if (catchup.finished) this.scheduleMaintenanceRetry(agent);
             }
+            maintenanceFailed = true;
             this.recordDecision(state, { phase: "cut", result: "failed", reason: message, drain });
             this.ctx.logger?.warn?.(`spine cut failed: ${message}`);
             break;
           }
           if (!reduced) {
+            maintenanceFailed = true;
             this.ctx.logger?.warn?.(`spine cut did not reduce ${before}; leaving the prefix for the gate`);
             break;
           }
@@ -1548,7 +1554,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         state.maxTurnGrowth = 0;
         await this.ctx.sessions?.flush?.(agent.session);
         this.rememberPrefix(agent);
-        markCompleted();
+        if (!maintenanceFailed) markCompleted();
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

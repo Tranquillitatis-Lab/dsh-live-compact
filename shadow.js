@@ -12,6 +12,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
 import {
+  constants as fsConstants,
   chmodSync,
   appendFileSync,
   closeSync,
@@ -641,13 +642,28 @@ export function appendDecision(dir, record = {}) {
         sessionKey: record.sid || record.sessionId || "default",
         cap: shadowMaxBytes(),
       });
-      if (!rotation.ok) return false;
+      if (!rotation.ok || rotation.oversize) return false;
       if (existsSync(path)) {
-        const info = lstatSync(path, { bigint: true });
-        if (!info.isFile() || info.nlink !== 1n) {
-          throw coordinationError(new Error("shadow decision is not a single-link regular file"));
+        const noFollow = fsConstants.O_NOFOLLOW;
+        if (noFollow === undefined) {
+          const info = lstatSync(path, { bigint: true });
+          if (!info.isFile() || info.nlink !== 1n) {
+            throw coordinationError(new Error("shadow decision is not a single-link regular file"));
+          }
         }
-        appendFileSync(path, body);
+        const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | (noFollow ?? 0));
+        try {
+          const opened = fstatSync(fd, { bigint: true });
+          const named = lstatSync(path, { bigint: true });
+          if (!opened.isFile() || opened.nlink !== 1n || !named.isFile() || named.nlink !== 1n ||
+              opened.dev !== named.dev || opened.ino !== named.ino) {
+            throw coordinationError(new Error("shadow decision identity changed"));
+          }
+          writeFileSync(fd, body);
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
         if (shadowUsage && isPluginShadowName(basename(path))) {
           shadowUsage.bytes += Buffer.byteLength(body, "utf8");
         }

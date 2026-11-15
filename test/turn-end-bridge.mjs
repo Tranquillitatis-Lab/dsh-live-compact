@@ -140,6 +140,23 @@ test("turn-stopping does not mark a boundary when maintenance fails", async () =
   assert.equal(state.lastStoppingTurnEndSeq, -1);
 });
 
+test("turn-stopping keeps a failed cut retryable", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 24000 }));
+  const { engine, ctx } = h.engine({ minTokens: 20000 }, "cloud");
+  h.capture(engine, f);
+  const agent = f.agent();
+  engine.stateFor(agent);
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  engine.flushPendingCaptures = async () => {};
+  ctx.tokenMeter.measure = () => ({ nodes: f.measure().nodes, totalTokens: 60000, totalHeuristicTokens: 60000 });
+  engine.commitSelectedSpan = async () => false;
+  f.user("失败切刀必须保留下一次边界重试。");
+  for (let round = 0; round < 8; round += 1) f.round(`failed-cut-${round}`, { tokens: 4000, turn: 2 });
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  assert.equal(engine.stateFor(agent).lastStoppingTurnEndSeq, -1);
+});
+
 test("failed catch-up keeps the stopping owner barrier", () => {
   const engine = Object.create(Spine.prototype);
   const state = {

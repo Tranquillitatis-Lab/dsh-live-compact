@@ -94,13 +94,33 @@ function takeoverSelected(config, entry, selector) {
 }
 
 function outerPresetId(fiber) {
-  let current;
-  try { current = fiber?.parent; } catch { current = null; }
-  while (current) {
-    let id = "";
-    try { id = current?.entry?.options?.id || current?.fiber?.entry?.options?.id || ""; } catch {}
-    if (typeof id === "string" && PRESET_IDS.has(id)) return id;
-    try { current = current.parent; } catch { current = null; }
+  const seen = new Set();
+  const queue = [];
+  const push = (value) => {
+    if (value && (typeof value === "object" || typeof value === "function") && !seen.has(value)) queue.push(value);
+  };
+  try { push(fiber?.parent); } catch {}
+  try { push(fiber?.fiber?.parent); } catch {}
+  while (queue.length) {
+    const current = queue.shift();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    let ids = [];
+    try {
+      ids = [
+        current?.id,
+        current?.config?.id,
+        current?.entry?.options?.id,
+        current?.fiber?.entry?.options?.id,
+      ];
+    } catch {}
+    if (ids.some((id) => typeof id === "string" && PRESET_IDS.has(id))) {
+      return ids.find((id) => typeof id === "string" && PRESET_IDS.has(id));
+    }
+    try { push(current.parent); } catch {}
+    try { push(current.fiber); } catch {}
+    try { push(current.parent?.fiber); } catch {}
+    try { push(current.fiber?.parent); } catch {}
   }
   return "";
 }
