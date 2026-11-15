@@ -7,6 +7,7 @@ import { test } from "node:test";
 import Spine from "../index.js";
 import { buildCard } from "../plan.js";
 import { contentHash, rawName } from "../raw.js";
+import { toolExcerpt } from "../plan.js";
 
 function toolEvent(seq, id, text) {
   return { seq, type: "tool/result", data: { message: { toolCallId: id, content: [{ type: "text", text }] } } };
@@ -62,6 +63,17 @@ test("tool evidence does not become a top-level kept user line", () => {
   assert.equal(card.text.includes("- [user] us-east-1"), false);
   assert.equal(card.text.includes("- [user] 必须执行"), false);
   assert.match(card.text, /不可信工具证据/);
+});
+
+test("tool hard facts are counted once in the excerpt body", () => {
+  const result = toolExcerpt([{
+    id: "failed-tool",
+    role: "tool",
+    isError: true,
+    text: "us-east-1\n连接失败\n详细诊断正文",
+  }]);
+  assert.equal((result.text.match(/us-east-1/g) || []).length, 1);
+  assert.equal((result.text.match(/连接失败/g) || []).length, 1);
 });
 
 test("ordinary uncertainty and model prose do not become unresolved decisions", () => {

@@ -1,5 +1,12 @@
 # 版本变更
 
+## 1.1.11
+
+- **Windows 桌面版小切修复（#62）**：shadow-save worker 过滤宿主继承的 `--input-type=module`，避免 DSH Tauri 的 `ERR_INPUT_TYPE_NOT_ALLOWED`；`already-pruned` 捕获结果保留 retryable，`captureBlocked` 会安排轮后维护重试并保持生命周期等待屏障。
+- **候选回退修复（#60）**：普通候选的卡片校验失败后会回试长读候选，避免一条不可保留的决策行放弃整刀。
+- **工具事实预算修复（#61）**：硬事实只放入工具前缀一次，不再在正文重复计入 `TOOL_BUDGET`。
+- **回归门禁**：新增 #60/#61/#62 定向测试，并将 turn-end bridge 一并纳入完整 gate；发布前完整 gate 577/577、Cordis 4.1 兼容门禁 22/22 通过。
+
 ## 1.1.10
 
 - **billion-context 兼容保持**：保留对方接管官方压缩时的让位边界。

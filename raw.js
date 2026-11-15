@@ -124,7 +124,7 @@ export function captureToolResult(options) {
   const { dir, toolCallId, access = {}, root = shadowRootForDir(dir) } = options;
   if (!toolCallId) return { ok: false, reason: "missing-id", toolCallId: "" };
   if (!existsSync(join(dir, rawName(toolCallId))) && String(options.text ?? "").includes(PRUNE_MARKER)) {
-    return { ok: false, reason: "already-pruned", toolCallId };
+    return { ok: false, reason: "already-pruned", toolCallId, retryable: true };
   }
   try {
     ensureShadowDir(dir, access);
@@ -165,7 +165,7 @@ function captureToolResultLocked({
   const hash = contentHash(bytes);
 
   if (!existsSync(file) && body.includes(PRUNE_MARKER)) {
-    return { ok: false, reason: "already-pruned", toolCallId };
+    return { ok: false, reason: "already-pruned", toolCallId, retryable: true };
   }
 
   const readProtectedExisting = () => readRawToolResult({ dir, toolCallId, access });
