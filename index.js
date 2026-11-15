@@ -791,6 +791,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         await this.waitForMaintenance(agent, signal);
         return typeof next === "function" ? next() : undefined;
       });
+      ctx.on("agent/turn-stopping", async ({ agent, signal }) => {
+        await this.runTurnStoppingMaintenance(agent, signal);
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.logger?.warn?.(`spine: 本会话未接管自动小切。${message}`);
@@ -882,6 +885,36 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
     state.maintenanceJob = job;
     this.pendingCuts.add(job);
+  }
+
+  async runTurnStoppingMaintenance(agent, signal) {
+    if (this.standDown?.() || signal?.aborted) return;
+    const state = this.stateFor(agent);
+    if (state.warming) {
+      state.turnEndPending = true;
+      return;
+    }
+    state.warming = true;
+    try {
+      const settings = readSettings(this.liveConfig);
+      const events = agent.session.snapshotEvents();
+      let catchup = { finished: true, progressed: false, retryRequested: false };
+      if (events.length > CAPTURE_EVENT_BATCH) {
+        catchup = this.scheduleCaptureCatchup(agent, events, settings, { freezeSnapshot: true });
+      } else {
+        await this.flushPendingCaptures();
+        this.captureNew(agent.session, events, settings);
+      }
+      if (catchup?.promise && !catchup.finished) await catchup.promise;
+      await this.flushPendingCaptures();
+      await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
+    } finally {
+      state.warming = false;
+      if (state.turnEndPending) {
+        state.turnEndPending = false;
+        this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
+      }
+    }
   }
 
   scheduleTurnEndMaintenance(agent, seq, boundaryEvent = null) {

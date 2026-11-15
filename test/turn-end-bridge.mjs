@@ -94,6 +94,27 @@ test("turn/end bridge keeps a boundary published after the callback", async (t) 
   assert.ok(cuts.length >= 1, `expected a cut with an unpublished boundary, got ${cuts.length}`);
 });
 
+test("turn-stopping runs maintenance before a disposed CLI agent can swallow it", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 24000 }));
+  const { engine, ctx } = h.engine({ minTokens: 20000 }, "cloud");
+  h.capture(engine, f);
+  const agent = f.agent();
+  engine.stateFor(agent);
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  engine.flushPendingCaptures = async () => {};
+  ctx.tokenMeter.measure = () => ({ nodes: f.measure().nodes, totalTokens: 60000, totalHeuristicTokens: 60000 });
+  const chunks = [];
+  engine.commitSelectedSpan = async (_agent, chunk) => {
+    chunks.push(chunk.tokens);
+    return false;
+  };
+  f.user("turn stopping should preserve the live maintenance owner");
+  for (let round = 0; round < 8; round += 1) f.round(`stopping-${round}`, { tokens: 4000, turn: 2 });
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  assert.ok(chunks.length >= 1, `expected a turn-stopping cut, got ${chunks.length}`);
+});
+
 test("agent/created seeds the live agent before the first turn/end", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));
