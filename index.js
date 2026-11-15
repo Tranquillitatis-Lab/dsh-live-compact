@@ -883,6 +883,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const key = state?.key || DEFAULT_KEY;
     const prefix = `${key}\0`;
     const protectPaths = [];
+    if (state?.lastCardPath) protectPaths.push(state.lastCardPath);
     for (const [rawKey, raw] of this.rawSeen || []) {
       if (!rawKey.startsWith(prefix) || !raw?.path) continue;
       protectPaths.push(raw.path, `${raw.path}.meta.json`);
@@ -930,6 +931,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       lastMaintenanceTurnEndSeq: -1,
       lastStoppingTurnEndSeq: -1,
       rawCutRetryAttempts: 0,
+      lastCardPath: "",
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -1669,7 +1671,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             this.rawSeen.set(this.rawKey(session, id), raw);
           } catch (error) {
             noteShadowWarning(this.ctx?.logger, error);
-            raw = { ...raw, ok: false, reason: "unwritable", toolCallId: id, aclVerified: false };
+            raw = {
+              ...raw,
+              ok: false,
+              reason: "unwritable",
+              toolCallId: id,
+              aclVerified: false,
+              retryable: raw?.retryable === true || captureErrorRetryable(error),
+            };
             this.rawSeen.set(this.rawKey(session, id), raw);
           }
         }
@@ -1686,6 +1695,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
+    this.stateFor(agent).lastCardPath = chunk.card?.shadowFile || "";
     signal?.throwIfAborted();
     if (this.standDown?.()) return false;
     assertCurrentSpan(shadowedSeqs);
@@ -2487,12 +2497,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return { summary: [block], provider: "local", model: "spine-extract", rawOutput: [block] };
     }
     try {
+      const officialShadowFile = freshShadowFile("official", state.key);
       await this.saveShadowAsync(
         this.restoreRawMessages(input.messages, state.key),
         false,
-        freshShadowFile("official", state.key),
+        officialShadowFile,
         state.key,
       );
+      state.lastCardPath = officialShadowFile;
     } catch (error) {
       if (
         error?.code === "ESHADOWACCESS" ||

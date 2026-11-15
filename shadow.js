@@ -41,6 +41,8 @@ const lockedDirs = new Map();
 const lockedFiles = new Map();
 let shadowFuseState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const shadowWarnings = new Set();
+const DECISION_ROTATION_INTERVAL_MS = 1000;
+const decisionRotationAt = new Map();
 
 // No shared byte ledger. A positively dead holder leaves an immutable fence:
 // recovery enables the original shared scans, never ownership or an estimate.
@@ -636,14 +638,20 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
     return withShadowRoot(dir, () => {
       const path = scopedFile(file, rotationScope.root);
       if (!path) throw coordinationError(new Error("shadow decision outside root scope"));
-      const rotation = rotateShadowLocked({
-        incomingBytes: Buffer.byteLength(body, "utf8"),
-        protectPath: path,
-        protectPaths,
-        sessionKey: record.sid || record.sessionId || "default",
-        cap: shadowMaxBytes(),
-      });
-      if (!rotation.ok || rotation.oversize) return false;
+      const rotationKey = rotationScope.root;
+      const now = Date.now();
+      const lastRotation = decisionRotationAt.get(rotationKey) || 0;
+      if (now - lastRotation >= DECISION_ROTATION_INTERVAL_MS) {
+        const rotation = rotateShadowLocked({
+          incomingBytes: Buffer.byteLength(body, "utf8"),
+          protectPath: path,
+          protectPaths,
+          sessionKey: record.sid || record.sessionId || "default",
+          cap: shadowMaxBytes(),
+        });
+        if (!rotation.ok || rotation.oversize) return false;
+        decisionRotationAt.set(rotationKey, now);
+      }
       if (existsSync(path)) {
         const noFollow = fsConstants.O_NOFOLLOW;
         if (noFollow === undefined) {

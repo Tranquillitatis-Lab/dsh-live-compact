@@ -116,6 +116,25 @@ test("decision capacity rotation protects active raw backups", () => {
   }
 });
 
+test("decision capacity rotation protects the committed card backup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-decision-card-protect-"));
+  const decision = join(dir, DECISIONS_NAME);
+  const card = join(dir, "cut-1-12345678.txt");
+  const previous = process.env.SPINE_SHADOW_MAX_BYTES;
+  try {
+    process.env.SPINE_SHADOW_MAX_BYTES = "200";
+    writeFileSync(decision, "d".repeat(100));
+    writeFileSync(card, "c".repeat(100));
+    assert.equal(appendDecision(dir, { phase: "protect-card" }, { protectPaths: [card] }), false);
+    assert.equal(existsSync(card), true);
+    assert.equal(readFileSync(card, "utf8"), "c".repeat(100));
+  } finally {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+    else process.env.SPINE_SHADOW_MAX_BYTES = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stats recovers a dead-PID lock and decision logs are rotatable plugin entries", () => {
   const dir = mkdtempSync(join(tmpdir(), "spine-stats-lock-"));
   try {
