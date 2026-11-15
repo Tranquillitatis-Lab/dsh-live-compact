@@ -176,6 +176,38 @@ test("pre-step timeout keeps the running maintenance fenced", async () => {
   assert.ok(state.maintenanceJob);
 });
 
+test("catch-up retry defers behind an active turn-stopping owner", () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "retry-owner",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceOwner: {},
+    turnEndPending: false,
+  };
+  const agent = { session: { id: state.key } };
+  let scheduled = 0;
+  engine.stateFor = () => state;
+  engine.standDown = () => false;
+  engine.scheduleMaintenanceRetry = () => { scheduled += 1; };
+  engine.pendingCatchups = new Map([[state.key, {}]]);
+  engine.pendingCatchupJobs = new Map();
+  const task = {
+    key: state.key,
+    agent,
+    finished: false,
+    captureBlocked: true,
+    retryRequested: false,
+    maintenanceRequested: false,
+    promise: Promise.resolve(),
+    resolve() {},
+  };
+  engine.finishCaptureCatchup(task);
+  assert.equal(scheduled, 0);
+  assert.equal(state.turnEndPending, true);
+  assert.equal(state.maintenanceOwner != null, true);
+});
+
 test("turn/end does not run a second maintenance pass after turn-stopping handled its boundary", async () => {
   const engine = Object.create(Spine.prototype);
   const event = { seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } };

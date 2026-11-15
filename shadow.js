@@ -636,6 +636,10 @@ export function appendDecision(dir, record = {}) {
       const path = scopedFile(file, rotationScope.root);
       if (!path) throw coordinationError(new Error("shadow decision outside root scope"));
       if (existsSync(path)) {
+        const info = lstatSync(path, { bigint: true });
+        if (!info.isFile() || info.nlink !== 1n) {
+          throw coordinationError(new Error("shadow decision is not a single-link regular file"));
+        }
         appendFileSync(path, body);
         if (shadowUsage && isPluginShadowName(basename(path))) {
           shadowUsage.bytes += Buffer.byteLength(body, "utf8");
@@ -679,14 +683,19 @@ export function drainRewrite(notes) {
 function acquireStatsLock(lock) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let fd;
+    let created = false;
     try {
       fd = openSync(lock, "wx", 0o600);
+      created = true;
       writeFileSync(fd, String(process.pid));
       fsyncSync(fd);
       return fd;
     } catch (error) {
       if (fd !== undefined) {
         try { closeSync(fd); } catch {}
+      }
+      if (created) {
+        try { unlinkSync(lock); } catch {}
       }
       if (error?.code !== "EEXIST") return null;
       let pid = null;

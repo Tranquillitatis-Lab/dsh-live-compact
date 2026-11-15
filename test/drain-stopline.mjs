@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -97,4 +97,23 @@ test("decision append is coordinated with the shadow root transaction", () => {
   const body = source.slice(source.indexOf("export function appendDecision"), source.indexOf("export function readCutStats"));
   assert.match(body, /withShadowRoot\(dir/);
   assert.match(body, /shadowUsage\.bytes \+=/);
+});
+
+test("decision append rejects symlink and hardlink targets", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-decision-links-"));
+  const outside = join(dir, "outside.jsonl");
+  const target = join(dir, DECISIONS_NAME);
+  try {
+    writeFileSync(outside, "outside\n");
+    if (process.platform !== "win32") {
+      symlinkSync(outside, target);
+      assert.equal(appendDecision(dir, { phase: "symlink" }), false);
+      rmSync(target);
+    }
+    linkSync(outside, target);
+    assert.equal(appendDecision(dir, { phase: "hardlink" }), false);
+    assert.equal(readFileSync(outside, "utf8"), "outside\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

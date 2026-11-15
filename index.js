@@ -1272,7 +1272,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       // completed. Real idle hooks use this state as their await barrier.
       state.pendingMaintenance = true;
       state.warming = true;
-      this.scheduleMaintenanceRetry(task.agent);
+      if (state.maintenanceOwner) {
+        // A turn-stopping owner is already going to finish this catch-up and
+        // run maintenance. Queue the boundary behind that owner instead of
+        // replacing its abort controller with a concurrent retry job.
+        state.turnEndPending = true;
+      } else {
+        this.scheduleMaintenanceRetry(task.agent);
+      }
     } else if (this.standDown?.() || !latestTurnCompleted(task.agent.session.snapshotEvents?.() || [])) {
       // A catch-up can finish after the next turn has already started. Do not
       // leave the session permanently warming; the next persisted turn/end
@@ -1292,6 +1299,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   scheduleMaintenanceRetry(agent) {
     if (this.standDown?.()) return;
     const state = this.stateFor(agent);
+    if (state.maintenanceOwner) {
+      state.turnEndPending = true;
+      return;
+    }
     if (state.retryScheduled) return;
     state.retryScheduled = true;
     scheduleImmediate(() => {
