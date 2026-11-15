@@ -1003,8 +1003,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         if (catchup?.promise && !catchup.finished) await catchup.promise;
         await this.flushPendingCaptures(agent.session);
-        await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
-        if (stoppingSeq !== undefined) state.lastStoppingTurnEndSeq = stoppingSeq;
+        const completed = await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
+        if (completed === true && stoppingSeq !== undefined) state.lastStoppingTurnEndSeq = stoppingSeq;
       } finally {
         if (state.maintenanceOwner === owner) {
           state.warming = false;
@@ -1262,8 +1262,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     task.resolve();
     if (task.failed) {
       const state = this.stateFor(task.agent);
-      state.pendingMaintenance = false;
-      state.warming = false;
+      if (state.maintenanceOwner) {
+        // Keep a stopping owner's lifecycle barrier until its finally block;
+        // otherwise a failed catch-up can overlap the next maintenance job.
+        state.pendingMaintenance = true;
+        state.warming = true;
+        state.turnEndPending = true;
+      } else {
+        state.pendingMaintenance = false;
+        state.warming = false;
+      }
       return;
     }
     const state = this.stateFor(task.agent);
@@ -1354,6 +1362,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       state.maintenanceAbort = new AbortController();
     }
     const signal = AbortSignal.any([AbortSignal.timeout(30000), state.maintenanceAbort.signal]);
+    let maintenanceCompleted = false;
     const ev = events || agent.session.snapshotEvents();
     const deferCapture = options.deferCapture === true;
     let catchup = { finished: true, progressed: false, retryRequested: false };
@@ -1393,6 +1402,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         // started at that point, so let it finish under the bounded timeout;
         // user/host cancellation reasons still abort the operation.
         const op = maintenanceOperationSignal(agentSignal, signal);
+        const markCompleted = () => {
+          if (!op.aborted && !signal.aborted) maintenanceCompleted = true;
+        };
         let measurement = this.ctx.tokenMeter.measure(agent.session);
         const settleTurnBaseline = () => {
           state.turnBase = measurement.totalTokens;
@@ -1405,6 +1417,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             totalTokens: measurement.totalTokens,
           });
           settleTurnBaseline();
+          markCompleted();
           return;
         }
         // Restored cards establish a baseline; a live card still skips once,
@@ -1413,11 +1426,13 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           this.recordDecision(state, { phase: "maintenance-skip", reason: "official-checkpoint" });
           this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
           settleTurnBaseline();
+          markCompleted();
           return;
         }
         if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
           this.recordDecision(state, { phase: "maintenance-skip", reason: "cooldown" });
           settleTurnBaseline();
+          markCompleted();
           return;
         }
         this.ensurePruneGuard();
@@ -1533,6 +1548,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         state.maxTurnGrowth = 0;
         await this.ctx.sessions?.flush?.(agent.session);
         this.rememberPrefix(agent);
+        markCompleted();
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1540,6 +1556,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     } finally {
       state.localOnly = false;
     }
+    return maintenanceCompleted;
   }
 
   async flushPendingCaptures(session = null, ids = null) {

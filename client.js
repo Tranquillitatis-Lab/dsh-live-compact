@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     /** 全走宿主原生接口的设置界面。 */
     const React = require("react");
-    const { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField, Switch } = require("@deepseek-ai/dsh-client-ui-primitives");
+    const { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField } = require("@deepseek-ai/dsh-client-ui-primitives");
     const h = React.createElement;
 
     const NS = "compaction-spine";
@@ -117,28 +117,19 @@ window.__ModuleLoader__.load({
         onDiscard: props.discard,
       },
       h("h4", null, t("basic")),
-      state.takeoverPresets.text.trim().startsWith("[")
-        ? h(SettingsValueField, {
-          id: "live-compact-takeoverPresets",
-          label: t("takeoverPresets"),
-          hint: t("takeoverArrayHint"),
-          numeric: false,
-          disabled: !state.writable || state.saving,
-          overriddenLabel: t("overridden"),
-          resetLabel: t("reset"),
-          invalidLabel: t("invalid"),
-          ...state.takeoverPresets,
-          onEdit: (text) => props.edit("takeoverPresets", text),
-          onReset: () => props.resetField("takeoverPresets"),
-        })
-        : h("label", { style: { display: "flex", alignItems: "center", gap: "0.75rem" } },
-          t("takeoverPresets"),
-          h(Switch, {
-            label: t("takeoverPresets"),
-            checked: state.takeoverPresets.text === "true",
-            disabled: !state.writable || state.saving,
-            onChange: (checked) => props.edit("takeoverPresets", String(checked)),
-          })),
+      h(SettingsValueField, {
+        id: "live-compact-takeoverPresets",
+        label: t("takeoverPresets"),
+        hint: t("takeoverArrayHint"),
+        numeric: false,
+        disabled: !state.writable || state.saving,
+        overriddenLabel: t("overridden"),
+        resetLabel: t("reset"),
+        invalidLabel: t("invalid"),
+        ...state.takeoverPresets,
+        onEdit: (text) => props.edit("takeoverPresets", text),
+        onReset: () => props.resetField("takeoverPresets"),
+      }),
       h("p", null, t("takeoverHint")),
       section(GROUPS[0]),
       h("details", null,

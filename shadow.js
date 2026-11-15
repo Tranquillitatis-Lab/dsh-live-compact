@@ -635,6 +635,13 @@ export function appendDecision(dir, record = {}) {
     return withShadowRoot(dir, () => {
       const path = scopedFile(file, rotationScope.root);
       if (!path) throw coordinationError(new Error("shadow decision outside root scope"));
+      const rotation = rotateShadowLocked({
+        incomingBytes: Buffer.byteLength(body, "utf8"),
+        protectPath: path,
+        sessionKey: record.sid || record.sessionId || "default",
+        cap: shadowMaxBytes(),
+      });
+      if (!rotation.ok) return false;
       if (existsSync(path)) {
         const info = lstatSync(path, { bigint: true });
         if (!info.isFile() || info.nlink !== 1n) {

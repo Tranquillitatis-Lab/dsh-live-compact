@@ -80,6 +80,23 @@ test("maintenance decisions append only inside an existing shadow directory", ()
   }
 });
 
+test("decision append refuses to exceed the shadow capacity", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-decision-cap-"));
+  const file = join(dir, DECISIONS_NAME);
+  const previous = process.env.SPINE_SHADOW_MAX_BYTES;
+  const original = "x".repeat(180);
+  try {
+    process.env.SPINE_SHADOW_MAX_BYTES = "200";
+    writeFileSync(file, original);
+    assert.equal(appendDecision(dir, { phase: "over-cap" }), false);
+    assert.equal(readFileSync(file, "utf8"), original);
+  } finally {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+    else process.env.SPINE_SHADOW_MAX_BYTES = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stats recovers a dead-PID lock and decision logs are rotatable plugin entries", () => {
   const dir = mkdtempSync(join(tmpdir(), "spine-stats-lock-"));
   try {

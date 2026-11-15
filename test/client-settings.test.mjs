@@ -59,8 +59,18 @@ class ContractModel {
   async save() {
     if (!this.scope.getSnapshot().writable) return;
     this.saving = true; this.publish();
-    const ops = [...this.drafts].map(([name, text]) => text === ""
-      ? { op: "unset", path: [name] } : { op: "set", path: [name], value: name === "takeoverPresets" ? text === "true" : Number(text) });
+    const ops = [...this.drafts].map(([name, text]) => {
+      if (text === "") return { op: "unset", path: [name] };
+      if (name !== "takeoverPresets") return { op: "set", path: [name], value: Number(text) };
+      if (text === "true" || text === "false") return { op: "set", path: [name], value: text === "true" };
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed) && parsed.every((id) => typeof id === "string" && id.length > 0)) {
+          return { op: "set", path: [name], value: parsed };
+        }
+      } catch {}
+      return { op: "set", path: [name], value: text };
+    });
     const accepted = await this.scope.mutate(ops, this.scope.getSnapshot().revision);
     this.failed = !accepted;
     if (accepted) this.drafts.clear();
@@ -106,8 +116,7 @@ function harness({ writable = true, accept = true } = {}) {
   };
   function SettingsForm() {}
   function SettingsValueField() {}
-  function Switch() {}
-  const primitives = { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField, Switch };
+  const primitives = { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField };
   const effects = [];
   let bundle;
   let entry;
@@ -152,14 +161,6 @@ function harness({ writable = true, accept = true } = {}) {
     walk(render());
     return result;
   };
-  const presetSwitch = () => {
-    const find = (node) => {
-      if (!node || typeof node !== "object") return undefined;
-      if (node.type === Switch) return node.props;
-      return (node.children ?? []).map(find).find(Boolean);
-    };
-    return find(render());
-  };
   const save = () => new Promise((resolve) => {
     const store = face.hooks.liveCompact;
     const unsubscribe = store.subscribe(() => {
@@ -167,15 +168,15 @@ function harness({ writable = true, accept = true } = {}) {
     });
     render().props.onSave();
   });
-  return { entry, render, fields, presetSwitch, face, writes, save, snapshot: () => snapshot,
+  return { entry, render, fields, face, writes, save, snapshot: () => snapshot,
     dispose: () => { for (const dispose of effects.reverse()) dispose(); }, listeners };
 }
 
-test("native slot exposes common and advanced fields", () => {
+test("native slot exposes takeover, common and advanced fields", () => {
   const ui = harness();
   assert.equal(ui.entry.key, "dsh-live-compact#compaction-spine");
-  assert.equal(ui.fields().length, 12);
-  assert.equal(ui.fields()[0].text, "20000");
+  assert.equal(ui.fields().length, 13);
+  assert.equal(ui.fields()[0].text, "true");
   assert.equal(ui.fields()[0].disabled, false);
   assert.equal(typeof ui.render("summary"), "string");
   ui.dispose();
@@ -185,8 +186,8 @@ test("typing and numeric stepping echo through the model without a crash", () =>
   const ui = harness();
   const texts = ["25000", "25001", "25000", "", "20000", "21000"];
   for (const text of texts) {
-    ui.fields()[0].onEdit(text);
-    assert.equal(ui.fields()[0].text, text);
+    ui.fields()[1].onEdit(text);
+    assert.equal(ui.fields()[1].text, text);
   }
   assert.equal(ui.face.hooks.liveCompact.getSnapshot().dirty, true);
   assert.equal(ui.writes.length, 0, "typing must not write settings");
@@ -195,12 +196,12 @@ test("typing and numeric stepping echo through the model without a crash", () =>
 
 test("discard drops the draft and reset stages an unset", async () => {
   const ui = harness();
-  ui.fields()[0].onEdit("25000");
+  ui.fields()[1].onEdit("25000");
   ui.render().props.onDiscard();
-  assert.equal(ui.fields()[0].text, "20000");
-  ui.fields()[0].onEdit("25000");
+  assert.equal(ui.fields()[1].text, "20000");
+  ui.fields()[1].onEdit("25000");
   await ui.save();
-  ui.fields()[0].onReset();
+  ui.fields()[1].onReset();
   await ui.save();
   assert.deepEqual(ui.writes.at(-1).ops, [{ op: "unset", path: ["minTokens"] }]);
   assert.equal(ui.snapshot().value.minTokens, 20000);
@@ -209,7 +210,7 @@ test("discard drops the draft and reset stages an unset", async () => {
 
 test("save writes numeric ops at the starting revision and refreshes the page", async () => {
   const ui = harness();
-  ui.fields()[0].onEdit("25000");
+  ui.fields()[1].onEdit("25000");
   ui.fields().find((field) => field.id.endsWith("thresholdRatio")).onEdit("0.75");
   const pending = ui.save();
   assert.equal(ui.render().props.state.saving, true);
@@ -220,30 +221,30 @@ test("save writes numeric ops at the starting revision and refreshes the page", 
   ] }]);
   assert.equal(ui.render().props.state.saving, false);
   assert.equal(ui.render().props.state.dirty, false);
-  assert.equal(ui.fields()[0].text, "25000");
+  assert.equal(ui.fields()[1].text, "25000");
   ui.dispose();
 });
 
 test("host refusal preserves drafts and exposes save failure", async () => {
   const ui = harness({ accept: false });
-  ui.fields()[0].onEdit("25000");
+  ui.fields()[1].onEdit("25000");
   await ui.save();
   assert.equal(ui.render().props.state.failed, true);
-  assert.equal(ui.fields()[0].text, "25000");
+  assert.equal(ui.fields()[1].text, "25000");
   ui.dispose();
 });
 
-test("preset takeover switch stages and saves a boolean, not a string", async () => {
+test("preset takeover field stages a JSON allowlist", async () => {
   const ui = harness();
-  assert.equal(ui.presetSwitch().checked, true);
-  ui.presetSwitch().onChange(false);
-  assert.equal(ui.presetSwitch().checked, false);
+  assert.equal(ui.fields()[0].text, "true");
+  ui.fields()[0].onEdit('["standard"]');
+  assert.equal(ui.fields()[0].text, '["standard"]');
   assert.equal(ui.writes.length, 0);
   await ui.save();
   assert.deepEqual(ui.writes[0], { revision: 7, ops: [
-    { op: "set", path: ["takeoverPresets"], value: false },
+    { op: "set", path: ["takeoverPresets"], value: ["standard"] },
   ] });
-  assert.equal(ui.snapshot().value.takeoverPresets, false);
+  assert.deepEqual(ui.snapshot().value.takeoverPresets, ["standard"]);
   ui.dispose();
 });
 
