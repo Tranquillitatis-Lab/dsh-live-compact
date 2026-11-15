@@ -105,3 +105,25 @@ test("desktop bundle fallback detaches a stock service while async disposal sett
   assert.equal(store[key], undefined);
   release();
 });
+
+test("desktop bundle fallback restores stock when replacement construction fails", () => {
+  const isolate = Symbol.for("cordis.isolate");
+  const key = Symbol("compaction");
+  const store = {};
+  const root = { [isolate]: { compaction: key }, reflect: { store }, fiber: {} };
+  let disposed = false;
+  const stock = { ctx: { fiber: {
+    entry: { options: { name: STOCK_ENGINE } },
+    store: { compaction: null },
+    dispose() { disposed = true; },
+  } } };
+  stock.ctx.fiber.store.compaction = stock;
+  store[key] = stock;
+  const replacement = releaseRootStockCompaction(root, { deferDispose: true });
+  assert.equal(typeof replacement.rollback, "function");
+  assert.equal(store[key], undefined);
+  assert.equal(replacement.rollback(), true);
+  assert.equal(store[key], stock);
+  assert.equal(stock.ctx.fiber.store.compaction, stock);
+  assert.equal(disposed, false);
+});

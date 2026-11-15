@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -87,6 +87,21 @@ test("stats recovers a dead-PID lock and decision logs are rotatable plugin entr
     flushDrainStats(dir, [{ kind: "cut", saved: 4200, afterPrefix: 10000 }], { sid: "s1", drain: true });
     assert.equal(readCutStats(dir).cuts, 1);
     assert.equal(isPluginShadowName(DECISIONS_NAME), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stats recovers a stale empty legacy lock", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-stats-empty-lock-"));
+  const lock = join(dir, "spine-stats.lock");
+  try {
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 5000);
+    utimesSync(lock, old, old);
+    flushDrainStats(dir, [{ kind: "cut", saved: 1800, afterPrefix: 9000 }], { sid: "s2", drain: true });
+    assert.equal(readCutStats(dir).cuts, 1);
+    assert.equal(existsSync(lock), false, "legacy lock is removed after recovery");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -76,28 +76,54 @@ function releaseCompaction(ctx, previous) {
   return true;
 }
 
-export function releaseRootStockCompaction(ctx) {
+function detachRootStockCompaction(ctx) {
   const store = ctx?.reflect?.store;
   const current = compactionRecord(ctx);
   const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
   const fiber = current?.fiber ?? current?.ctx?.fiber;
   const moduleName = fiber?.entry?.options?.name;
   if (!current || moduleName !== STOCK_ENGINE || fiber === ctx?.fiber) return false;
+  if (compactionRecord(ctx) !== current) return false;
+  const fiberStore = fiber?.store;
+  if (fiberStore?.compaction === current) delete fiberStore.compaction;
+  delete store[key];
+  return { store, key, current, fiber, fiberStore };
+}
+
+function commitRootStockCompaction(replacement) {
+  if (!replacement || replacement.committed) return false;
+  replacement.committed = true;
   try {
-    // Cordis disposal is async. Detach the old root/fiber service immediately
-    // after starting it so the replacement constructor cannot observe a
-    // duplicate service; the fiber's own async disposer still drains its
-    // effects in the background.
-    const pending = fiber.dispose?.();
+    // Cordis disposal is async. The replacement has already registered, so
+    // the old root fiber can now drain its effects without blocking startup.
+    const pending = replacement.fiber?.dispose?.();
     pending?.catch?.(() => {});
-    if (compactionRecord(ctx) === current) {
-      delete store[key];
-      if (fiber?.store?.compaction === current) delete fiber.store.compaction;
-    }
-    return compactionRecord(ctx) !== current;
-  } catch {
-    return false;
+  } catch {}
+  return true;
+}
+
+function rollbackRootStockCompaction(replacement) {
+  if (!replacement || replacement.committed) return false;
+  const current = replacement.store?.[replacement.key];
+  if (current !== undefined && current !== replacement.current) return false;
+  replacement.store[replacement.key] = replacement.current;
+  if (replacement.fiberStore && replacement.fiberStore.compaction === undefined) {
+    replacement.fiberStore.compaction = replacement.current;
   }
+  return true;
+}
+
+export function releaseRootStockCompaction(ctx, { deferDispose = false } = {}) {
+  const replacement = detachRootStockCompaction(ctx);
+  if (!replacement) return false;
+  if (deferDispose) {
+    replacement.committed = false;
+    replacement.commit = () => commitRootStockCompaction(replacement);
+    replacement.rollback = () => rollbackRootStockCompaction(replacement);
+    return replacement;
+  }
+  commitRootStockCompaction(replacement);
+  return true;
 }
 
 function visibleTakeover(ctx, reason) {
@@ -148,12 +174,16 @@ export default class LiveCompactEntry {
       }
     }
     if (!loadError && !skipStock && Engine) {
+      let rootStockReplacement = false;
       try {
-        releaseRootStockCompaction(ctx);
-        return new Engine(ctx, config, resolvedConfig);
+        rootStockReplacement = releaseRootStockCompaction(ctx, { deferDispose: true });
+        const engine = new Engine(ctx, config, resolvedConfig);
+        rootStockReplacement?.commit?.();
+        return engine;
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));
         releaseCompaction(ctx, previousCompaction);
+        rootStockReplacement?.rollback?.();
         skipStock = true;
       }
     }

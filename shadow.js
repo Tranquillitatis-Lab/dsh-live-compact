@@ -700,13 +700,21 @@ function acquireStatsLock(lock) {
       if (error?.code !== "EEXIST") return null;
       let pid = null;
       let observedText = "";
+      let observedStat;
       try {
         observedText = readFileSync(lock, "utf8").trim();
         pid = /^[1-9]\d*$/.test(observedText) ? Number(observedText) : null;
+        observedStat = statSync(lock);
       } catch {
         return null;
       }
-      if (pid !== null && processAlive(pid) === false) {
+      const dead = pid !== null && processAlive(pid) === false;
+      // Pre-1.1.12 locks were empty files. Only recover one that is old enough
+      // to be a legacy crash artifact; a just-created empty lock may still be
+      // between open(wx) and its PID write.
+      const legacyEmpty = observedText === "" && Number.isFinite(observedStat?.mtimeMs) &&
+        Date.now() - observedStat.mtimeMs >= 1000;
+      if (dead || legacyEmpty) {
         const recovery = `${lock}.recover`;
         let recoveryFd;
         let removed = false;
@@ -734,8 +742,15 @@ function acquireStatsLock(lock) {
         }
         try {
           let current = "";
-          try { current = readFileSync(lock, "utf8").trim(); } catch {}
-          if (current === observedText && processAlive(pid) === false) {
+          let currentStat;
+          try {
+            current = readFileSync(lock, "utf8").trim();
+            currentStat = statSync(lock);
+          } catch {}
+          const unchanged = current === observedText && currentStat && observedStat &&
+            currentStat.dev === observedStat.dev && currentStat.ino === observedStat.ino &&
+            currentStat.size === observedStat.size && currentStat.mtimeMs === observedStat.mtimeMs;
+          if (unchanged && (dead || legacyEmpty)) {
             try { unlinkSync(lock); removed = true; } catch {}
           }
         } finally {
