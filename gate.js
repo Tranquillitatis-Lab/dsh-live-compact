@@ -94,9 +94,13 @@ function takeoverSelected(config, entry, selector) {
 }
 
 function outerPresetId(fiber) {
-  for (let current = fiber?.parent; current; current = current.parent) {
-    const id = current.entry?.options?.id;
+  let current;
+  try { current = fiber?.parent; } catch { current = null; }
+  while (current) {
+    let id = "";
+    try { id = current?.entry?.options?.id || current?.fiber?.entry?.options?.id || ""; } catch {}
     if (typeof id === "string" && PRESET_IDS.has(id)) return id;
+    try { current = current.parent; } catch { current = null; }
   }
   return "";
 }
