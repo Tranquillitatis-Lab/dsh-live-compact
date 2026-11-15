@@ -982,11 +982,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (events.length > CAPTURE_EVENT_BATCH) {
         catchup = this.scheduleCaptureCatchup(agent, events, settings, { freezeSnapshot: true });
       } else {
-        await this.flushPendingCaptures();
+        await this.flushPendingCaptures(agent.session);
         this.captureNew(agent.session, events, settings);
       }
       if (catchup?.promise && !catchup.finished) await catchup.promise;
-      await this.flushPendingCaptures();
+      await this.flushPendingCaptures(agent.session);
       await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
     } finally {
       state.warming = false;
@@ -1309,7 +1309,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (ev.length > CAPTURE_EVENT_BATCH) {
         catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
       } else {
-        await this.flushPendingCaptures();
+        await this.flushPendingCaptures(agent.session);
         this.captureNew(agent.session, ev, settings);
       }
     }
@@ -1324,7 +1324,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         return null;
       }
     }
-    await this.flushPendingCaptures();
+    await this.flushPendingCaptures(agent.session);
     const jobs = collectJobs(ev);
     const calls = indexToolCalls(ev);
     try {
