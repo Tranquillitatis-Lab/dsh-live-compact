@@ -583,7 +583,7 @@ export function noteShadowWarning(logger, error) {
 const SESSION_MARK = /^# spine-session (\S+)/;
 
 export function isPluginShadowName(name) {
-  return PLUGIN_NAME.test(name);
+  return name === "spine-decisions.jsonl" || PLUGIN_NAME.test(name);
 }
 
 export function sanitizeSessionKey(key) {
@@ -658,6 +658,36 @@ export function drainRewrite(notes) {
   return Math.max(0, (cuts[0].afterPrefix || 0) - later);
 }
 
+function acquireStatsLock(lock) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let fd;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+      writeFileSync(fd, String(process.pid));
+      fsyncSync(fd);
+      return fd;
+    } catch (error) {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
+      if (error?.code !== "EEXIST") return null;
+      let pid = null;
+      try {
+        const text = readFileSync(lock, "utf8").trim();
+        pid = /^[1-9]\d*$/.test(text) ? Number(text) : null;
+      } catch {
+        return null;
+      }
+      if (pid !== null && processAlive(pid) === false) {
+        try { unlinkSync(lock); } catch {}
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 export function flushDrainStats(dir, notes, meta = {}) {
   const cuts = (notes || []).filter((note) => note?.kind === "cut" && note.saved > 0);
   const charged = drainRewrite(notes);
@@ -692,12 +722,8 @@ function recordDrainStats(dir, { cuts = 0, saved = 0, rewrite = 0 } = {}) {
     const file = join(dir, STATS_NAME);
     const lock = join(dir, "spine-stats.lock");
     const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    let fd;
-    try {
-      fd = openSync(lock, "wx");
-    } catch {
-      return null;
-    }
+    const fd = acquireStatsLock(lock);
+    if (fd === null) return null;
     try {
       const prev = readCutStats(dir);
       const locked = {
@@ -726,12 +752,8 @@ export function recordCutStats(dir, { saved = 0, rewrite = 0 } = {}) {
     const file = join(dir, STATS_NAME);
     const lock = join(dir, "spine-stats.lock");
     const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    let fd;
-    try {
-      fd = openSync(lock, "wx");
-    } catch {
-      return null;
-    }
+    const fd = acquireStatsLock(lock);
+    if (fd === null) return null;
     try {
       const prev = readCutStats(dir);
       const locked = {

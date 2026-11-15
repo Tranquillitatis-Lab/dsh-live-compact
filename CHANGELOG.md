@@ -9,7 +9,8 @@
 - **preset 选择与桌面 bundle 兼容**：`takeoverPresets` 支持 preset ID 白名单；根域替换只识别官方模块名，不误伤第三方同名条目；late bundle 重新挂载官方引擎时先释放旧 root service。
 - **可观测性**：已有 shadow 目录会追加 `spine-decisions.jsonl`，记录 engine、让位/冷却、无合法切段、cut 成功/失败、官方摘要和 pre-step 超时原因。
 - **跨会话维护与门禁**：pending capture flush 按当前 session 收敛，避免一个会话的补扫拖住另一个会话；`test:gate` 现在实际执行 `test/turn-end-bridge.mjs` 与 `test/v107.mjs`，并补充跨会话等待回归。
-- **回归**：补充已剪游标推进、Worker 启动、维护状态、preset 白名单、长失败诊断和决策日志测试。
+- **状态机与首轮路由加固**：复用中的 catch-up 合并维护请求；blocked/retry 超限先恢复可见 raw；turn-stopping 任务纳入维护 barrier，并跳过同一完成边界的第二次 turn/end；首次 provider catalog 未就绪前不会误判为 local。Windows Worker 空闲缓存延长到 60 秒，统计锁可恢复明确死亡 PID。
+- **回归**：补充已剪游标推进、Worker 启动、维护状态、同轮去重、preset 白名单、长失败诊断、真实 #61 硬事实预算和决策日志测试。
 
 ## 1.1.11
 

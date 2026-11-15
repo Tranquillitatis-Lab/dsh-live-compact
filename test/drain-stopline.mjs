@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { cutCrossesNewerCheckpoint, selectCutIndexes } from "../plan.js";
-import { appendDecision, drainRewrite, flushDrainStats, readCutStats } from "../shadow.js";
+import { appendDecision, DECISIONS_NAME, drainRewrite, flushDrainStats, isPluginShadowName, readCutStats } from "../shadow.js";
 
 const user = (tokens = 100) => ({ type: "user", tokens, checkpoint: false, balancedAfter: true, balancedBefore: true });
 const round = (tokens, type = "tool") => ({ type, tokens, checkpoint: false, balancedAfter: true, balancedBefore: true });
@@ -75,6 +75,18 @@ test("maintenance decisions append only inside an existing shadow directory", ()
     assert.equal(line.v, 1);
     assert.equal(line.sid, "s");
     assert.equal(line.reason, "no-legal-span");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stats recovers a dead-PID lock and decision logs are rotatable plugin entries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-stats-lock-"));
+  try {
+    writeFileSync(join(dir, "spine-stats.lock"), "99999999");
+    flushDrainStats(dir, [{ kind: "cut", saved: 4200, afterPrefix: 10000 }], { sid: "s1", drain: true });
+    assert.equal(readCutStats(dir).cuts, 1);
+    assert.equal(isPluginShadowName(DECISIONS_NAME), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

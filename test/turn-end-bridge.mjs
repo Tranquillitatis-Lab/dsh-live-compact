@@ -115,6 +115,78 @@ test("turn-stopping runs maintenance before a disposed CLI agent can swallow it"
   assert.ok(chunks.length >= 1, `expected a turn-stopping cut, got ${chunks.length}`);
 });
 
+test("late turn-stopping cleanup does not clear a newer maintenance owner", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "late-owner",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+  };
+  let releaseCatchup;
+  const catchup = new Promise((resolve) => { releaseCatchup = resolve; });
+  const agent = {
+    session: { id: "late-owner", snapshotEvents: () => Array.from({ length: 129 }, (_, seq) => ({ seq })) },
+  };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: false, promise: catchup });
+  engine.finishTurn = async () => {};
+  const oldRun = engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  await setImmediate();
+  const newOwner = {};
+  const newAbort = new AbortController();
+  state.maintenanceOwner = newOwner;
+  state.maintenanceAbort = newAbort;
+  state.warming = true;
+  state.pendingMaintenance = true;
+  releaseCatchup();
+  await oldRun;
+  assert.equal(state.maintenanceOwner, newOwner);
+  assert.equal(state.maintenanceAbort, newAbort);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+});
+
+test("turn/end does not run a second maintenance pass after turn-stopping handled its boundary", async () => {
+  const engine = Object.create(Spine.prototype);
+  const event = { seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } };
+  const state = {
+    key: "same-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [event] } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  engine.scheduleTurnEndMaintenance(agent, event.seq, event);
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, event.seq);
+});
+
 test("agent/created seeds the live agent before the first turn/end", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));

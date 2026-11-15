@@ -20,8 +20,20 @@ window.__ModuleLoader__.load({
     const KEYS = GROUPS.flatMap((group) => group.keys);
     const PRESET_FIELD = {
       field: "takeoverPresets",
-      format: (value) => String(value),
-      parse: (text) => ({ kind: "set", value: text === "true" }),
+      format: (value) => Array.isArray(value) ? JSON.stringify(value) : String(value),
+      parse: (text) => {
+        const raw = String(text ?? "").trim();
+        if (raw === "true" || raw === "false") return { kind: "set", value: raw === "true" };
+        if (raw.startsWith("[")) {
+          try {
+            const value = JSON.parse(raw);
+            if (Array.isArray(value) && value.every((id) => typeof id === "string" && id.length > 0)) {
+              return { kind: "set", value };
+            }
+          } catch {}
+        }
+        return { kind: "set", value: raw };
+      },
     };
     const LABELS = {
       minTokens: ["起切 token 数", "默认 20000"],
@@ -40,7 +52,8 @@ window.__ModuleLoader__.load({
 
     const zh = {
       takeoverPresets: "接管官方预设",
-      takeoverHint: "将官方预设中的压缩引擎换成本插件。保存后仅影响新加载的预设；已有会话需重建。关闭不影响根层压缩引擎。",
+      takeoverHint: "填 true/false，或填 JSON 数组（例如 [\"standard\"]）限制接管的预设。保存后仅影响新加载的预设；已有会话需重建。",
+      takeoverArrayHint: "JSON 数组：只接管列出的 preset ID；也可填 true 或 false。",
       summary: "20000 起切、3 轮留原文、650000 停",
       basic: "常用",
       advanced: "高级设置",
@@ -55,7 +68,8 @@ window.__ModuleLoader__.load({
     };
     const en = {
       takeoverPresets: "Take over official presets",
-      takeoverHint: "Replace compression inside official presets. Applies to newly loaded presets after saving; recreate existing sessions. The root engine stays active when off.",
+      takeoverHint: "Enter true/false, or a JSON array such as [\"standard\"] to limit takeover. Applies to newly loaded presets after saving; recreate existing sessions.",
+      takeoverArrayHint: "JSON array: only the listed preset IDs are taken over; true and false are also accepted.",
       summary: "cuts at 20000, keeps 3 rounds, stops at 650000",
       basic: "Common",
       advanced: "Advanced",
@@ -103,14 +117,28 @@ window.__ModuleLoader__.load({
         onDiscard: props.discard,
       },
       h("h4", null, t("basic")),
-      h("label", { style: { display: "flex", alignItems: "center", gap: "0.75rem" } },
-        t("takeoverPresets"),
-        h(Switch, {
+      state.takeoverPresets.text.trim().startsWith("[")
+        ? h(SettingsValueField, {
+          id: "live-compact-takeoverPresets",
           label: t("takeoverPresets"),
-          checked: state.takeoverPresets.text === "true",
+          hint: t("takeoverArrayHint"),
+          numeric: false,
           disabled: !state.writable || state.saving,
-          onChange: (checked) => props.edit("takeoverPresets", String(checked)),
-        })),
+          overriddenLabel: t("overridden"),
+          resetLabel: t("reset"),
+          invalidLabel: t("invalid"),
+          ...state.takeoverPresets,
+          onEdit: (text) => props.edit("takeoverPresets", text),
+          onReset: () => props.resetField("takeoverPresets"),
+        })
+        : h("label", { style: { display: "flex", alignItems: "center", gap: "0.75rem" } },
+          t("takeoverPresets"),
+          h(Switch, {
+            label: t("takeoverPresets"),
+            checked: state.takeoverPresets.text === "true",
+            disabled: !state.writable || state.saving,
+            onChange: (checked) => props.edit("takeoverPresets", String(checked)),
+          })),
       h("p", null, t("takeoverHint")),
       section(GROUPS[0]),
       h("details", null,

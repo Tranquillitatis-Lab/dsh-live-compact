@@ -147,6 +147,21 @@ test("tool failure diagnostics keep a long hard-fact report complete", () => {
   assert.equal((result.text.match(/第30行：/g) || []).length, 1);
 });
 
+test("#61 hard-fact failed diagnostics fit the budget without duplicate lines", () => {
+  const text = Array.from({ length: 28 }, (_, index) =>
+    `Error: step-${index} 必须保留部署区域 cn-north-${index} 节点校验参数 config_key_${index}`,
+  ).join("\n");
+  assert.ok(text.length > 1400 && text.length < 2100, `expected ~1800 chars, got ${text.length}`);
+  const span = { id: "fail-hard", role: "tool", isError: true, text, toolCallId: "call-61", known: true, seq: 9 };
+  const excerpt = toolExcerpt([span]);
+  assert.equal(excerpt.failureDiagnosticsComplete, true);
+  assert.deepEqual(excerpt.incompleteFailures, []);
+  assert.equal((excerpt.text.match(/step-5 必须保留部署区域/g) || []).length, 1);
+  const card = buildCard(text, "", [span]);
+  assert.equal(card.ok, true);
+  assert.equal(card.failureDiagnosticsComplete, true);
+});
+
 test("ordinary uncertainty and model prose do not become unresolved decisions", () => {
   const card = buildCard("我不确定。使用 grep 检查日志。", "", [{ role: "assistant", text: "我不确定。使用 grep 检查日志。" }]);
   assert.equal(card.ok, true);

@@ -43,6 +43,27 @@ test("#62 advances past an already-pruned result and captures later results", ()
   assert.equal(engine.captureCursor.get("session-pruned"), 2);
 });
 
+test("#62 merges maintenanceRequested when reusing an in-flight catch-up", () => {
+  const engine = Object.create(Spine.prototype);
+  const task = {
+    key: "session-reused",
+    agent: null,
+    session: null,
+    events: [],
+    settings: {},
+    freezeSnapshot: false,
+    maintenanceRequested: false,
+  };
+  engine.pendingCatchups = new Map([[task.key, task]]);
+  engine.pendingCatchupJobs = new Set();
+  engine.pendingCuts = new Set();
+  engine.surfaceToolIds = () => [];
+  engine.queueCaptureCatchup = () => {};
+  const agent = { session: { id: task.key, surface: { nodes: [] } } };
+  assert.equal(engine.scheduleCaptureCatchup(agent, [], {}, { maintenanceRequested: true }), task);
+  assert.equal(task.maintenanceRequested, true);
+});
+
 test("desktop bundle fallback releases only the root official engine", () => {
   const isolate = Symbol.for("cordis.isolate");
   const key = Symbol("compaction");

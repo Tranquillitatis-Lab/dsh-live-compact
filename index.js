@@ -104,6 +104,7 @@ const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
 const SHADOW_WORKER_TIMEOUT_MS = 30000;
 const PRESTEP_WAIT_TIMEOUT_MS = 3000;
+const SHADOW_WORKER_IDLE_MS = process.platform === "win32" ? 60000 : 500;
 
 const shadowWorkers = new Map();
 
@@ -134,7 +135,7 @@ function shadowWorkerFor(root) {
       entry.retired = true;
       removeEntry();
       worker.terminate().catch(() => {});
-    }, 500);
+    }, SHADOW_WORKER_IDLE_MS);
     entry.idleTimer.unref?.();
   };
   entry.scheduleIdleExit = scheduleIdleExit;
@@ -913,10 +914,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       maxTurnGrowth: 0,
       maintenanceJob: null,
       maintenanceAbort: null,
+      maintenanceOwner: null,
       turnEndScheduled: false,
       turnEndPending: false,
       turnEndSeq: -1,
       lastMaintenanceTurnEndSeq: -1,
+      lastStoppingTurnEndSeq: -1,
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -942,6 +945,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return;
     }
     if (state.turnEndSeq <= state.lastMaintenanceTurnEndSeq) return;
+    if (state.lastStoppingTurnEndSeq >= 0 && state.turnEndSeq > state.lastStoppingTurnEndSeq) {
+      state.lastStoppingTurnEndSeq = -1;
+    }
+    if (state.lastStoppingTurnEndSeq >= 0 && state.turnEndSeq === state.lastStoppingTurnEndSeq) {
+      state.lastMaintenanceTurnEndSeq = state.turnEndSeq;
+      state.lastStoppingTurnEndSeq = -1;
+      return;
+    }
     if (state.turnEndSeq > state.lastMaintenanceTurnEndSeq) {
       state.lastMaintenanceTurnEndSeq = state.turnEndSeq;
     }
@@ -971,29 +982,45 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return;
     }
     state.warming = true;
-    state.maintenanceAbort = new AbortController();
-    try {
-      const settings = readSettings(this.liveConfig);
-      const events = agent.session.snapshotEvents();
-      let catchup = { finished: true, progressed: false, retryRequested: false };
-      if (events.length > CAPTURE_EVENT_BATCH) {
-        catchup = this.scheduleCaptureCatchup(agent, events, settings, { freezeSnapshot: true });
-      } else {
+    const owner = {};
+    const maintenanceAbort = new AbortController();
+    state.maintenanceOwner = owner;
+    state.maintenanceAbort = maintenanceAbort;
+    const job = (async () => {
+      try {
+        const settings = readSettings(this.liveConfig);
+        const events = agent.session.snapshotEvents();
+        const stoppingEnd = latestCompletedTurnEnd(events);
+        const stoppingSeq = stoppingEnd?.seq;
+        let catchup = { finished: true, progressed: false, retryRequested: false };
+        if (events.length > CAPTURE_EVENT_BATCH) {
+          catchup = this.scheduleCaptureCatchup(agent, events, settings, { freezeSnapshot: true });
+        } else {
+          await this.flushPendingCaptures(agent.session);
+          this.captureNew(agent.session, events, settings);
+        }
+        if (catchup?.promise && !catchup.finished) await catchup.promise;
         await this.flushPendingCaptures(agent.session);
-        this.captureNew(agent.session, events, settings);
+        await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
+        if (stoppingSeq !== undefined) state.lastStoppingTurnEndSeq = stoppingSeq;
+      } finally {
+        if (state.maintenanceOwner === owner) {
+          state.warming = false;
+          state.pendingMaintenance = false;
+          state.maintenanceAbort = null;
+          state.maintenanceOwner = null;
+          if (state.maintenanceJob === job) state.maintenanceJob = null;
+          this.pendingCuts.delete(job);
+          if (state.turnEndPending) {
+            state.turnEndPending = false;
+            this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
+          }
+        }
       }
-      if (catchup?.promise && !catchup.finished) await catchup.promise;
-      await this.flushPendingCaptures(agent.session);
-      await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
-    } finally {
-      state.warming = false;
-      state.pendingMaintenance = false;
-      state.maintenanceAbort = null;
-      if (state.turnEndPending) {
-        state.turnEndPending = false;
-        this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
-      }
-    }
+    })();
+    state.maintenanceJob = job;
+    this.pendingCuts.add(job);
+    await job;
   }
 
   scheduleTurnEndMaintenance(agent, seq, boundaryEvent = null) {
@@ -1083,6 +1110,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       task.events = events;
       task.settings = settings;
       task.freezeSnapshot ||= options.freezeSnapshot === true;
+      task.maintenanceRequested ||= options.maintenanceRequested === true;
       return task;
     }
     let resolve;
@@ -1180,7 +1208,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             const previousMax = this.captureRetryStats?.get(task.key) || 0;
             if (task.captureRetryAttempts > previousMax) this.captureRetryStats.set(task.key, task.captureRetryAttempts);
             if (task.captureRetryAttempts >= CAPTURE_RETRY_LIMIT) {
-              this.finishCaptureCatchup(task);
+              task.phase = "visible";
+              task.recoverIndex = 0;
+              task.visibleIds = [...new Set(this.surfaceToolIds(task.session))];
+              this.queueCaptureCatchup(task);
               return;
             }
             this.queueCaptureRetry(task);
@@ -1189,7 +1220,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           if (result.blocked) {
             task.captureBlocked = true;
             task.retryRequested = true;
-            this.finishCaptureCatchup(task);
+            task.phase = "visible";
+            task.recoverIndex = 0;
+            task.visibleIds = [...new Set(this.surfaceToolIds(task.session))];
+            this.queueCaptureCatchup(task);
             return;
           }
           if (result.progressed) task.captureRetryAttempts = 0;
@@ -1241,6 +1275,13 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       // A catch-up can finish after the next turn has already started. Do not
       // leave the session permanently warming; the next persisted turn/end
       // must be allowed to schedule a fresh maintenance pass.
+      state.pendingMaintenance = false;
+      state.warming = false;
+    } else if (!state.maintenanceOwner) {
+      // A reused catch-up can finish without a retry request after a newer
+      // maintenance caller has already dropped its barrier. Do not retain a
+      // stale warming flag in that case; an active turn-stopping owner clears
+      // its own state in its finally block.
       state.pendingMaintenance = false;
       state.warming = false;
     }
@@ -1360,6 +1401,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           return;
         }
         this.ensurePruneGuard();
+        // The pi-ai catalog is loaded asynchronously so ESM-only providers are
+        // discoverable. Do not classify the first request as local merely
+        // because catalogProviders() was called before the import settled.
+        if (this.catalogPromise) await this.catalogPromise;
         const resolved = this.engineFor(agent);
         if (state.engine !== resolved.engine || state.engineSource !== resolved.source) {
           this.ctx.logger?.info?.(`spine engine=${resolved.engine} source=${resolved.source}`);
