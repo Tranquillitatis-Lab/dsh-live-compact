@@ -87,3 +87,21 @@ test("desktop bundle fallback releases only the root official engine", () => {
   assert.equal(releaseRootStockCompaction(root), false);
   assert.equal(store[key]?.ctx.fiber, thirdPartyFiber);
 });
+
+test("desktop bundle fallback detaches a stock service while async disposal settles", () => {
+  const isolate = Symbol.for("cordis.isolate");
+  const key = Symbol("compaction");
+  const store = {};
+  const root = { [isolate]: { compaction: key }, reflect: { store }, fiber: {} };
+  let release;
+  const stock = { ctx: { fiber: {
+    entry: { options: { name: STOCK_ENGINE } },
+    store: { compaction: null },
+    dispose() { return new Promise((resolve) => { release = resolve; }); },
+  } } };
+  stock.ctx.fiber.store.compaction = stock;
+  store[key] = stock;
+  assert.equal(releaseRootStockCompaction(root), true);
+  assert.equal(store[key], undefined);
+  release();
+});

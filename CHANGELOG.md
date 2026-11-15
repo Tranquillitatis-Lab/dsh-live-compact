@@ -14,6 +14,7 @@
 - **维护 retry fencing**：turn-stopping owner 活跃时，blocked/retry catch-up 和暂时缺失完成边界都只排队到 owner 之后，不清掉 barrier、不覆盖 abort controller，也不启动重叠维护。
 - **shadow 目标保护**：stats 锁创建后的写入/fsync 失败会清理本次锁；死 PID 恢复用 recovery lock 二次确认；决策日志拒绝 symlink、hardlink 和非普通文件目标。
 - **worker 生命周期**：空闲 worker 解除引用，复用时先重新引用，保证 one-shot 宿主也能完成下一次 shadow 写入。
+- **宿主注册与 preset 选择**：异步释放迟到的官方 stock service 时先安全脱离 root/fiber store，再构造 replacement；孤立 compaction group 继承外层 preset ID，数组 allowlist 可按文档生效；retry cleanup 只清理自己安装的 job/controller。
 - **回归**：补充已剪游标推进、Worker 启动、维护状态、同轮去重、preset 白名单、长失败诊断、真实 #61 硬事实预算和决策日志测试。
 
 ## 1.1.11

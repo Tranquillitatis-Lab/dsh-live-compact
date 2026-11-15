@@ -117,6 +117,12 @@ test("a preset allowlist leaves an unselected isolated group unchanged", () => {
   assert.equal(unchanged[0].name, STOCK_ENGINE);
 });
 
+test("a group inherits the outer preset ID for allowlist selection", () => {
+  const rows = groupRows();
+  const selected = rewritePresetConfig(rows, true, {}, { ...groupEntry, presetId: "standard" }, ["standard"]);
+  assert.equal(selected[0].name, "dsh-live-compact");
+});
+
 test("ordinary arrays and non-isolated groups are not takeover targets", () => {
   const rows = groupRows();
   for (const entry of [undefined, {}, { id: "compaction", group: true },

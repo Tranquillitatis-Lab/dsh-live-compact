@@ -93,6 +93,14 @@ function takeoverSelected(config, entry, selector) {
   return ids.some((id) => selector.includes(id));
 }
 
+function outerPresetId(fiber) {
+  for (let current = fiber?.parent; current; current = current.parent) {
+    const id = current.entry?.options?.id;
+    if (typeof id === "string" && PRESET_IDS.has(id)) return id;
+  }
+  return "";
+}
+
 function withEngineConfig(entry, rootConfig) {
   const previous = entry.config && typeof entry.config === "object" && !Array.isArray(entry.config) ? configSnapshot(entry.config) : {};
   const { takeoverPresets: _takeover, ...root } = configSnapshot(rootConfig);
@@ -187,7 +195,9 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
     if (!selector || (Array.isArray(selector) && selector.length === 0)) return resolved;
     const loadable = packageLoadable();
     const entry = fiber?.entry?.options;
-    const rewritten = rewritePresetConfig(resolved, loadable, config, entry, selector);
+    const presetId = outerPresetId(fiber);
+    const selectedEntry = presetId ? { ...entry, presetId } : entry;
+    const rewritten = rewritePresetConfig(resolved, loadable, config, selectedEntry, selector);
     const id = rewritten?.id || rewritten?.config?.id || entry?.id;
     if (rewritten !== resolved && id && !seen.has(String(id))) {
       seen.add(String(id));

@@ -77,16 +77,23 @@ function releaseCompaction(ctx, previous) {
 }
 
 export function releaseRootStockCompaction(ctx) {
+  const store = ctx?.reflect?.store;
   const current = compactionRecord(ctx);
+  const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
   const fiber = current?.fiber ?? current?.ctx?.fiber;
   const moduleName = fiber?.entry?.options?.name;
   if (!current || moduleName !== STOCK_ENGINE || fiber === ctx?.fiber) return false;
   try {
-    // Cordis removes a service provision synchronously at the start of
-    // fiber.dispose(), then awaits dependents. This handles a late bundle
-    // that reintroduced the root stock row after our profile patch ran.
+    // Cordis disposal is async. Detach the old root/fiber service immediately
+    // after starting it so the replacement constructor cannot observe a
+    // duplicate service; the fiber's own async disposer still drains its
+    // effects in the background.
     const pending = fiber.dispose?.();
     pending?.catch?.(() => {});
+    if (compactionRecord(ctx) === current) {
+      delete store[key];
+      if (fiber?.store?.compaction === current) delete fiber.store.compaction;
+    }
     return compactionRecord(ctx) !== current;
   } catch {
     return false;

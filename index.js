@@ -1329,14 +1329,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         return;
       }
       state.warming = true;
-      state.maintenanceAbort = new AbortController();
+      const retryAbort = new AbortController();
+      state.maintenanceAbort = retryAbort;
       const job = this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true })
         .catch((error) => noteShadowWarning(this.ctx?.logger, error))
         .finally(() => {
+          if (state.maintenanceJob !== job || state.maintenanceAbort !== retryAbort) return;
           state.pendingMaintenance = false;
           state.warming = false;
           state.maintenanceAbort = null;
-          if (state.maintenanceJob === job) state.maintenanceJob = null;
+          state.maintenanceJob = null;
           this.pendingCuts.delete(job);
         });
       state.maintenanceJob = job;
