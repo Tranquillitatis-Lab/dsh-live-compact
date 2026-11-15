@@ -624,7 +624,7 @@ export const STATS_NAME = "spine-stats.json";
 export const CUTS_NAME = "spine-cuts.jsonl";
 export const DECISIONS_NAME = "spine-decisions.jsonl";
 
-export function appendDecision(dir, record = {}) {
+export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
   try {
     if (!existsSync(dir)) return false;
     const body = `${JSON.stringify({
@@ -639,6 +639,7 @@ export function appendDecision(dir, record = {}) {
       const rotation = rotateShadowLocked({
         incomingBytes: Buffer.byteLength(body, "utf8"),
         protectPath: path,
+        protectPaths,
         sessionKey: record.sid || record.sessionId || "default",
         cap: shadowMaxBytes(),
       });

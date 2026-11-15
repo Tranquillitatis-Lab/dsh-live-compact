@@ -97,6 +97,25 @@ test("decision append refuses to exceed the shadow capacity", () => {
   }
 });
 
+test("decision capacity rotation protects active raw backups", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spine-decision-raw-protect-"));
+  const decision = join(dir, DECISIONS_NAME);
+  const raw = join(dir, "raw-0123456789abcdef.txt");
+  const previous = process.env.SPINE_SHADOW_MAX_BYTES;
+  try {
+    process.env.SPINE_SHADOW_MAX_BYTES = "200";
+    writeFileSync(decision, "d".repeat(100));
+    writeFileSync(raw, "r".repeat(100));
+    assert.equal(appendDecision(dir, { phase: "protect-raw" }, { protectPaths: [raw] }), false);
+    assert.equal(existsSync(raw), true);
+    assert.equal(readFileSync(raw, "utf8"), "r".repeat(100));
+  } finally {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+    else process.env.SPINE_SHADOW_MAX_BYTES = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stats recovers a dead-PID lock and decision logs are rotatable plugin entries", () => {
   const dir = mkdtempSync(join(tmpdir(), "spine-stats-lock-"));
   try {

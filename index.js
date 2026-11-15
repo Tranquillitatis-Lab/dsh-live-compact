@@ -880,7 +880,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   recordDecision(state, record = {}) {
-    appendDecision(shadowDirectory(), { sid: state?.key || DEFAULT_KEY, ...record });
+    const key = state?.key || DEFAULT_KEY;
+    const prefix = `${key}\0`;
+    const protectPaths = [];
+    for (const [rawKey, raw] of this.rawSeen || []) {
+      if (!rawKey.startsWith(prefix) || !raw?.path) continue;
+      protectPaths.push(raw.path, `${raw.path}.meta.json`);
+    }
+    appendDecision(shadowDirectory(), { sid: key, ...record }, { protectPaths });
   }
 
   ownedSignal(signal) {
@@ -995,6 +1002,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const events = agent.session.snapshotEvents();
         const stoppingEnd = latestCompletedTurnEnd(events);
         const stoppingSeq = stoppingEnd?.seq;
+        if (Number.isInteger(stoppingSeq)) {
+          state.turnEndSeq = Number.isInteger(state.turnEndSeq) ? Math.max(state.turnEndSeq, stoppingSeq) : stoppingSeq;
+          state.turnEndEvent = stoppingEnd;
+        }
         let catchup = { finished: true, progressed: false, retryRequested: false };
         if (events.length > CAPTURE_EVENT_BATCH) {
           catchup = this.scheduleCaptureCatchup(agent, events, settings, { freezeSnapshot: true });

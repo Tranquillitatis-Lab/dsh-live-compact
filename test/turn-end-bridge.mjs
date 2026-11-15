@@ -125,6 +125,8 @@ test("turn-stopping does not mark a boundary when maintenance fails", async () =
     maintenanceOwner: null,
     maintenanceJob: null,
     turnEndPending: false,
+    turnEndSeq: -1,
+    turnEndEvent: null,
     lastStoppingTurnEndSeq: -1,
   };
   const events = [{ seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } }];
@@ -138,6 +140,7 @@ test("turn-stopping does not mark a boundary when maintenance fails", async () =
   engine.finishTurn = async () => false;
   await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
   assert.equal(state.lastStoppingTurnEndSeq, -1);
+  assert.equal(state.turnEndSeq, 7);
 });
 
 test("turn-stopping keeps a failed cut retryable", async (t) => {
