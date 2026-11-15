@@ -37,6 +37,33 @@ test("20 completed user tasks on turn/end produce repeated cloud cuts", async (t
   assert.ok(cuts.length > 1, `expected repeated cuts, got ${cuts.length}`);
 });
 
+test("drain grows a legal tail into the larger low-water span", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 24000 }));
+  const { engine, ctx } = h.engine({ minTokens: 20000 }, "cloud");
+  h.capture(engine, f);
+  const agent = f.agent();
+  engine.stateFor(agent);
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  engine.flushPendingCaptures = async () => {};
+  ctx.tokenMeter.measure = () => ({ nodes: f.measure().nodes, totalTokens: 60000, totalHeuristicTokens: 60000 });
+  const chunks = [];
+  engine.commitSelectedSpan = async (_agent, chunk) => {
+    chunks.push(chunk.tokens);
+    return false;
+  };
+  f.user("保持低水位，优先整理更大的旧工具段。");
+  for (let round = 0; round < 8; round += 1) {
+    f.round(`large-span-${round}`, { tokens: 4000, turn: 2 });
+  }
+  for (let round = 0; round < 3; round += 1) {
+    f.round(`kept-span-${round}`, { tokens: 200, turn: 2 });
+  }
+  await engine.finishTurn(agent, f.session.snapshotEvents(), { skipCapture: true });
+  assert.equal(chunks.length, 1);
+  assert.ok(chunks[0] >= 12000, `expected a larger low-water span, got ${chunks[0]} tokens`);
+});
+
 test("turn/end bridge keeps a boundary published after the callback", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));
