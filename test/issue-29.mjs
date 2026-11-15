@@ -460,6 +460,20 @@ test("#29 maintenance rejection, cancellation and commit failure do not poison c
   assert.equal(engine.stateFor(f.agent()).localOnly, false);
 });
 
+test("#49 disposed CLI maintenance still finishes an already-started local cut", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 60000 }));
+  const pair = work(f);
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  await engine.finishTurn({
+    session: f.session,
+    runMaintenance: (fn) => fn(AbortSignal.abort({ kind: "disposed" })),
+  });
+  assert.deepEqual(f.summaries().at(-1).data.shadowedSeqs, pair);
+  assert.equal(engine.stateFor(f.agent()).localOnly, false);
+});
+
 test("#29 defaults preserve the 1000 chunk minimum, 32000 rail, and 48000 cloud urgent line", () => {
   assert.deepEqual(DEFAULTS, { minTokens: 20000, keepRounds: 3, keepRoundTokens: 32000, pointerTokens: 0,
     chunkMin: 1000, chunkMax: 32000, bigGate: 650000, cooldownMs: 0 });

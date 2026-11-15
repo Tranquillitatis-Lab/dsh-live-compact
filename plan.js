@@ -867,6 +867,7 @@ function expandBack(items, end, stopAt, { crossUser, chunkMax }) {
   while (start > stopAt) {
     const prev = start - 1;
     if (items[prev].checkpoint) break;
+    if (crossUser && items[prev].untrustedNotice) break;
     if (!crossUser && isUserBoundary(items[prev])) break;
     if (tokens + (items[prev].tokens || 0) > chunkMax) break;
     start = prev;
@@ -904,7 +905,7 @@ export function selectCutIndexes(items, {
   const lastUser = items.reduce((found, item, index) => (isUserBoundary(item) ? index : found), -1);
   const firstUser = items.findIndex(isUserBoundary);
   const floor = firstUser >= 0 ? firstUser + 1 : 0;
-  const end = walkOffTail(items, limit);
+  let end = walkOffTail(items, limit);
   if (end < lowerBound) return null;
   // 切点右边还有卡片，说明这一刀在已缓存前缀里。不切。
   // A checkpoint to the right means this span is inside the cached prefix. Do not cut.
@@ -927,12 +928,36 @@ export function selectCutIndexes(items, {
   }
   if ((items[end].tokens || 0) > pointerMax && items[end].type === "tool") return { start: end, end, pointerOnly: true, gain: 0 };
   const phase = expandBack(items, end, lowerBound, { crossUser: false, chunkMax });
-  // 不够 1000 就停下；不越过卡片或最后一条 user 去找另一段。
-  // Under 1000, stop. Do not cross a checkpoint or the last user to find another span.
-  if (phase.gain < chunkMin) return pointer;
-  if (phase.tokens > chunkMax || !balanced(items, phase.start, phase.end)) return null;
-  if (lastUser >= phase.start && lastUser <= phase.end) return null;
-  return phase;
+  // First prefer the newest phase after the latest user boundary.
+  // Prefer the newest phase after the latest user boundary.
+  if (phase.gain >= chunkMin) {
+    if (phase.tokens <= chunkMax && balanced(items, phase.start, phase.end)
+        && !(lastUser >= phase.start && lastUser <= phase.end)) return phase;
+    return null;
+  }
+
+  // Cloud sessions may have several independent user tasks. If the newest
+  // phase is too small, retreat before the latest user and compact an older
+  // tool span. Keep the latest user itself out of the span; older user
+  // messages remain as JSON lines in the card so their constraints survive.
+  // Local sessions deliberately keep the old strict no-cross-user behavior.
+  end = retreatBefore(items, end, lastUser);
+  if (end < lowerBound || end < floor) return pointer;
+  // Retreating before the latest user can move the candidate to the left of
+  // a newer checkpoint. That span is already in the cached prefix and is not
+  // a legal fallback cut.
+  if (cutCrossesNewerCheckpoint(items, end)) return pointer;
+  if ((items[end].tokens || 0) > pointerMax && items[end].type === "tool") {
+    return { start: end, end, pointerOnly: true, gain: 0 };
+  }
+  const crossUserFloor = Math.max(lowerBound, floor);
+  const extended = expandBack(items, end, crossUserFloor - 1, { crossUser: true, chunkMax });
+  if (extended.start < crossUserFloor) extended.start = crossUserFloor;
+  extended.gain = nonUserGain(items, extended.start, extended.end);
+  extended.tokens = spanTokens(items, extended.start, extended.end);
+  if (extended.tokens > chunkMax || extended.gain < chunkMin || !balanced(items, extended.start, extended.end)) return pointer;
+  if (lastUser >= extended.start && lastUser <= extended.end) return pointer;
+  return extended;
 }
 
 // pointerOnly 扩到 tool-call 之后，这一段仍不能包含最后一条 user 或 checkpoint。
