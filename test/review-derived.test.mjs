@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import Spine from "../index.js";
+import { Session } from "@deepseek-ai/dsh-session";
+import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
+import Spine, { selectNewestChunk } from "../index.js";
 import { buildCard } from "../plan.js";
 import { contentHash, rawName } from "../raw.js";
 import { toolExcerpt } from "../plan.js";
+import { DEFAULTS } from "../settings.js";
 
 function toolEvent(seq, id, text) {
   return { seq, type: "tool/result", data: { message: { toolCallId: id, content: [{ type: "text", text }] } } };
@@ -53,6 +56,64 @@ test("permanent duplicate capture blocks cursor advancement", () => {
 test("long-read fallback actually disables long-span selection", () => {
   const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
   assert.match(source, /const longSpan = !context\.disableLongRead && newestLong/);
+});
+
+test("#60 rejected ordinary candidate falls back to the already prepared long-read candidate", () => {
+  const root = mkdtempSync(join(tmpdir(), "spine-issue-60-"));
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = root;
+  try {
+    const session = Session.create("issue-60");
+    const prices = new Map();
+    const calls = new Map();
+    const add = (type, data, tokens) => {
+      const event = session.append(type, data, { surfaceOp: "append" });
+      prices.set(event.seq, tokens);
+      return event.seq;
+    };
+    add("system/message", { message: createSystemMessage("fixture") }, 500);
+    add("user/message", createUserMessage({ content: [{ type: "text", text: "继续当前任务。" }] }), 100);
+    const round = (id, tokens, { name = "shell", prose = "", text = "INFO fixture heartbeat ok" } = {}) => {
+      const callSeq = add("assistant/message", {
+        turn: 2,
+        message: createAssistantMessage({
+          content: [
+            ...(prose ? [{ type: "text", text: prose }] : []),
+            { type: "tool-call", id, name, arguments: JSON.stringify(name === "read" ? { file_path: "ledger.txt" } : { command: "echo fixture" }) },
+          ],
+          source: { provider: "test", model: "fixture" },
+        }),
+      }, 100);
+      calls.set(id, { name, command: "echo fixture", turn: 2, callSeq });
+      const resultSeq = add("tool/result", {
+        turn: 2,
+        message: createToolResultMessage({ callId: id, content: [{ type: "text", text }], isError: false }),
+      }, tokens);
+      return [callSeq, resultSeq];
+    };
+    const longRound = round("long", 6000, { name: "read", text: "INFO long read line\n".repeat(100) });
+    round("decision", 5000, { prose: "我们决定采用方案 B，因为需要保留现有缓存前缀。" });
+    round("filler-1", 4500);
+    round("filler-2", 4500);
+    round("keep-1", 500);
+    round("keep-2", 500);
+    round("keep-3", 500);
+    const measurement = {
+      nodes: session.surface.nodes.map((seq) => ({ seq, tokens: prices.get(seq), heuristicTokens: prices.get(seq) })),
+    };
+    const settings = { ...DEFAULTS, minTokens: 1000, chunkMin: 1000, chunkMax: 32000, keepRounds: 3, pointerTokens: 32000 };
+    const result = selectNewestChunk(session, measurement, "issue-60", {
+      engine: "cloud", totalTokens: 60000, settings, calls, rawLookup: () => null, jobs: [],
+    });
+    assert.ok(result, "long-read fallback should produce a legal cut");
+    assert.deepEqual([result.start, result.end], longRound);
+    assert.equal(result.card.ok, true);
+    assert.equal(result.card.text.includes("我们决定采用方案 B"), false);
+  } finally {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("tool evidence does not become a top-level kept user line", () => {

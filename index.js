@@ -491,7 +491,7 @@ export { saveShadowImpl as saveShadow };
 // Pick one span from the tail, as in 1.0.6. Do not cross a genuine user message.
 // Tool pairs stay balanced. The newest settings.keepRounds finished rounds stay verbatim.
 // Under settings.chunkMin, return null.
-function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}) {
+export function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}) {
   const settings = context.settings ?? readSettings();
   const decision = jobCutDecision(context.jobs || []);
   if (!decision.cut) return null;
@@ -514,7 +514,6 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   }
   if (floorCard >= 0 && end <= floorCard) return null;
   while (end >= first && !cutOk(toolPairingBalancedAfter, session, nodes[end])) end -= 1;
-  let keptTokens = 0;
   const visible = [];
   for (let index = first; index <= end; index += 1) {
     const event = session.eventAt(nodes[index]);
@@ -623,17 +622,8 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
     drain: context.drain === true,
     urgentTokens: URGENT_TOKENS,
   };
-  let usedLongCut = false;
-  let picked = null;
   let longPicked = null;
   const forceLongRead = context.forceLongRead === true;
-  const fallbackWithoutLongRead = () => context.disableLongRead
-    ? null
-    : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true, forceLongRead: false });
-  const fallbackToLongRead = () => context.disableLongRead || context.forceLongRead || !longPicked
-    ? null
-    : selectNewestChunk(session, measurement, key, { ...context, forceLongRead: true });
-  const abandonCandidate = () => usedLongCut ? fallbackWithoutLongRead() : fallbackToLongRead();
   if (longSpan) {
     const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
     if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
@@ -644,115 +634,122 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   if (end >= first && !isCheckpoint(session, nodes[end])) {
     ordinaryPicked = selectCutIndexes(items, cutOptions);
   }
-  if (forceLongRead && longPicked) {
-    picked = longPicked;
-    usedLongCut = true;
+  const candidates = [];
+  const addCandidate = (candidate, usedLongCut) => {
+    if (!candidate || candidates.some((item) => item.candidate === candidate)) return;
+    candidates.push({ candidate, usedLongCut });
+  };
+  if (forceLongRead) {
+    addCandidate(longPicked, true);
   } else if (longPicked && ordinaryPicked) {
     const longTokens = longPicked.tokens || 0;
     const ordinaryTokens = ordinaryPicked.tokens || 0;
     if (ordinaryTokens >= longTokens) {
-      picked = ordinaryPicked;
+      addCandidate(ordinaryPicked, false);
+      addCandidate(longPicked, true);
     } else {
-      picked = longPicked;
-      usedLongCut = true;
+      addCandidate(longPicked, true);
+      addCandidate(ordinaryPicked, false);
     }
-  } else if (ordinaryPicked) {
-    picked = ordinaryPicked;
-  } else if (longPicked) {
-    picked = longPicked;
-    usedLongCut = true;
+  } else {
+    addCandidate(ordinaryPicked, false);
+    addCandidate(longPicked, true);
   }
-  if (!picked) return null;
-  if (picked.pointerOnly) {
-    const result = session.eventAt(nodes[picked.end]);
-    const id = result?.data?.message?.toolCallId;
-    let pairStart = -1;
-    if (id) {
-      for (let index = picked.end - 1; index >= 0; index -= 1) {
-        const blocks = session.eventAt(nodes[index])?.data?.message?.content || [];
-        if (blocks.some((block) => block?.type === "tool-call" && block.id === id)) {
-          pairStart = index;
-          break;
+  if (!candidates.length) return null;
+
+  const evaluateCandidate = ({ candidate, usedLongCut }) => {
+    const picked = { ...candidate };
+    if (picked.pointerOnly) {
+      const result = session.eventAt(nodes[picked.end]);
+      const id = result?.data?.message?.toolCallId;
+      let pairStart = -1;
+      if (id) {
+        for (let index = picked.end - 1; index >= 0; index -= 1) {
+          const blocks = session.eventAt(nodes[index])?.data?.message?.content || [];
+          if (blocks.some((block) => block?.type === "tool-call" && block.id === id)) {
+            pairStart = index;
+            break;
+          }
         }
       }
+      if (pairStart < 0) return null;
+      if (usedLongCut && pairStart < longSpan.start) return null;
+      if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return null;
+      if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return null;
+      picked.start = pairStart;
     }
-    if (pairStart < 0) return abandonCandidate();
-    if (usedLongCut && pairStart < longSpan.start) return fallbackWithoutLongRead();
-    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return abandonCandidate();
-    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return abandonCandidate();
-    picked.start = pairStart;
-  }
-  if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();
+    if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;
 
-  // 1.0.6 selected the newest legal end, then grew the cut left until the
-  // 32K rail, a user/checkpoint, an unbalanced tool pair, or an incomplete
-  // card stopped it. Returning the first >= CHUNK_MIN phase leaves a tiny
-  // 1.9K tail in a long drain and defeats the low-water goal. Restore that
-  // core selection rule while keeping the newer source and checkpoint guards.
-  if (!picked.pointerOnly) {
-    let expandedStart = picked.start;
-    let expandedTokens = items.slice(expandedStart, picked.end + 1)
-      .reduce((sum, item) => sum + (item.tokens || 0), 0);
-    while (expandedStart > first) {
-      const previous = expandedStart - 1;
-      if (isCheckpoint(session, nodes[previous])) break;
-      if (classifications[previous].isGenuineUserBoundary) break;
-      if (usedLongCut && previous < longSpan.start) break;
-      const nextTokens = expandedTokens + (priced[previous].tokens || 0);
-      if (nextTokens > settings.chunkMax) break;
-      const trialPieces = spanPieces(previous, picked.end);
-      const trialCard = buildCard(
-        trialPieces.map((piece) => piece.text).join("\n"),
-        liveText(previous, picked.end),
-        trialPieces,
-        extras,
-      );
-      if (trialCard.ok !== true) break;
-      expandedStart = previous;
-      expandedTokens = nextTokens;
+    // 1.0.6 selected the newest legal end, then grew the cut left until the
+    // 32K rail, a user/checkpoint, an unbalanced tool pair, or an incomplete
+    // card stopped it. Returning the first >= CHUNK_MIN phase leaves a tiny
+    // 1.9K tail in a long drain and defeats the low-water goal. Restore that
+    // core selection rule while keeping the newer source and checkpoint guards.
+    if (!picked.pointerOnly) {
+      let expandedStart = picked.start;
+      let expandedTokens = items.slice(expandedStart, picked.end + 1)
+        .reduce((sum, item) => sum + (item.tokens || 0), 0);
+      while (expandedStart > first) {
+        const previous = expandedStart - 1;
+        if (isCheckpoint(session, nodes[previous])) break;
+        if (classifications[previous].isGenuineUserBoundary) break;
+        if (usedLongCut && previous < longSpan.start) break;
+        const nextTokens = expandedTokens + (priced[previous].tokens || 0);
+        if (nextTokens > settings.chunkMax) break;
+        const trialPieces = spanPieces(previous, picked.end);
+        const trialCard = buildCard(
+          trialPieces.map((piece) => piece.text).join("\n"),
+          liveText(previous, picked.end),
+          trialPieces,
+          extras,
+        );
+        if (trialCard.ok !== true) break;
+        expandedStart = previous;
+        expandedTokens = nextTokens;
+      }
+      while (expandedStart <= picked.end &&
+          !cutOk(toolPairingBalancedBefore, session, nodes[expandedStart])) {
+        expandedTokens -= priced[expandedStart].tokens || 0;
+        expandedStart += 1;
+      }
+      if (expandedStart > picked.end) return null;
+      picked.start = expandedStart;
     }
-    while (expandedStart <= picked.end &&
-        !cutOk(toolPairingBalancedBefore, session, nodes[expandedStart])) {
-      expandedTokens -= priced[expandedStart].tokens || 0;
-      expandedStart += 1;
+    const start = picked.start;
+    const candidateEnd = picked.end;
+    const tokens = items.slice(start, candidateEnd + 1).reduce((sum, item) => sum + item.tokens, 0);
+    const pieces = spanPieces(start, candidateEnd);
+    if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) return null;
+    let card = picked.pointerOnly
+      ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
+      : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, candidateEnd), pieces, extras);
+    if (card.ok !== true) return null;
+    if (!cutOk(toolPairingBalancedAfter, session, nodes[candidateEnd])) return null;
+    let after = 0;
+    for (let index = candidateEnd + 1; index < priced.length; index += 1) after += priced[index].tokens;
+    // `keptTokens` must describe retained rounds to the right of the actual
+    // cut. A long-read cut can be newer than the ordinary rounds selected above;
+    // counting those older rounds made `tailBeyondKept` negative and disabled
+    // the tail guard.
+    let candidateKeptTokens = 0;
+    for (const round of rounds) {
+      const roundStart = visible[round.start]?.index;
+      const roundEnd = visible[round.end]?.index;
+      if (!Number.isInteger(roundStart) || !Number.isInteger(roundEnd) || roundStart <= candidateEnd) continue;
+      for (let index = roundStart; index <= roundEnd; index += 1) candidateKeptTokens += priced[index].tokens;
     }
-    if (expandedStart > picked.end) return abandonCandidate();
-    picked.start = expandedStart;
+    let prefix = 0;
+    for (let index = 0; index < start; index += 1) prefix += priced[index].tokens;
+    if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
+    card = attachBackupHint(card, freshShadowFile("cut", key));
+    return { start: nodes[start], end: nodes[candidateEnd], tokens, after, keptTokens: candidateKeptTokens, card, prefix };
+  };
+
+  for (const candidate of candidates) {
+    const result = evaluateCandidate(candidate);
+    if (result) return result;
   }
-  const start = picked.start;
-  end = picked.end;
-  const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
-  const pieces = spanPieces(start, end);
-  if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) {
-    return abandonCandidate();
-  }
-  let card = picked.pointerOnly
-    ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
-    : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, end), pieces, extras);
-  if (card.ok !== true) {
-    // The ordinary candidate is chosen by token gain before card validation.
-    // If its card is rejected, give the already selected long-read candidate
-    // a complete second pass before abandoning the turn.
-    return abandonCandidate();
-  }
-  card = attachBackupHint(card, freshShadowFile("cut", key));
-  if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
-  if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return abandonCandidate();
-  let after = 0;
-  for (let index = end + 1; index < priced.length; index += 1) after += priced[index].tokens;
-  // `keptTokens` must describe retained rounds to the right of the actual
-  // cut. A long-read cut can be newer than the ordinary rounds selected above;
-  // counting those older rounds made `tailBeyondKept` negative and disabled
-  // the tail guard.
-  for (const round of rounds) {
-    const roundStart = visible[round.start]?.index;
-    const roundEnd = visible[round.end]?.index;
-    if (!Number.isInteger(roundStart) || !Number.isInteger(roundEnd) || roundStart <= end) continue;
-    for (let index = roundStart; index <= roundEnd; index += 1) keptTokens += priced[index].tokens;
-  }
-  let prefix = 0;
-  for (let index = 0; index < start; index += 1) prefix += priced[index].tokens;
-  return { start: nodes[start], end: nodes[end], tokens, after, keptTokens, card, prefix };
+  return null;
 }
 
 export const BIG_GATE = DEFAULTS.bigGate;
