@@ -1,5 +1,11 @@
 # 版本变更
 
+## 1.1.10
+
+- **billion-context 兼容保持**：保留对方接管官方压缩时的让位边界。
+- **真实 CLI 轮末小切修复**：在 DSH `agent/turn-stopping` 的 live-agent 窗口执行维护与 catch-up；CLI agent 随后 dispose 时，已开始的本地小切不再被 `runMaintenance` 吞掉。`turn/end` 继续作为兜底。
+- **真实验证**：GLM 5.3 Flash 隔离 DSH session 在 51,827 tokens 时提交一刀，切段 12,162 tokens，实际 saved 10,701 tokens；定向回归 10/10，完整 gate 与 Cordis 兼容门禁随发布重跑。
+
 ## 1.1.9
 
 - **billion-context 兼容保持**：保留 1.1.7/1.1.8 的让位边界；检测到 billion-context 接管官方压缩时，Live Compact 不改写对方正在接管的会话。
