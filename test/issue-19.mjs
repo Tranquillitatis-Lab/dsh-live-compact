@@ -105,7 +105,7 @@ test("ordinary fallback is not rejected by the long-read bound", () => {
   const source = readFileSync(fileURLToPath(new URL("../index.js", import.meta.url)), "utf8");
   assert.equal(source.includes("if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();"), true);
   assert.match(source, /forceLongRead/);
-  assert.match(source, /if \(card\.ok !== true\)[\s\S]*forceLongRead: true/);
+  assert.match(source, /fallbackToLongRead/);
   assert.equal(source.includes("if (longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;"), false);
   const old = selectCutIndexes([
     { type: "assistant", tokens: 16, balancedBefore: true, balancedAfter: false },

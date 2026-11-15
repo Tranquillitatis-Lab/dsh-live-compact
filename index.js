@@ -25,6 +25,7 @@ import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJob
 import { captureOwnedToolResult, contentHash, PRUNE_MARKER, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
   ensureShadowDir,
+  appendDecision,
   flushDrainStats,
   noteShadowWarning,
   saveShadowTransaction,
@@ -40,6 +41,50 @@ import {
 import { buildSendLess, decideThunder } from "./thunder.js";
 import { inCooldown, skipLiveOfficialCompaction } from "./cooldown.js";
 import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
+
+const PI_AI_CATALOG = "@earendil-works/pi-ai/providers/all";
+
+function normalizeCatalogModule(loaded) {
+  const source = loaded?.builtinProviders ? loaded : loaded?.default;
+  const list = typeof source?.builtinProviders === "function" ? source.builtinProviders() : [];
+  return list.map((entry) => {
+    let models = [];
+    try {
+      const declared = typeof entry?.getModels === "function" ? entry.getModels() : entry?.models || [];
+      models = (Array.isArray(declared) ? declared : []).map((model) => ({
+        id: model?.id || "",
+        baseURL: model?.baseUrl || model?.baseURL || "",
+      })).filter((model) => model.id && model.baseURL);
+    } catch {}
+    return {
+      id: entry?.id || "",
+      baseURL: entry?.baseUrl || entry?.baseURL || "",
+      models,
+    };
+  }).filter((entry) => entry.id && (entry.baseURL || entry.models.length));
+}
+
+async function loadPiAiCatalog() {
+  try {
+    return normalizeCatalogModule(await import(PI_AI_CATALOG));
+  } catch {}
+  try {
+    const resolved = typeof import.meta.resolve === "function" ? import.meta.resolve(PI_AI_CATALOG) : null;
+    if (resolved) return normalizeCatalogModule(await import(resolved));
+  } catch {}
+  const anchors = [import.meta.url];
+  try {
+    if (process.argv[1]) anchors.push(pathToFileURL(process.argv[1]).href);
+  } catch {}
+  for (const anchor of anchors) {
+    try {
+      const loaded = createRequire(anchor)(PI_AI_CATALOG);
+      const normalized = normalizeCatalogModule(loaded);
+      if (normalized.length) return normalized;
+    } catch {}
+  }
+  return [];
+}
 
 const { BasicCompactionEngine } = await loadBase();
 const { CompactionId, toolPairingBalancedAfter, toolPairingBalancedBefore } = await loadCompaction();
@@ -58,6 +103,7 @@ const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
 const SHADOW_WORKER_TIMEOUT_MS = 30000;
+const PRESTEP_WAIT_TIMEOUT_MS = 3000;
 
 const shadowWorkers = new Map();
 
@@ -65,11 +111,15 @@ function shadowWorkerFor(root) {
   const key = String(root);
   let entry = shadowWorkers.get(key);
   if (entry) return entry;
-  const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), {
-    // DSH Tauri starts the host with --input-type=module --eval. Node passes
-    // that flag to workers as well, where a file URL rejects it with
-    // ERR_INPUT_TYPE_NOT_ALLOWED. The worker is already a module by URL.
-    execArgv: process.execArgv.filter((arg) => !String(arg).startsWith("--input-type=")),
+  // DSH Tauri starts the host with --input-type=module --eval. Passing a
+  // filtered execArgv array makes Node re-parse host-only V8 flags such as
+  // --max-old-space-size and can throw ERR_WORKER_INVALID_EXEC_ARGV. An eval
+  // bootstrap keeps the worker's native argv inheritance and dynamically
+  // imports the module URL without re-running the host's eval script.
+  const workerURL = new URL("./shadow-save-worker.mjs", import.meta.url).href;
+  const workerBootstrap = `import(${JSON.stringify(workerURL)}).catch((error) => { setImmediate(() => { throw error; }); });`;
+  const worker = new Worker(workerBootstrap, {
+    eval: true,
     workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
   });
   entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false, timedOut: false };
@@ -579,7 +629,11 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   const forceLongRead = context.forceLongRead === true;
   const fallbackWithoutLongRead = () => context.disableLongRead
     ? null
-    : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true });
+    : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true, forceLongRead: false });
+  const fallbackToLongRead = () => context.disableLongRead || context.forceLongRead || !longPicked
+    ? null
+    : selectNewestChunk(session, measurement, key, { ...context, forceLongRead: true });
+  const abandonCandidate = () => usedLongCut ? fallbackWithoutLongRead() : fallbackToLongRead();
   if (longSpan) {
     const candidate = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
     if (candidate && candidate.start >= longSpan.start && candidate.end <= longSpan.end) {
@@ -622,10 +676,10 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
         }
       }
     }
-    if (pairStart < 0) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (pairStart < 0) return abandonCandidate();
     if (usedLongCut && pairStart < longSpan.start) return fallbackWithoutLongRead();
-    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return usedLongCut ? fallbackWithoutLongRead() : null;
-    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (!pointerSpanAllowed(items, pairStart, picked.end, context.engine || "cloud")) return abandonCandidate();
+    if (!cutOk(toolPairingBalancedBefore, session, nodes[pairStart])) return abandonCandidate();
     picked.start = pairStart;
   }
   if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return fallbackWithoutLongRead();
@@ -662,7 +716,7 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
       expandedTokens -= priced[expandedStart].tokens || 0;
       expandedStart += 1;
     }
-    if (expandedStart > picked.end) return usedLongCut ? fallbackWithoutLongRead() : null;
+    if (expandedStart > picked.end) return abandonCandidate();
     picked.start = expandedStart;
   }
   const start = picked.start;
@@ -670,7 +724,7 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   const tokens = items.slice(start, end + 1).reduce((sum, item) => sum + item.tokens, 0);
   const pieces = spanPieces(start, end);
   if (picked.pointerOnly && pieces.some((piece) => piece.role === "tool" && isToolFailure(piece.text, piece.isError))) {
-    return usedLongCut ? fallbackWithoutLongRead() : null;
+    return abandonCandidate();
   }
   let card = picked.pointerOnly
     ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
@@ -679,14 +733,11 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
     // The ordinary candidate is chosen by token gain before card validation.
     // If its card is rejected, give the already selected long-read candidate
     // a complete second pass before abandoning the turn.
-    if (!usedLongCut && longPicked && !forceLongRead) {
-      return selectNewestChunk(session, measurement, key, { ...context, forceLongRead: true });
-    }
-    return usedLongCut ? fallbackWithoutLongRead() : null;
+    return abandonCandidate();
   }
   card = attachBackupHint(card, freshShadowFile("cut", key));
   if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
-  if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return null;
+  if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return abandonCandidate();
   let after = 0;
   for (let index = end + 1; index < priced.length; index += 1) after += priced[index].tokens;
   // `keptTokens` must describe retained rounds to the right of the actual
@@ -728,11 +779,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   retryableCaptureSeeded = new Set();
   captureRecoveryHolds = new Map();
   pruneGuarded = false;
+  catalogCache = [];
+  catalogPromise = null;
 
   constructor(ctx, config, resolvedConfig) {
     if (process.env.SPINE_ENGINE_FAIL === "construct") throw new Error("spine: constructor refused");
     super(ctx, resolvedConfig ?? engineConfig(config));
     this.persistCapture = true;
+    this.catalogPromise = loadPiAiCatalog().then((catalog) => {
+      this.catalogCache = catalog;
+      return catalog;
+    }).catch(() => []);
     if (process.env.SPINE_ENGINE_FAIL === "after-super") throw new Error("spine: after super");
     this.liveConfig = config;
     try {
@@ -822,6 +879,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     return peers.length > 0;
   }
 
+  recordDecision(state, record = {}) {
+    appendDecision(shadowDirectory(), { sid: state?.key || DEFAULT_KEY, ...record });
+  }
+
   ownedSignal(signal) {
     const controller = new AbortController();
     const dispose = this.ctx.on("internal/status", () => {
@@ -854,6 +915,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       turnBase: null,
       maxTurnGrowth: 0,
       maintenanceJob: null,
+      maintenanceAbort: null,
       turnEndScheduled: false,
       turnEndPending: false,
       turnEndSeq: -1,
@@ -893,6 +955,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       .finally(() => {
         if (!state.pendingMaintenance) state.warming = false;
         if (state.maintenanceJob === job) state.maintenanceJob = null;
+        if (state.maintenanceAbort) state.maintenanceAbort = null;
         this.pendingCuts.delete(job);
         if (state.turnEndPending && !state.warming) {
           state.turnEndPending = false;
@@ -911,6 +974,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return;
     }
     state.warming = true;
+    state.maintenanceAbort = new AbortController();
     try {
       const settings = readSettings(this.liveConfig);
       const events = agent.session.snapshotEvents();
@@ -926,6 +990,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
     } finally {
       state.warming = false;
+      state.pendingMaintenance = false;
+      state.maintenanceAbort = null;
       if (state.turnEndPending) {
         state.turnEndPending = false;
         this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
@@ -968,24 +1034,31 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
 
   async waitForMaintenance(agent, signal) {
     const state = this.stateFor(agent);
-    while (!signal?.aborted) {
+    const timeout = AbortSignal.timeout(PRESTEP_WAIT_TIMEOUT_MS);
+    const waitSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    while (!waitSignal.aborted) {
       const jobs = [];
       if (state.maintenanceJob) jobs.push(state.maintenanceJob);
       const catchup = this.pendingCatchups.get(state.key);
       if (catchup?.promise) jobs.push(catchup.promise);
       if (!jobs.length) break;
       const settled = Promise.allSettled(jobs);
-      if (!signal) {
-        await settled;
-        continue;
-      }
       let abort;
       const aborted = new Promise((resolve) => {
         abort = () => resolve();
-        signal.addEventListener("abort", abort, { once: true });
+        waitSignal.addEventListener("abort", abort, { once: true });
       });
       await Promise.race([settled, aborted]);
-      signal.removeEventListener("abort", abort);
+      waitSignal.removeEventListener("abort", abort);
+      if (timeout.aborted && !signal?.aborted) {
+        state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
+        state.pendingMaintenance = false;
+        state.warming = false;
+        this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs: PRESTEP_WAIT_TIMEOUT_MS });
+        this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${PRESTEP_WAIT_TIMEOUT_MS}ms; letting provider request continue`);
+        return;
+      }
+      if (signal?.aborted) return;
     }
   }
 
@@ -1159,14 +1232,20 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       state.warming = false;
       return;
     }
+    const state = this.stateFor(task.agent);
     if (!this.standDown?.() &&
         (task.captureBlocked || task.retryRequested || task.maintenanceRequested)) {
-      const state = this.stateFor(task.agent);
       // Keep the lifecycle visibly warming until the scheduled retry has
       // completed. Real idle hooks use this state as their await barrier.
       state.pendingMaintenance = true;
       state.warming = true;
       this.scheduleMaintenanceRetry(task.agent);
+    } else if (this.standDown?.() || !latestTurnCompleted(task.agent.session.snapshotEvents?.() || [])) {
+      // A catch-up can finish after the next turn has already started. Do not
+      // leave the session permanently warming; the next persisted turn/end
+      // must be allowed to schedule a fresh maintenance pass.
+      state.pendingMaintenance = false;
+      state.warming = false;
     }
   }
 
@@ -1177,20 +1256,30 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     state.retryScheduled = true;
     scheduleImmediate(() => {
       state.retryScheduled = false;
-      if (this.standDown?.()) return;
+      if (this.standDown?.()) {
+        state.pendingMaintenance = false;
+        state.warming = false;
+        return;
+      }
       if (state.warming && !state.pendingMaintenance) {
         scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
         return;
       }
       const events = agent.session.snapshotEvents();
       const done = latestTurnCompleted(events);
-      if (!done) return;
+      if (!done) {
+        state.pendingMaintenance = false;
+        state.warming = false;
+        return;
+      }
       state.warming = true;
+      state.maintenanceAbort = new AbortController();
       const job = this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true })
         .catch((error) => noteShadowWarning(this.ctx?.logger, error))
         .finally(() => {
           state.pendingMaintenance = false;
           state.warming = false;
+          state.maintenanceAbort = null;
           if (state.maintenanceJob === job) state.maintenanceJob = null;
           this.pendingCuts.delete(job);
         });
@@ -1203,7 +1292,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (this.standDown?.()) return null;
     const settings = readSettings(this.liveConfig);
     const state = this.stateFor(agent);
-    const signal = AbortSignal.timeout(30000);
+    if (!state.maintenanceAbort || state.maintenanceAbort.signal.aborted) {
+      state.maintenanceAbort = new AbortController();
+    }
+    const signal = AbortSignal.any([AbortSignal.timeout(30000), state.maintenanceAbort.signal]);
     const ev = events || agent.session.snapshotEvents();
     const deferCapture = options.deferCapture === true;
     let catchup = { finished: true, progressed: false, retryRequested: false };
@@ -1249,17 +1341,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           state.maxTurnGrowth = 0;
         };
         if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) {
+          this.recordDecision(state, {
+            phase: "maintenance-skip",
+            reason: measurement.totalTokens < settings.minTokens ? "below-min-tokens" : "above-big-gate",
+            totalTokens: measurement.totalTokens,
+          });
           settleTurnBaseline();
           return;
         }
         // Restored cards establish a baseline; a live card still skips once,
         // even when maintenance or engine construction is delayed.
         if (skipLiveOfficialCompaction(agent.session)) {
+          this.recordDecision(state, { phase: "maintenance-skip", reason: "official-checkpoint" });
           this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
           settleTurnBaseline();
           return;
         }
         if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
+          this.recordDecision(state, { phase: "maintenance-skip", reason: "cooldown" });
           settleTurnBaseline();
           return;
         }
@@ -1270,6 +1369,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           state.engine = resolved.engine;
           state.engineSource = resolved.source;
         }
+        this.recordDecision(state, {
+          phase: "engine",
+          engine: resolved.engine,
+          source: resolved.source,
+          provider: agent?.session?.requestHeader?.()?.config?.provider || "",
+          model: agent?.session?.requestHeader?.()?.config?.model || "",
+          catalogReady: this.catalogCache.length > 0,
+        });
         const cloud = resolved.engine !== "local";
         // 预测下一轮会过 32000 时收尾；没有增长基线时仍由已有 48000 紧急线接管。
         // Drain a projected request over 32000. Without a growth baseline, the existing 48000 urgent line still takes over.
@@ -1294,8 +1401,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           });
           if (chunk === null) {
             if (drain && measured.totalTokens > settings.keepRoundTokens) {
+              this.recordDecision(state, {
+                phase: "cut-skip",
+                reason: "no-legal-span",
+                totalTokens: measured.totalTokens,
+                drain: true,
+              });
               this.ctx.logger?.warn?.(`spine drain stopped at ${measured.totalTokens}; no legal span`);
             } else {
+              this.recordDecision(state, { phase: "cut-skip", reason: "no-legal-span", totalTokens: measured.totalTokens, drain: false });
               this.ctx.logger?.debug?.("spine cut skipped");
             }
             break;
@@ -1315,6 +1429,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             reduced = after < before;
             const saved = before - after;
             if (saved > 0) {
+              this.recordDecision(state, {
+                phase: "cut",
+                result: "committed",
+                before,
+                after,
+                saved,
+                tokens: chunk.tokens,
+                drain,
+              });
               drainNotes.push({
                 kind: "cut",
                 saved,
@@ -1333,6 +1456,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
               catchup.retryRequested = true;
               if (catchup.finished && catchup.progressed) this.scheduleMaintenanceRetry(agent);
             }
+            this.recordDecision(state, { phase: "cut", result: "failed", reason: message, drain });
             this.ctx.logger?.warn?.(`spine cut failed: ${message}`);
             break;
           }
@@ -1622,32 +1746,13 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   catalogProviders() {
-    const anchors = [import.meta.url];
-    try {
-      if (process.argv[1]) anchors.push(pathToFileURL(process.argv[1]).href);
-    } catch {}
-    for (const anchor of anchors) {
-      try {
-        const loaded = createRequire(anchor)("@earendil-works/pi-ai/providers/all");
-        const list = typeof loaded.builtinProviders === "function" ? loaded.builtinProviders() : [];
-        return list.map((entry) => {
-          let models = [];
-          try {
-            const declared = typeof entry?.getModels === "function" ? entry.getModels() : entry?.models || [];
-            models = (Array.isArray(declared) ? declared : []).map((model) => ({
-              id: model?.id || "",
-              baseURL: model?.baseUrl || model?.baseURL || "",
-            })).filter((model) => model.id && model.baseURL);
-          } catch {}
-          return {
-            id: entry?.id || "",
-            baseURL: entry?.baseUrl || entry?.baseURL || "",
-            models,
-          };
-        }).filter((entry) => entry.id && (entry.baseURL || entry.models.length));
-      } catch {}
+    if (!this.catalogPromise) {
+      this.catalogPromise = loadPiAiCatalog().then((catalog) => {
+        this.catalogCache = catalog;
+        return catalog;
+      }).catch(() => []);
     }
-    return [];
+    return this.catalogCache || [];
   }
 
   profilePatchText() {
@@ -1844,7 +1949,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             captures += 1;
           }
           this.noteCaptureResult(session, event, record);
-          if (record?.retryable && retry === null) {
+          if (record?.unrecoverable) {
+            // The host already discarded the original body. It cannot be
+            // reconstructed, but it must not pin the cursor forever; the
+            // visible marker remains protected by the raw lookup path.
+            progressed = true;
+          } else if (record?.retryable && retry === null) {
             retry = seq;
             retryIndex = index;
           } else if (record?.ok === false && !record.retryable && blocked === null) {
@@ -1898,7 +2008,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           const cached = this.cachedCaptureFor(session, event);
           const record = cached && !cached.retryable ? cached : this.captureOne(session, event);
           this.noteCaptureResult(session, event, record);
-          if (record?.retryable && retry === null) retry = seq;
+          if (record?.unrecoverable) {
+            // Advance beyond an already-pruned result so later events can be
+            // captured on the same catch-up pass.
+          } else if (record?.retryable && retry === null) retry = seq;
           else if (record?.ok === false && !record.retryable && blocked === null) blocked = seq;
         }
       }
@@ -2296,6 +2409,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   async summarizeOfficial(input, agent, signal) {
+    this.recordDecision(this.stateFor(agent), { phase: "official-summary", result: "started" });
     const result = await super.summarize(input, agent, signal);
     const blocks = Array.isArray(result?.summary) ? result.summary : [];
     const usable = blocks.some((block) => {
@@ -2305,9 +2419,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return Array.isArray(block.content) && block.content.some((part) => typeof part?.text === "string" && part.text.trim());
     });
     if (!usable) {
+      this.recordDecision(this.stateFor(agent), { phase: "official-summary", result: "empty" });
       this.ctx.logger?.warn?.("spine: official summarizer returned no usable summary; leaving the span untouched");
       throw new Error("spine: official summarizer returned no usable summary");
     }
+    this.recordDecision(this.stateFor(agent), { phase: "official-summary", result: "usable" });
     return result;
   }
 }

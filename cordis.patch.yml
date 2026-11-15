@@ -2,6 +2,7 @@
 # The entry installs its preset listener before constructing the engine.
 # takeoverPresets controls future preset loads, not existing session engines.
 - id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
   disabled: true
 - insert:
     - id: compaction-spine

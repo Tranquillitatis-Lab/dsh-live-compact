@@ -6,7 +6,7 @@
  * 预检查只解析配置，校验交给实际引擎；构造失败时释放本次注册，不重试原版盖掉报错。
  * Resolve config before construction; let the engine validate it and preserve its actual error.
  */
-import { loadBase, loadCompaction, loadSchema } from "./adapter.js";
+import { loadBase, loadCompaction, loadSchema, STOCK_ENGINE } from "./adapter.js";
 import { configSchema, engineConfig } from "./settings.js";
 import { installPresetGate } from "./gate.js";
 
@@ -76,6 +76,23 @@ function releaseCompaction(ctx, previous) {
   return true;
 }
 
+export function releaseRootStockCompaction(ctx) {
+  const current = compactionRecord(ctx);
+  const fiber = current?.fiber ?? current?.ctx?.fiber;
+  const moduleName = fiber?.entry?.options?.name;
+  if (!current || moduleName !== STOCK_ENGINE || fiber === ctx?.fiber) return false;
+  try {
+    // Cordis removes a service provision synchronously at the start of
+    // fiber.dispose(), then awaits dependents. This handles a late bundle
+    // that reintroduced the root stock row after our profile patch ran.
+    const pending = fiber.dispose?.();
+    pending?.catch?.(() => {});
+    return compactionRecord(ctx) !== current;
+  } catch {
+    return false;
+  }
+}
+
 function visibleTakeover(ctx, reason) {
   const line = `spine: ${MARK}。${reason}`;
   console.error(line);
@@ -125,6 +142,7 @@ export default class LiveCompactEntry {
     }
     if (!loadError && !skipStock && Engine) {
       try {
+        releaseRootStockCompaction(ctx);
         return new Engine(ctx, config, resolvedConfig);
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));

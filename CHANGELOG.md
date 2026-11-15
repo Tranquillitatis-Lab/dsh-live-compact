@@ -1,5 +1,15 @@
 # 版本变更
 
+## 1.1.12
+
+- **#62 Worker 启动与游标修复**：用 eval import 引导 shadow worker，保留宿主原生启动参数；`already-pruned` 结果标为不可恢复并推进 capture cursor，后续事件继续捕获。
+- **维护活性修复**：pre-step 等待增加 3 秒截止；维护超时放行 provider 请求并清理状态；catch-up 跨下一轮或让位时不再永久留下 `warming/pendingMaintenance`。
+- **#60 候选回退**：普通候选的 pointer、范围、扩展和失败工具出口都能回试长读候选，长读失败才回普通候选。
+- **#50 catalog 加载**：优先用 ESM import 加载 pi-ai provider catalog，结果缓存，CJS 加载仅作兼容回退。
+- **preset 选择与桌面 bundle 兼容**：`takeoverPresets` 支持 preset ID 白名单；根域替换只识别官方模块名，不误伤第三方同名条目；late bundle 重新挂载官方引擎时先释放旧 root service。
+- **可观测性**：已有 shadow 目录会追加 `spine-decisions.jsonl`，记录 engine、让位/冷却、无合法切段、cut 成功/失败、官方摘要和 pre-step 超时原因。
+- **回归**：补充已剪游标推进、Worker 启动、维护状态、preset 白名单、长失败诊断和决策日志测试。
+
 ## 1.1.11
 
 - **Windows 桌面版小切修复（#62）**：shadow-save worker 过滤宿主继承的 `--input-type=module`，避免 DSH Tauri 的 `ERR_INPUT_TYPE_NOT_ALLOWED`；`already-pruned` 捕获结果保留 retryable，`captureBlocked` 会安排轮后维护重试并保持生命周期等待屏障。

@@ -76,6 +76,16 @@ test("tool hard facts are counted once in the excerpt body", () => {
   assert.equal((result.text.match(/连接失败/g) || []).length, 1);
 });
 
+test("tool failure diagnostics keep a long hard-fact report complete", () => {
+  const text = Array.from({ length: 30 }, (_, index) =>
+    `第${index + 1}行：必须在 us-east-1 部署并记录失败原因 ${"x".repeat(35)}`,
+  ).join("\n");
+  const result = toolExcerpt([{ id: "failed-tool", role: "tool", isError: true, text }]);
+  assert.equal(result.failureDiagnosticsComplete, true);
+  assert.equal((result.text.match(/第1行：/g) || []).length, 1);
+  assert.equal((result.text.match(/第30行：/g) || []).length, 1);
+});
+
 test("ordinary uncertainty and model prose do not become unresolved decisions", () => {
   const card = buildCard("我不确定。使用 grep 检查日志。", "", [{ role: "assistant", text: "我不确定。使用 grep 检查日志。" }]);
   assert.equal(card.ok, true);

@@ -80,6 +80,19 @@ function isPreset(node) {
   return Boolean(node.config && typeof node.config === "object" && !Array.isArray(node.config) && PRESET_IDS.has(node.config.id));
 }
 
+function takeoverSelected(config, entry, selector) {
+  if (typeof selector === "boolean") return selector;
+  if (!Array.isArray(selector)) return Boolean(selector);
+  const ids = [
+    config?.id,
+    config?.config?.id,
+    entry?.id,
+    entry?.presetId,
+    entry?.options?.id,
+  ].filter((id) => typeof id === "string");
+  return ids.some((id) => selector.includes(id));
+}
+
 function withEngineConfig(entry, rootConfig) {
   const previous = entry.config && typeof entry.config === "object" && !Array.isArray(entry.config) ? configSnapshot(entry.config) : {};
   const { takeoverPresets: _takeover, ...root } = configSnapshot(rootConfig);
@@ -114,9 +127,9 @@ function rewriteNode(node, loadable, rootConfig) {
   return next;
 }
 
-export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}, entry) {
+export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}, entry, selector = true) {
   const group = Array.isArray(config) && entry?.group === true && entry.isolate?.compaction === true;
-  if (!isPreset(config) && !group) return config;
+  if (!takeoverSelected(config, entry, selector) || (!isPreset(config) && !group)) return config;
   return rewriteNode(config, loadable, rootConfig);
 }
 
@@ -160,7 +173,7 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
   ctx.effect(() => () => { gate.active = false; });
   const enabled = () => {
     const value = config.takeoverPresets ?? true;
-    return typeof value === "boolean" ? value : value.get();
+    return typeof value === "boolean" || Array.isArray(value) ? value : value.get();
   };
   const seen = new Set();
   gate.disposeListener = ctx.on("internal/config", function (fiber, next) {
@@ -169,10 +182,12 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
       warnCompactionStandDown(ctx);
       return resolved;
     }
-    if (!gate.active || !enabled()) return resolved;
+    if (!gate.active) return resolved;
+    const selector = enabled();
+    if (!selector || (Array.isArray(selector) && selector.length === 0)) return resolved;
     const loadable = packageLoadable();
     const entry = fiber?.entry?.options;
-    const rewritten = rewritePresetConfig(resolved, loadable, config, entry);
+    const rewritten = rewritePresetConfig(resolved, loadable, config, entry, selector);
     const id = rewritten?.id || rewritten?.config?.id || entry?.id;
     if (rewritten !== resolved && id && !seen.has(String(id))) {
       seen.add(String(id));

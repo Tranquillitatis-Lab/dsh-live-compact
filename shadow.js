@@ -621,6 +621,21 @@ export function shadowFileBody(sessionKey, body) {
 
 export const STATS_NAME = "spine-stats.json";
 export const CUTS_NAME = "spine-cuts.jsonl";
+export const DECISIONS_NAME = "spine-decisions.jsonl";
+
+export function appendDecision(dir, record = {}) {
+  try {
+    if (!existsSync(dir)) return false;
+    appendFileSync(join(dir, DECISIONS_NAME), `${JSON.stringify({
+      v: 1,
+      ts: new Date().toISOString(),
+      ...record,
+    })}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function readCutStats(dir) {
   try {
