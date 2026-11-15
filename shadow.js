@@ -626,12 +626,30 @@ export const DECISIONS_NAME = "spine-decisions.jsonl";
 export function appendDecision(dir, record = {}) {
   try {
     if (!existsSync(dir)) return false;
-    appendFileSync(join(dir, DECISIONS_NAME), `${JSON.stringify({
+    const body = `${JSON.stringify({
       v: 1,
       ts: new Date().toISOString(),
       ...record,
-    })}\n`);
-    return true;
+    })}\n`;
+    const file = join(dir, DECISIONS_NAME);
+    return withShadowRoot(dir, () => {
+      const path = scopedFile(file, rotationScope.root);
+      if (!path) throw coordinationError(new Error("shadow decision outside root scope"));
+      if (existsSync(path)) {
+        appendFileSync(path, body);
+        if (shadowUsage && isPluginShadowName(basename(path))) {
+          shadowUsage.bytes += Buffer.byteLength(body, "utf8");
+        }
+      } else {
+        writeShadowFileLocked(path, body, {}, {
+          exclusive: false,
+          write: writeFileSync,
+          unlink: unlinkSync,
+          accessPath: file,
+        });
+      }
+      return true;
+    });
   } catch {
     return false;
   }

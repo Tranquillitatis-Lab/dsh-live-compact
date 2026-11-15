@@ -13,6 +13,7 @@ const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8"
 test("#62 starts the shadow worker through an eval import bootstrap", () => {
   assert.match(indexSource, /const workerBootstrap = `import\(/);
   assert.match(indexSource, /eval: true/);
+  assert.match(indexSource, /worker\.unref\?\.\(\)/);
   assert.doesNotMatch(indexSource, /execArgv: process\.execArgv\.filter/);
 });
 

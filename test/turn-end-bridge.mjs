@@ -154,6 +154,28 @@ test("late turn-stopping cleanup does not clear a newer maintenance owner", asyn
   assert.equal(state.pendingMaintenance, true);
 });
 
+test("pre-step timeout keeps the running maintenance fenced", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "prestep-timeout",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceAbort: new AbortController(),
+    maintenanceJob: new Promise(() => {}),
+  };
+  const agent = { session: { id: state.key } };
+  engine.stateFor = () => state;
+  engine.pendingCatchups = new Map();
+  engine.prestepWaitTimeoutMs = 5;
+  engine.recordDecision = () => {};
+  engine.ctx = { logger: { warn() {} } };
+  await engine.waitForMaintenance(agent);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+  assert.ok(state.maintenanceAbort.signal.aborted);
+  assert.ok(state.maintenanceJob);
+});
+
 test("turn/end does not run a second maintenance pass after turn-stopping handled its boundary", async () => {
   const engine = Object.create(Spine.prototype);
   const event = { seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } };

@@ -137,6 +137,7 @@ function shadowWorkerFor(root) {
       worker.terminate().catch(() => {});
     }, SHADOW_WORKER_IDLE_MS);
     entry.idleTimer.unref?.();
+    worker.unref?.();
   };
   entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
@@ -1058,7 +1059,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
 
   async waitForMaintenance(agent, signal) {
     const state = this.stateFor(agent);
-    const timeout = AbortSignal.timeout(PRESTEP_WAIT_TIMEOUT_MS);
+    const timeoutMs = Number.isFinite(this.prestepWaitTimeoutMs)
+      ? Math.max(1, this.prestepWaitTimeoutMs)
+      : PRESTEP_WAIT_TIMEOUT_MS;
+    const timeout = AbortSignal.timeout(timeoutMs);
     const waitSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     while (!waitSignal.aborted) {
       const jobs = [];
@@ -1076,10 +1080,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       waitSignal.removeEventListener("abort", abort);
       if (timeout.aborted && !signal?.aborted) {
         state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
-        state.pendingMaintenance = false;
-        state.warming = false;
-        this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs: PRESTEP_WAIT_TIMEOUT_MS });
-        this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${PRESTEP_WAIT_TIMEOUT_MS}ms; letting provider request continue`);
+        this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs });
+        this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${timeoutMs}ms; letting provider request continue`);
         return;
       }
       if (signal?.aborted) return;
