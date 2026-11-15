@@ -228,19 +228,58 @@ function isCheckpoint(session, seq) {
   return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
 }
 
+function isCuttableTurnEnd(event) {
+  const reason = event?.data?.reason;
+  return reason?.kind === "completed" ||
+    reason?.kind === "max-tokens" ||
+    (reason?.kind === "other" && reason.label === "max-tokens");
+}
+
 function latestTurnCompleted(events) {
   let lastStart = -1;
   let lastEnd = -1;
-  let reason;
+  let completed = false;
   for (let index = 0; index < (events || []).length; index += 1) {
     const event = events[index];
     if (event?.type === "turn/start") lastStart = index;
     if (event?.type === "turn/end") {
       lastEnd = index;
-      reason = event.data?.reason?.kind;
+      completed = isCuttableTurnEnd(event);
     }
   }
-  return lastEnd > lastStart && reason === "completed";
+  return lastEnd > lastStart && completed;
+}
+
+function latestCompletedTurnEnd(events) {
+  let found = null;
+  for (const event of events || []) {
+    if (event?.type === "turn/end" && isCuttableTurnEnd(event)) found = event;
+  }
+  return found;
+}
+
+function maintenanceOperationSignal(agentSignal, timeoutSignal) {
+  const controller = new AbortController();
+  const forwardAgent = () => {
+    const reason = agentSignal?.reason;
+    // DSH disposes a completed CLI agent while its last maintenance callback
+    // is still settling. Disposal is lifecycle teardown, not a user cancel;
+    // let the bounded local operation finish in that case.
+    if (reason?.kind === "disposed") return;
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  const forwardTimeout = () => {
+    if (!controller.signal.aborted) controller.abort(timeoutSignal?.reason);
+  };
+  if (agentSignal) {
+    agentSignal.addEventListener("abort", forwardAgent, { once: true });
+    if (agentSignal.aborted) forwardAgent();
+  }
+  if (timeoutSignal) {
+    timeoutSignal.addEventListener("abort", forwardTimeout, { once: true });
+    if (timeoutSignal.aborted) forwardTimeout();
+  }
+  return controller.signal;
 }
 
 function spineCheckpointSource(compactionId) {
@@ -259,13 +298,17 @@ function eventRole(session, seq) {
 
 // progress-rules 0.2.1's pre-step contract, not a general notice permission.
 // Session source metadata does not authenticate producer identity. Unknown/extra metadata
-// stays a boundary; neither body text nor the raw role is used as a substitute.
+// stays a boundary; neither body text nor the raw role is used as a substitute. A real
+// user event that is not the complete contract is therefore a hard boundary for the
+// cloud fallback path; only a fully validated plugin notice may be crossed there.
 function classifyUserEvent(session, seq) {
   const event = session.eventAt(seq);
   const data = event?.data;
   const source = data?.source;
   const content = data?.content;
-  const pluginNotice = event?.type === "user/message" && !isCheckpoint(session, seq)
+  const progressNotice = event?.type === "user/message" && !isCheckpoint(session, seq)
+    && source?.kind === "progress-rules" && source.form === "notice";
+  const pluginNotice = progressNotice
     && data?.role === "user"
     && typeof data.id === "string" && data.id.length > 0
     && !Object.hasOwn(event, "source")
@@ -276,7 +319,11 @@ function classifyUserEvent(session, seq) {
     && Array.isArray(content) && content.length === 1
     && content[0]?.type === "text" && typeof content[0].text === "string"
     && Object.keys(content[0]).length === 2;
-  return { pluginNotice, isGenuineUserBoundary: event?.type === "user/message" && !pluginNotice };
+  return {
+    pluginNotice,
+    untrustedNotice: event?.type === "user/message" && !pluginNotice,
+    isGenuineUserBoundary: event?.type === "user/message" && !pluginNotice,
+  };
 }
 
 function cutOk(fn, session, seq) {
@@ -629,6 +676,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         try {
           if (this.standDown?.()) return;
           this.noteEvent(session, event);
+          if (event?.type === "turn/end" && isCuttableTurnEnd(event)) {
+            const state = this.sessionState.get(sessionKey({ session }));
+            if (state?.liveAgent) this.scheduleTurnEndMaintenance(state.liveAgent, event.seq, event);
+          }
           if (event?.type !== "tool/result") return;
           const id = event.data?.message?.toolCallId;
           if (!id) return;
@@ -666,22 +717,28 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           noteShadowWarning(ctx.logger, error);
         }
       });
+      ctx.on("agent/created", ({ agent }) => {
+        if (this.standDown?.()) return;
+        this.stateFor(agent);
+      });
       ctx.on("agent/status", ({ agent, status }) => {
         if (status !== "idle") return;
         if (this.standDown?.()) return;
         const state = this.stateFor(agent);
-        if (state.warming) return;
+        if (state.turnEndScheduled) return;
         const events = agent.session.snapshotEvents();
-        const done = latestTurnCompleted(events);
-        if (!done) return;
-        state.warming = true;
-        const job = this.finishTurn(agent, events, { deferCapture: true })
-          .catch((error) => noteShadowWarning(this.ctx?.logger, error))
-          .finally(() => {
-            if (!state.pendingMaintenance) state.warming = false;
-            this.pendingCuts.delete(job);
-          });
-        this.pendingCuts.add(job);
+        if (state.turnEndSeq <= state.lastMaintenanceTurnEndSeq && latestTurnCompleted(events)) {
+          const completed = latestCompletedTurnEnd(events);
+          if (completed && Number.isInteger(completed.seq)) {
+            state.turnEndSeq = completed.seq;
+            state.turnEndEvent = completed;
+          }
+        }
+        this.startTurnMaintenance(agent, events);
+      });
+      ctx.on("agent/pre-step", async ({ agent, signal }, next) => {
+        await this.waitForMaintenance(agent, signal);
+        return typeof next === "function" ? next() : undefined;
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -711,13 +768,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const key = sessionKey(agent);
     let state = this.sessionState.get(key);
     if (state) {
+      state.liveAgent = agent;
       this.sessionState.delete(key);
       this.sessionState.set(key, state);
       return state;
     }
     state = {
       key,
-      liveAgent: null,
+      liveAgent: agent,
       warming: false,
       localOnly: false,
       approvedCard: null,
@@ -725,6 +783,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       lastPrefixTokens: 0,
       turnBase: null,
       maxTurnGrowth: 0,
+      maintenanceJob: null,
+      turnEndScheduled: false,
+      turnEndPending: false,
+      turnEndSeq: -1,
+      lastMaintenanceTurnEndSeq: -1,
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -735,6 +798,95 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       }
     }
     return state;
+  }
+
+  startTurnMaintenance(agent, events = agent.session.snapshotEvents()) {
+    if (this.standDown?.()) return;
+    const state = this.stateFor(agent);
+    const boundaryCompleted = Number.isInteger(state.turnEndSeq) && state.turnEndSeq >= 0;
+    if (!latestTurnCompleted(events) && !boundaryCompleted) return;
+    if (state.warming) {
+      // A later idle/turn-end can arrive while capture catch-up or a cut is
+      // still running. Preserve it unconditionally; comparing only seqs drops
+      // same-turn lifecycle notifications in headless runs.
+      state.turnEndPending = true;
+      return;
+    }
+    if (state.turnEndSeq <= state.lastMaintenanceTurnEndSeq) return;
+    if (state.turnEndSeq > state.lastMaintenanceTurnEndSeq) {
+      state.lastMaintenanceTurnEndSeq = state.turnEndSeq;
+    }
+    state.warming = true;
+    let job;
+    job = this.finishTurn(agent, events, { deferCapture: true })
+      .catch((error) => noteShadowWarning(this.ctx?.logger, error))
+      .finally(() => {
+        if (!state.pendingMaintenance) state.warming = false;
+        if (state.maintenanceJob === job) state.maintenanceJob = null;
+        this.pendingCuts.delete(job);
+        if (state.turnEndPending && !state.warming) {
+          state.turnEndPending = false;
+          this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
+        }
+      });
+    state.maintenanceJob = job;
+    this.pendingCuts.add(job);
+  }
+
+  scheduleTurnEndMaintenance(agent, seq, boundaryEvent = null) {
+    if (this.standDown?.()) return;
+    const state = this.stateFor(agent);
+    if (Number.isInteger(seq)) {
+      if (seq >= state.turnEndSeq && boundaryEvent) state.turnEndEvent = boundaryEvent;
+      state.turnEndSeq = Math.max(state.turnEndSeq, seq);
+    }
+    if (state.turnEndScheduled) return;
+    state.turnEndScheduled = true;
+    scheduleImmediate(async () => {
+      state.turnEndScheduled = false;
+      if (this.standDown?.()) return;
+      // `turn/end` is the host's persisted turn boundary.  Some CLI agents
+      // expose `whenIdle()` but never resolve it after disposal, and DSH does
+      // not emit a matching `agent/status=idle`.  Waiting here would hold the
+      // de-duplication flag forever and suppress every later turn-end pass.
+      // The pre-step barrier still waits for an active maintenance job before
+      // the next provider request, so no idle wait is needed on this path.
+      const snapshot = agent.session.snapshotEvents();
+      const boundary = state.turnEndEvent;
+      const events = boundary && !snapshot.some((event) => event?.seq === boundary.seq)
+        ? [...snapshot, boundary]
+        : snapshot;
+      const boundaryCompleted = Number.isInteger(state.turnEndSeq) && state.turnEndSeq >= 0;
+      if (!latestTurnCompleted(events) && !boundaryCompleted) return;
+      if (state.warming) {
+        if (state.turnEndSeq > state.lastMaintenanceTurnEndSeq) state.turnEndPending = true;
+        return;
+      }
+      this.startTurnMaintenance(agent, events);
+    });
+  }
+
+  async waitForMaintenance(agent, signal) {
+    const state = this.stateFor(agent);
+    while (!signal?.aborted) {
+      const jobs = [];
+      if (state.maintenanceJob) jobs.push(state.maintenanceJob);
+      const catchup = this.pendingCatchups.get(state.key);
+      if (catchup?.promise) jobs.push(catchup.promise);
+      if (!jobs.length) break;
+      const settled = Promise.allSettled(jobs);
+      if (!signal) {
+        await settled;
+        continue;
+      }
+      let abort;
+      const aborted = new Promise((resolve) => {
+        abort = () => resolve();
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      await Promise.race([settled, aborted]);
+      signal.removeEventListener("abort", abort);
+    }
   }
 
   chunkPlan(session, chunk) {
@@ -933,8 +1085,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         .finally(() => {
           state.pendingMaintenance = false;
           state.warming = false;
+          if (state.maintenanceJob === job) state.maintenanceJob = null;
           this.pendingCuts.delete(job);
         });
+      state.maintenanceJob = job;
       this.pendingCuts.add(job);
     });
   }
@@ -978,7 +1132,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     try {
       await agent.runMaintenance(async (agentSignal) => {
         if (this.standDown?.()) return;
-        const op = AbortSignal.any([agentSignal, signal]);
+        // DSH disposes a completed CLI agent by aborting maintenance with the
+        // lifecycle marker `{ kind: "disposed" }`. A local cut has already
+        // started at that point, so let it finish under the bounded timeout;
+        // user/host cancellation reasons still abort the operation.
+        const op = maintenanceOperationSignal(agentSignal, signal);
         let measurement = this.ctx.tokenMeter.measure(agent.session);
         const settleTurnBaseline = () => {
           state.turnBase = measurement.totalTokens;

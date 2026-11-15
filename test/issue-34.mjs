@@ -237,6 +237,30 @@ test("#34 idle hook does not wait for an unrelated pending capture", async (t) =
   await setImmediate();
 });
 
+test("#34 pre-step waits for the same session maintenance barrier", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  let release;
+  const state = engine.stateFor(f.agent());
+  const pending = new Promise((resolve) => {
+    release = () => {
+      state.maintenanceJob = null;
+      state.pendingMaintenance = false;
+      resolve();
+    };
+  });
+  state.pendingMaintenance = true;
+  state.maintenanceJob = pending;
+  let settled = false;
+  const done = engine.waitForMaintenance(f.agent(), AbortSignal.timeout(1000)).then(() => { settled = true; });
+  await setImmediate();
+  assert.equal(settled, false, "pre-step barrier must wait while maintenance is pending");
+  release();
+  await done;
+  assert.equal(settled, true, "pre-step barrier settles after maintenance completes");
+});
+
 test("idle hook ignores an earlier completed turn when a newer turn is unfinished", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
