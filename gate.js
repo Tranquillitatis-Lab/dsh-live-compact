@@ -88,15 +88,16 @@ function takeoverSelected(config, entry, selector) {
     config?.config?.id,
     entry?.id,
     entry?.presetId,
+    ...(Array.isArray(entry?.presetIds) ? entry.presetIds : []),
     entry?.options?.id,
   ].filter((id) => typeof id === "string");
   return ids.some((id) => selector.includes(id));
 }
 
-function outerPresetId(fiber) {
+function outerPresetIds(fiber) {
   const seen = new Set();
   const queue = [];
-  let found = "";
+  const found = [];
   const push = (value) => {
     if (value && (typeof value === "object" || typeof value === "function") && !seen.has(value)) queue.push(value);
   };
@@ -116,7 +117,7 @@ function outerPresetId(fiber) {
       ];
     } catch {}
     const candidate = ids.find((id) => typeof id === "string" && id.length > 0);
-    if (candidate) found = candidate;
+    if (candidate && !found.includes(candidate)) found.push(candidate);
     try { push(current.parent); } catch {}
     try { push(current.fiber); } catch {}
     try { push(current.parent?.fiber); } catch {}
@@ -219,8 +220,8 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
     if (!selector || (Array.isArray(selector) && selector.length === 0)) return resolved;
     const loadable = packageLoadable();
     const entry = fiber?.entry?.options;
-    const presetId = outerPresetId(fiber);
-    const selectedEntry = presetId ? { ...entry, presetId } : entry;
+    const presetIds = outerPresetIds(fiber);
+    const selectedEntry = presetIds.length ? { ...entry, presetId: presetIds[0], presetIds } : entry;
     const rewritten = rewritePresetConfig(resolved, loadable, config, selectedEntry, selector);
     const id = rewritten?.id || rewritten?.config?.id || entry?.id;
     if (rewritten !== resolved && id && !seen.has(String(id))) {
