@@ -66,6 +66,10 @@ function shadowWorkerFor(root) {
   let entry = shadowWorkers.get(key);
   if (entry) return entry;
   const worker = new Worker(new URL("./shadow-save-worker.mjs", import.meta.url), {
+    // DSH Tauri starts the host with --input-type=module --eval. Node passes
+    // that flag to workers as well, where a file URL rejects it with
+    // ERR_INPUT_TYPE_NOT_ALLOWED. The worker is already a module by URL.
+    execArgv: process.execArgv.filter((arg) => !String(arg).startsWith("--input-type=")),
     workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
   });
   entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false, timedOut: false };
@@ -572,6 +576,7 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   let usedLongCut = false;
   let picked = null;
   let longPicked = null;
+  const forceLongRead = context.forceLongRead === true;
   const fallbackWithoutLongRead = () => context.disableLongRead
     ? null
     : selectNewestChunk(session, measurement, key, { ...context, disableLongRead: true });
@@ -585,7 +590,10 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   if (end >= first && !isCheckpoint(session, nodes[end])) {
     ordinaryPicked = selectCutIndexes(items, cutOptions);
   }
-  if (longPicked && ordinaryPicked) {
+  if (forceLongRead && longPicked) {
+    picked = longPicked;
+    usedLongCut = true;
+  } else if (longPicked && ordinaryPicked) {
     const longTokens = longPicked.tokens || 0;
     const ordinaryTokens = ordinaryPicked.tokens || 0;
     if (ordinaryTokens >= longTokens) {
@@ -667,7 +675,15 @@ function selectNewestChunk(session, measurement, key = DEFAULT_KEY, context = {}
   let card = picked.pointerOnly
     ? { ok: true, text: pointerOnlyText(pieces), hardLines: [], missing: [], needsBackup: false, rawPaths: [] }
     : buildCard(pieces.map((piece) => piece.text).join("\n"), liveText(start, end), pieces, extras);
-  if (card.ok !== true) return usedLongCut ? fallbackWithoutLongRead() : null;
+  if (card.ok !== true) {
+    // The ordinary candidate is chosen by token gain before card validation.
+    // If its card is rejected, give the already selected long-read candidate
+    // a complete second pass before abandoning the turn.
+    if (!usedLongCut && longPicked && !forceLongRead) {
+      return selectNewestChunk(session, measurement, key, { ...context, forceLongRead: true });
+    }
+    return usedLongCut ? fallbackWithoutLongRead() : null;
+  }
   card = attachBackupHint(card, freshShadowFile("cut", key));
   if (!card.text.includes("不是备份文件路径")) card = { ...card, text: `${card.text}\n序号是本会话日志里的事件号，不是备份文件路径。` };
   if (!cutOk(toolPairingBalancedAfter, session, nodes[end])) return null;
@@ -1102,6 +1118,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           }
           if (result.blocked) {
             task.captureBlocked = true;
+            task.retryRequested = true;
             this.finishCaptureCatchup(task);
             return;
           }
@@ -1136,14 +1153,19 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.pendingCatchups.delete(task.key);
     this.pendingCatchupJobs.delete(task.promise);
     task.resolve();
-    if (task.failed || task.captureBlocked) {
+    if (task.failed) {
       const state = this.stateFor(task.agent);
       state.pendingMaintenance = false;
       state.warming = false;
       return;
     }
-    if (!this.standDown?.() && !task.captureBlocked &&
-        (task.retryRequested || task.maintenanceRequested)) {
+    if (!this.standDown?.() &&
+        (task.captureBlocked || task.retryRequested || task.maintenanceRequested)) {
+      const state = this.stateFor(task.agent);
+      // Keep the lifecycle visibly warming until the scheduled retry has
+      // completed. Real idle hooks use this state as their await barrier.
+      state.pendingMaintenance = true;
+      state.warming = true;
       this.scheduleMaintenanceRetry(task.agent);
     }
   }

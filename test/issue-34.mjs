@@ -129,6 +129,20 @@ test("#34 retries a transient raw lock without leaving catch-up retryable", asyn
   assert.equal(engine.pendingCatchups.size, 0, "retryable catch-up settles after the retry succeeds");
 });
 
+test("#62 captureBlocked schedules a maintenance retry", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let scheduled = 0;
+  engine.scheduleMaintenanceRetry = () => { scheduled += 1; };
+  engine.captureNewBatch = () => ({ done: false, progressed: false, blocked: true, retryable: false, seen: new Set(), nextIndex: 0 });
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await setImmediate();
+  assert.equal(scheduled, 1);
+});
+
 test("#34 bounds a permanent raw lock and leaves it fail-closed", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
