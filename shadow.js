@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
+import { workerData } from "node:worker_threads";
 import {
   constants as fsConstants,
   chmodSync,
@@ -52,7 +53,9 @@ const ROTATION_OWNER = ".spine-rotation.owner";
 const ROTATION_SHARED = ".spine-rotation.shared";
 const ROTATION_RECOVERED = ".spine-rotation.recovered";
 const USAGE_MAX_AGE_MS = 60_000;
-const rotationOwner = randomBytes(24).toString("hex");
+const rotationOwner = /^[0-9a-f]{48}$/.test(workerData?.spineOwner || "")
+  ? workerData.spineOwner
+  : randomBytes(24).toString("hex");
 let rotationScope = null;
 let shadowUsage = null;
 
@@ -299,7 +302,7 @@ function releaseRotationGuard(root, identity, guard) {
 
 function acquireRotationGuard(root, identity) {
   const lock = join(root, ROTATION_LOCK);
-  const record = { pid: process.pid, id: randomBytes(24).toString("hex") };
+  const record = { pid: process.pid, id: rotationOwner };
   let guard;
   try {
     const published = publishRotationRecord(lock, record);
@@ -487,6 +490,33 @@ export function withShadowRoot(dir, action) {
   }
 }
 
+// Used only after a worker thread has been terminated. The owner token prevents
+// a parent from deleting another process's live rotation lock when recovering
+// a timed-out worker that shares process.pid with the host.
+export function recoverTimedOutShadowWorker(root, owner) {
+  try {
+    const real = realDirectory(root);
+    const lock = join(real, ROTATION_LOCK);
+    const record = readRotationRecord(lock);
+    if (record.pid !== process.pid || record.id !== owner) return false;
+    try { unlinkSync(lock); } catch (error) { if (error?.code !== "ENOENT") return false; }
+    const ownerFile = join(real, ROTATION_OWNER);
+    try {
+      const current = readRotationOwner(ownerFile);
+      if (current.pid === process.pid && current.id === owner) unlinkSync(ownerFile);
+    } catch (error) {
+      if (error?.code !== "ENOENT") return false;
+    }
+    try { unlinkSync(join(real, ROTATION_SHARED)); } catch (error) {
+      if (error?.code !== "ENOENT") return false;
+    }
+    syncRotationDirectory(real);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resetShadowAccessState() {
   cachedSid = "";
   lockedDirs.clear();
@@ -661,13 +691,11 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
         return false;
       }
       if (existsSync(path)) {
-        const noFollow = fsConstants.O_NOFOLLOW;
-        if (noFollow === undefined) {
-          const info = lstatSync(path, { bigint: true });
-          if (!info.isFile() || info.nlink !== 1n) {
-            throw coordinationError(new Error("shadow decision is not a single-link regular file"));
-          }
+        const beforeOpen = lstatSync(path, { bigint: true });
+        if (!beforeOpen.isFile() || beforeOpen.nlink !== 1n) {
+          throw coordinationError(new Error("shadow decision is not a single-link regular file"));
         }
+        const noFollow = fsConstants.O_NOFOLLOW;
         const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | (noFollow ?? 0));
         try {
           const opened = fstatSync(fd, { bigint: true });

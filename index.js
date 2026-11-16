@@ -28,6 +28,7 @@ import {
   appendDecision,
   flushDrainStats,
   noteShadowWarning,
+  recoverTimedOutShadowWorker,
   saveShadowTransaction,
   shadowDirectory,
   shadowFileBody,
@@ -120,11 +121,12 @@ function shadowWorkerFor(root) {
   // imports the module URL without re-running the host's eval script.
   const workerURL = new URL("./shadow-save-worker.mjs", import.meta.url).href;
   const workerBootstrap = `import(${JSON.stringify(workerURL)}).catch((error) => { setImmediate(() => { throw error; }); });`;
+  const ownerToken = randomBytes(24).toString("hex");
   const worker = new Worker(workerBootstrap, {
     eval: true,
-    workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
+    workerData: { spineWorker: 1, spineOwner: ownerToken, accessFuse: shadowAccessFuseBuffer() },
   });
-  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, recoveryTimer: null, retired: false, timedOut: false };
+  entry = { worker, root: key, ownerToken, nextId: 1, pending: new Map(), idleTimer: null, recoveryTimer: null, retired: false, timedOut: false };
   const removeEntry = () => {
     if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
   };
@@ -224,10 +226,17 @@ function runShadowWorker(payload) {
       if (!entry.recoveryTimer) {
         entry.recoveryTimer = setTimeout(() => {
           if (entry.retired) return;
-          // Keep the entry and pending task fenced until the old worker
-          // responds or exits; its process-shared PID may still own a lock.
-          entry.recoveryTimer = null;
-          entry.worker.unref?.();
+          entry.retired = true;
+          entry.timedOut = false;
+          for (const pending of entry.pending.values()) {
+            if (pending.timer) clearTimeout(pending.timer);
+            pending.reject(Object.assign(new Error("spine: shadow worker recovery expired"), { code: "ESHADOWWORKER" }));
+          }
+          entry.pending.clear();
+          removeEntry();
+          entry.worker.terminate()
+            .then(() => recoverTimedOutShadowWorker(entry.root, entry.ownerToken))
+            .catch(() => {});
         }, SHADOW_WORKER_RECOVERY_MS);
         entry.recoveryTimer.unref?.();
       }
