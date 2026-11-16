@@ -103,6 +103,7 @@ const RECOVER_RAW_BATCH = 1;
 const CAPTURE_RETRY_LIMIT = 8;
 const RECOVERY_ACL_REAUTH_LIMIT = 32;
 const SHADOW_WORKER_TIMEOUT_MS = 30000;
+const SHADOW_WORKER_RECOVERY_MS = 60000;
 const PRESTEP_WAIT_TIMEOUT_MS = 3000;
 const SHADOW_WORKER_IDLE_MS = process.platform === "win32" ? 60000 : 500;
 
@@ -123,7 +124,7 @@ function shadowWorkerFor(root) {
     eval: true,
     workerData: { spineWorker: 1, accessFuse: shadowAccessFuseBuffer() },
   });
-  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, retired: false, timedOut: false };
+  entry = { worker, nextId: 1, pending: new Map(), idleTimer: null, recoveryTimer: null, retired: false, timedOut: false };
   const removeEntry = () => {
     if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
   };
@@ -146,6 +147,10 @@ function shadowWorkerFor(root) {
       clearTimeout(entry.idleTimer);
       entry.idleTimer = null;
     }
+    if (entry.recoveryTimer) {
+      clearTimeout(entry.recoveryTimer);
+      entry.recoveryTimer = null;
+    }
     for (const { reject, timer } of entry.pending.values()) {
       if (timer) clearTimeout(timer);
       reject(error);
@@ -159,7 +164,13 @@ function shadowWorkerFor(root) {
     if (!task) return;
     if (task.timer) clearTimeout(task.timer);
     entry.pending.delete(message.id);
-    if (entry.timedOut && entry.pending.size === 0) entry.timedOut = false;
+    if (entry.timedOut && entry.pending.size === 0) {
+      entry.timedOut = false;
+      if (entry.recoveryTimer) {
+        clearTimeout(entry.recoveryTimer);
+        entry.recoveryTimer = null;
+      }
+    }
     if (message?.ok) {
       task.resolve(message.result);
       scheduleIdleExit();
@@ -206,6 +217,25 @@ function runShadowWorker(payload) {
       // keep the pending task until the worker naturally releases its lock.
       task.timedOut = true;
       entry.timedOut = true;
+      // Let the host exit while a blocked filesystem call drains. A bounded
+      // recovery removes the poisoned entry later without killing a worker
+      // that may still own a rotation lock.
+      entry.worker.unref?.();
+      if (!entry.recoveryTimer) {
+        entry.recoveryTimer = setTimeout(() => {
+          if (entry.retired) return;
+          entry.retired = true;
+          entry.timedOut = false;
+          for (const pending of entry.pending.values()) {
+            if (pending.timer) clearTimeout(pending.timer);
+            pending.reject(Object.assign(new Error("spine: shadow worker recovery expired"), { code: "ESHADOWWORKER" }));
+          }
+          entry.pending.clear();
+          removeEntry();
+          entry.worker.unref?.();
+        }, SHADOW_WORKER_RECOVERY_MS);
+        entry.recoveryTimer.unref?.();
+      }
       reject(error);
     }, SHADOW_WORKER_TIMEOUT_MS);
     timer.unref?.();
@@ -1374,11 +1404,14 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         .catch((error) => noteShadowWarning(this.ctx?.logger, error))
         .finally(() => {
           if (state.maintenanceJob !== job || state.maintenanceAbort !== retryAbort) return;
+          const requeueBoundary = state.turnEndPending;
+          state.turnEndPending = false;
           state.pendingMaintenance = false;
           state.warming = false;
           state.maintenanceAbort = null;
           state.maintenanceJob = null;
           this.pendingCuts.delete(job);
+          if (requeueBoundary) this.scheduleTurnEndMaintenance(agent, state.turnEndSeq, state.turnEndEvent);
         });
       state.maintenanceJob = job;
       this.pendingCuts.add(job);

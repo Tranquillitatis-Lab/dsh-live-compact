@@ -43,6 +43,7 @@ let shadowFuseState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_
 const shadowWarnings = new Set();
 const DECISION_ROTATION_INTERVAL_MS = 1000;
 const decisionRotationAt = new Map();
+const decisionUsageBytes = new Map();
 
 // No shared byte ledger. A positively dead holder leaves an immutable fence:
 // recovery enables the original shared scans, never ownership or an estimate.
@@ -641,16 +642,23 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
       const rotationKey = rotationScope.root;
       const now = Date.now();
       const lastRotation = decisionRotationAt.get(rotationKey) || 0;
+      const incomingBytes = Buffer.byteLength(body, "utf8");
+      const cap = shadowMaxBytes();
+      let knownUsage = decisionUsageBytes.get(rotationKey);
       if (now - lastRotation >= DECISION_ROTATION_INTERVAL_MS) {
         const rotation = rotateShadowLocked({
-          incomingBytes: Buffer.byteLength(body, "utf8"),
+          incomingBytes,
           protectPath: path,
           protectPaths,
           sessionKey: record.sid || record.sessionId || "default",
-          cap: shadowMaxBytes(),
+          cap,
         });
         if (!rotation.ok || rotation.oversize) return false;
         decisionRotationAt.set(rotationKey, now);
+        knownUsage = rotation.used;
+        decisionUsageBytes.set(rotationKey, knownUsage);
+      } else if (Number.isSafeInteger(knownUsage) && knownUsage + incomingBytes > cap) {
+        return false;
       }
       if (existsSync(path)) {
         const noFollow = fsConstants.O_NOFOLLOW;
@@ -676,6 +684,7 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
         if (shadowUsage && isPluginShadowName(basename(path))) {
           shadowUsage.bytes += Buffer.byteLength(body, "utf8");
         }
+        decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
       } else {
         writeShadowFileLocked(path, body, {}, {
           exclusive: false,
