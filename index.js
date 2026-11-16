@@ -17,7 +17,7 @@ import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, 
 import { createRequire } from "node:module";
 import { setImmediate as scheduleImmediate } from "node:timers";
 import { Worker } from "node:worker_threads";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
@@ -445,10 +445,16 @@ function maintenanceOperationSignal(agentSignal, timeoutSignal) {
   return controller.signal;
 }
 
-function spineCheckpointSource(compactionId) {
+function spineCheckpointSource(compactionId, rawPaths = []) {
   // 不用 compact-checkpoint。官方压缩会把那种节点当成上一版摘要再摘一次。
   // Do not use compact-checkpoint. Official compaction treats that kind as a prior summary and shrinks it again.
-  return Object.freeze({ kind: SPINE_SOURCE_KIND, compactionId });
+  const rawNames = [...new Set((rawPaths || []).map((path) => basename(String(path || "")))
+    .filter((name) => name && name !== "." && name !== ".."))];
+  return Object.freeze({
+    kind: SPINE_SOURCE_KIND,
+    compactionId,
+    ...(rawNames.length ? { rawNames } : {}),
+  });
 }
 
 function eventRole(session, seq) {
@@ -992,6 +998,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   recordDecision(state, record = {}) {
     const key = state?.key || DEFAULT_KEY;
     const prefix = `${key}\0`;
+    const session = state?.liveAgent?.session;
+    this.reconcileCardRawPaths(state, session);
     const protectPaths = [];
     if (state?.lastCardPath) protectPaths.push(state.lastCardPath);
     for (const rawPath of state?.cardRawPaths || []) {
@@ -999,7 +1007,6 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       protectPaths.push(rawPath, `${rawPath}.meta.json`);
     }
     const liveIds = new Set();
-    const session = state?.liveAgent?.session;
     for (const seq of session?.surface?.nodes || []) {
       const event = session.eventAt?.(seq);
       const id = event?.type === "tool/result" ? event.data?.message?.toolCallId : "";
@@ -1010,6 +1017,29 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       protectPaths.push(raw.path, `${raw.path}.meta.json`);
     }
     appendDecision(shadowDirectory(), { sid: key, ...record }, { protectPaths });
+  }
+
+  reconcileCardRawPaths(state, session) {
+    if (!state || !session?.surface?.nodes) return;
+    const root = sessionDir(shadowDirectory(), state.key || DEFAULT_KEY);
+    const paths = [];
+    let sawSpineCard = false;
+    for (const seq of session.surface.nodes) {
+      const event = session.eventAt?.(seq);
+      const source = event?.type === "user/message" ? event.data?.source : null;
+      if (source?.kind !== SPINE_SOURCE_KIND) continue;
+      sawSpineCard = true;
+      for (const name of Array.isArray(source.rawNames) ? source.rawNames : []) {
+        if (typeof name !== "string" || !name || name !== basename(name)) continue;
+        paths.push(join(root, name));
+      }
+    }
+    if (sawSpineCard) {
+      state.cardRawPaths = [...new Set(paths)];
+      state.cardRawPathsStructured = true;
+    } else if (state.cardRawPathsStructured) {
+      state.cardRawPaths = [];
+    }
   }
 
   ownedSignal(signal) {
@@ -1056,6 +1086,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       rawCutRetryAttempts: 0,
       lastCardPath: "",
       cardRawPaths: [],
+      cardRawPathsStructured: false,
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -1134,6 +1165,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const maintenanceAbort = new AbortController();
     state.maintenanceOwner = owner;
     state.maintenanceAbort = maintenanceAbort;
+    const forwardAbort = () => {
+      if (!maintenanceAbort.signal.aborted) maintenanceAbort.abort(signal?.reason);
+    };
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+    if (signal?.aborted) forwardAbort();
     let job;
     job = (async () => {
       await null;
@@ -1155,13 +1191,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
           this.captureNew(agent.session, events, settings);
         }
         if (catchup?.promise && !catchup.finished) await catchup.promise;
+        if (maintenanceAbort.signal.aborted) return false;
         await this.flushPendingCaptures(agent.session);
+        if (maintenanceAbort.signal.aborted) return false;
         const completed = await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
         if (completed === true && (stoppingSeq !== undefined || stoppingStartSeq !== undefined)) {
           state.lastStoppingTurnEndSeq = stoppingSeq ?? -1;
           state.lastStoppingTurnStartSeq = stoppingStartSeq ?? -1;
         }
       } finally {
+        signal?.removeEventListener("abort", forwardAbort);
         this.pendingCuts.delete(job);
         if (state.maintenanceOwner === owner) {
           state.warming = false;
@@ -1178,7 +1217,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     })();
     state.maintenanceJob = job;
     this.pendingCuts.add(job);
-    await job;
+    if (!signal) await job;
+    else {
+      let abort;
+      const aborted = new Promise((resolve) => {
+        abort = () => resolve();
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
+      try { await Promise.race([job, aborted]); }
+      finally { signal.removeEventListener("abort", abort); }
+    }
   }
 
   scheduleTurnEndMaintenance(agent, seq, boundaryEvent = null) {
@@ -1884,6 +1933,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const state = this.stateFor(agent);
       state.lastCardPath = chunk.card?.shadowFile || "";
       state.cardRawPaths = [...new Set([...(state.cardRawPaths || []), ...(chunk.card?.rawPaths || [])])];
+      state.cardRawPathsStructured = true;
     }
     signal?.throwIfAborted();
     if (this.standDown?.()) return false;
@@ -1894,7 +1944,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         { type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` },
         ...summarized.summary,
       ],
-      source: spineCheckpointSource(compactionId),
+      source: spineCheckpointSource(compactionId, chunk.card?.rawPaths || []),
     });
     const framedTokens = typeof this.ctx.tokenMeter.estimateMessage === "function"
       ? this.ctx.tokenMeter.estimateMessage(checkpointMessage)

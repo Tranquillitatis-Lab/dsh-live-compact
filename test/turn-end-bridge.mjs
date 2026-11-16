@@ -226,6 +226,48 @@ test("late turn-stopping cleanup does not clear a newer maintenance owner", asyn
   assert.equal(state.pendingMaintenance, true);
 });
 
+test("turn-stopping forwards a late abort and does not hold the caller", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "abort-stopping",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+  };
+  let release;
+  const catchup = new Promise((resolve) => { release = resolve; });
+  const events = Array.from({ length: 129 }, (_, seq) => ({ seq }));
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: false, promise: catchup });
+  engine.finishTurn = async () => { throw new Error("finishTurn must not run after abort"); };
+  const controller = new AbortController();
+  const run = engine.runTurnStoppingMaintenance(agent, controller.signal);
+  await setImmediate();
+  controller.abort({ kind: "disposed" });
+  let timer;
+  try {
+    await Promise.race([
+      run,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("abort was not forwarded")), 100); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(state.maintenanceAbort.signal.aborted, true);
+  release();
+  await Promise.allSettled([state.maintenanceJob]);
+});
+
 test("pre-step timeout keeps the running maintenance fenced", async () => {
   const engine = Object.create(Spine.prototype);
   const state = {

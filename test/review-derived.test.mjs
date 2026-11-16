@@ -65,6 +65,8 @@ test("committed cards retain raw paths for later decision-log rotation", () => {
   assert.match(source, /protectPaths\.push\(rawPath, `\$\{rawPath\}\.meta\.json`\)/);
   assert.match(source, /const protectRawPaths = \[\.\.\.new Set\(/);
   assert.match(source, /state\.cardRawPaths \|\| \[\],/);
+  assert.match(source, /rawNames/);
+  assert.match(source, /reconcileCardRawPaths/);
 });
 
 test("#60 rejected ordinary candidate falls back to the already prepared long-read candidate", () => {
