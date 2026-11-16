@@ -404,6 +404,23 @@ function latestTurnStart(events) {
   return found;
 }
 
+function turnStartForBoundary(events, boundary) {
+  const list = events || [];
+  const boundaryTurn = boundary?.data?.turn;
+  const boundaryIndex = boundary?.seq == null
+    ? -1
+    : list.findIndex((event) => event?.seq === boundary.seq);
+  let found = null;
+  for (let index = 0; index < list.length; index += 1) {
+    if (boundaryIndex >= 0 && index >= boundaryIndex) break;
+    const event = list[index];
+    if (event?.type !== "turn/start") continue;
+    if (boundaryTurn !== undefined && event?.data?.turn !== boundaryTurn) continue;
+    found = event;
+  }
+  return found;
+}
+
 function maintenanceOperationSignal(agentSignal, timeoutSignal) {
   const controller = new AbortController();
   const forwardAgent = () => {
@@ -1023,6 +1040,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       turnBase: null,
       maxTurnGrowth: 0,
       maintenanceJob: null,
+      retryWaitingJob: null,
       maintenanceAbort: null,
       maintenanceOwner: null,
       turnEndScheduled: false,
@@ -1058,7 +1076,9 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return;
     }
     if (state.turnEndSeq <= state.lastMaintenanceTurnEndSeq) return;
-    const activeStartSeq = latestTurnStart(events)?.seq;
+    const boundary = state.turnEndEvent || latestCompletedTurnEnd(events);
+    const boundaryStartSeq = turnStartForBoundary(events, boundary)?.seq;
+    const activeStartSeq = boundaryStartSeq ?? latestTurnStart(events)?.seq;
     const sameStoppingTurn = Number.isInteger(state.lastStoppingTurnStartSeq) &&
       state.lastStoppingTurnStartSeq >= 0 && Number.isInteger(activeStartSeq)
       ? state.lastStoppingTurnStartSeq === activeStartSeq
@@ -1117,7 +1137,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const events = agent.session.snapshotEvents();
         const stoppingEnd = latestCompletedTurnEnd(events);
         const stoppingSeq = stoppingEnd?.seq;
-        const stoppingStartSeq = latestTurnStart(events)?.seq;
+        const stoppingStartSeq = (turnStartForBoundary(events, stoppingEnd) || latestTurnStart(events))?.seq;
         if (Number.isInteger(stoppingSeq)) {
           state.turnEndSeq = Number.isInteger(state.turnEndSeq) ? Math.max(state.turnEndSeq, stoppingSeq) : stoppingSeq;
           state.turnEndEvent = stoppingEnd;
@@ -1482,14 +1502,21 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         state.warming = false;
         return;
       }
-      if (state.warming && !state.pendingMaintenance) {
-        scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
-        return;
-      }
       if (state.maintenanceJob) {
-        scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
+        const waitingJob = state.maintenanceJob;
+        if (state.retryWaitingJob === waitingJob) return;
+        state.retryWaitingJob = waitingJob;
+        const retryAfterJob = () => {
+          if (state.retryWaitingJob !== waitingJob) return;
+          state.retryWaitingJob = null;
+          if (!state.maintenanceJob && state.pendingMaintenance) {
+            this.scheduleMaintenanceRetry(agent);
+          }
+        };
+        Promise.resolve(waitingJob).then(retryAfterJob, retryAfterJob);
         return;
       }
+      if (state.warming && !state.pendingMaintenance) state.warming = false;
       const events = agent.session.snapshotEvents();
       const done = latestTurnCompleted(events);
       if (!done) {

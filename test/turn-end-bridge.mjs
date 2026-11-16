@@ -378,6 +378,77 @@ test("turn/end arriving after turn-stopping is deduplicated by the active turn/s
   assert.equal(state.lastMaintenanceTurnEndSeq, 2);
 });
 
+test("a newer turn/start does not make an older delayed turn/end run twice", async () => {
+  const engine = Object.create(Spine.prototype);
+  const events = [{ seq: 1, type: "turn/start", data: { turn: 2 } }];
+  const state = {
+    key: "delayed-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    lastStoppingTurnStartSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; return true; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  events.push(
+    { seq: 3, type: "turn/start", data: { turn: 3 } },
+    { seq: 2, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } },
+  );
+  engine.scheduleTurnEndMaintenance(agent, 2, events.at(-1));
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, 2);
+});
+
+test("catch-up retry waits for an existing maintenance job instead of spinning", async () => {
+  const engine = Object.create(Spine.prototype);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const state = {
+    key: "retry-wait",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceOwner: null,
+    maintenanceAbort: null,
+    maintenanceJob: pending,
+    retryScheduled: false,
+    retryWaitingJob: null,
+    turnEndPending: false,
+    turnEndSeq: 2,
+    turnEndEvent: { seq: 2, type: "turn/end", data: { reason: { kind: "completed" } } },
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [state.turnEndEvent] } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.pendingCuts = new Set();
+  engine.finishTurn = async () => true;
+  engine.scheduleMaintenanceRetry(agent);
+  await setImmediate();
+  assert.equal(state.retryWaitingJob, pending);
+  release();
+  state.maintenanceJob = null;
+  await setImmediate();
+  await setImmediate();
+  assert.equal(state.retryWaitingJob, null);
+  assert.equal(state.maintenanceJob, null);
+});
+
 test("agent/created seeds the live agent before the first turn/end", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));
