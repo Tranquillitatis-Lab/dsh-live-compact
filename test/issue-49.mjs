@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import Spine from "../index.js";
+
+test("#49 pre-step barrier is registered before the stock pressure hook", () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf('ctx.on("agent/pre-step"'), source.indexOf('ctx.on("agent/turn-stopping"'));
+  assert.match(body, /prepend: true/);
+});
 
 test("#49 deferred catch-up never enters a serialized maintenance gate", async () => {
   const engine = Object.create(Spine.prototype);
@@ -33,4 +40,24 @@ test("#49 permanent capture blocks keep the cursor at the failed event", () => {
   assert.equal(result.blocked, true);
   assert.equal(result.done, false);
   assert.equal(engine.captureCursor.get("session-a"), 0);
+});
+
+test("#49 a session flush does not wait for another session's pending capture", async () => {
+  const engine = Object.create(Spine.prototype);
+  let releaseOther;
+  const otherPending = new Promise((resolve) => { releaseOther = resolve; });
+  let currentFinished = false;
+  engine.pendingCaptureJobs = new Map([
+    ["session-a\0tool-a", otherPending],
+    ["session-b\0tool-b", Promise.resolve().then(() => { currentFinished = true; })],
+  ]);
+  engine.surfaceToolIds = (session) => session.id === "session-b" ? ["tool-b"] : ["tool-a"];
+  const current = { id: "session-b" };
+  const result = await Promise.race([
+    engine.flushPendingCaptures(current).then(() => "finished"),
+    new Promise((resolve) => setTimeout(() => resolve("timed-out"), 100)),
+  ]);
+  releaseOther();
+  assert.equal(result, "finished");
+  assert.equal(currentFinished, true);
 });

@@ -105,8 +105,8 @@ export function configSchema(z, stockSchema) {
     ...Object.fromEntries(Object.entries(stockFields).map(([key, field]) => [
       key, field.meta?.volatile ? field : z(field).volatile(),
     ])),
-    takeoverPresets: z.boolean().default(true)
-      .description("接管官方预设中的压缩引擎；修改后只影响新加载的预设，已有会话需重建。")
+    takeoverPresets: z.union([z.boolean(), z.array(z.string())]).default(true)
+      .description("接管官方预设中的压缩引擎；可填 false 或 preset ID 数组限制接管范围。修改后只影响新加载的预设，已有会话需重建。")
       .volatile(),
     minTokens: count(0)
       .description("轮后小切的起点，上下文到这个 token 数才切一刀。")

@@ -6,7 +6,7 @@
  * 预检查只解析配置，校验交给实际引擎；构造失败时释放本次注册，不重试原版盖掉报错。
  * Resolve config before construction; let the engine validate it and preserve its actual error.
  */
-import { loadBase, loadCompaction, loadSchema } from "./adapter.js";
+import { loadBase, loadCompaction, loadSchema, STOCK_ENGINE } from "./adapter.js";
 import { configSchema, engineConfig } from "./settings.js";
 import { installPresetGate } from "./gate.js";
 
@@ -76,6 +76,56 @@ function releaseCompaction(ctx, previous) {
   return true;
 }
 
+function detachRootStockCompaction(ctx) {
+  const store = ctx?.reflect?.store;
+  const current = compactionRecord(ctx);
+  const key = ctx?.[Symbol.for("cordis.isolate")]?.compaction;
+  const fiber = current?.fiber ?? current?.ctx?.fiber;
+  const moduleName = fiber?.entry?.options?.name;
+  if (!current || moduleName !== STOCK_ENGINE || fiber === ctx?.fiber) return false;
+  if (compactionRecord(ctx) !== current) return false;
+  const fiberStore = fiber?.store;
+  if (fiberStore?.compaction === current) delete fiberStore.compaction;
+  delete store[key];
+  return { store, key, current, fiber, fiberStore };
+}
+
+function commitRootStockCompaction(replacement) {
+  if (!replacement || replacement.committed) return false;
+  replacement.committed = true;
+  try {
+    // Cordis disposal is async. The replacement has already registered, so
+    // the old root fiber can now drain its effects without blocking startup.
+    const pending = replacement.fiber?.dispose?.();
+    pending?.catch?.(() => {});
+  } catch {}
+  return true;
+}
+
+function rollbackRootStockCompaction(replacement) {
+  if (!replacement || replacement.committed) return false;
+  const current = replacement.store?.[replacement.key];
+  if (current !== undefined && current !== replacement.current) return false;
+  replacement.store[replacement.key] = replacement.current;
+  if (replacement.fiberStore && replacement.fiberStore.compaction === undefined) {
+    replacement.fiberStore.compaction = replacement.current;
+  }
+  return true;
+}
+
+export function releaseRootStockCompaction(ctx, { deferDispose = false } = {}) {
+  const replacement = detachRootStockCompaction(ctx);
+  if (!replacement) return false;
+  if (deferDispose) {
+    replacement.committed = false;
+    replacement.commit = () => commitRootStockCompaction(replacement);
+    replacement.rollback = () => rollbackRootStockCompaction(replacement);
+    return replacement;
+  }
+  commitRootStockCompaction(replacement);
+  return true;
+}
+
 function visibleTakeover(ctx, reason) {
   const line = `spine: ${MARK}。${reason}`;
   console.error(line);
@@ -124,11 +174,16 @@ export default class LiveCompactEntry {
       }
     }
     if (!loadError && !skipStock && Engine) {
+      let rootStockReplacement = false;
       try {
-        return new Engine(ctx, config, resolvedConfig);
+        rootStockReplacement = releaseRootStockCompaction(ctx, { deferDispose: true });
+        const engine = new Engine(ctx, config, resolvedConfig);
+        rootStockReplacement?.commit?.();
+        return engine;
       } catch (error) {
         cause = error instanceof Error ? error : new Error(String(error));
         releaseCompaction(ctx, previousCompaction);
+        rootStockReplacement?.rollback?.();
         skipStock = true;
       }
     }

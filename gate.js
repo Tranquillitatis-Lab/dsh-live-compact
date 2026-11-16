@@ -80,6 +80,52 @@ function isPreset(node) {
   return Boolean(node.config && typeof node.config === "object" && !Array.isArray(node.config) && PRESET_IDS.has(node.config.id));
 }
 
+function takeoverSelected(config, entry, selector) {
+  if (typeof selector === "boolean") return selector;
+  if (!Array.isArray(selector)) return Boolean(selector);
+  const ids = [
+    config?.id,
+    config?.config?.id,
+    entry?.id,
+    entry?.presetId,
+    ...(Array.isArray(entry?.presetIds) ? entry.presetIds : []),
+    entry?.options?.id,
+  ].filter((id) => typeof id === "string");
+  return ids.some((id) => selector.includes(id));
+}
+
+function outerPresetIds(fiber) {
+  const seen = new Set();
+  const queue = [];
+  const found = [];
+  const push = (value) => {
+    if (value && (typeof value === "object" || typeof value === "function") && !seen.has(value)) queue.push(value);
+  };
+  try { push(fiber?.parent); } catch {}
+  try { push(fiber?.fiber?.parent); } catch {}
+  while (queue.length) {
+    const current = queue.shift();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    let ids = [];
+    try {
+      ids = [
+        current?.entry?.options?.id,
+        current?.fiber?.entry?.options?.id,
+        current?.config?.id,
+        current?.id,
+      ];
+    } catch {}
+    const candidate = ids.find((id) => typeof id === "string" && id.length > 0);
+    if (candidate && !found.includes(candidate)) found.push(candidate);
+    try { push(current.parent); } catch {}
+    try { push(current.fiber); } catch {}
+    try { push(current.parent?.fiber); } catch {}
+    try { push(current.fiber?.parent); } catch {}
+  }
+  return found;
+}
+
 function withEngineConfig(entry, rootConfig) {
   const previous = entry.config && typeof entry.config === "object" && !Array.isArray(entry.config) ? configSnapshot(entry.config) : {};
   const { takeoverPresets: _takeover, ...root } = configSnapshot(rootConfig);
@@ -114,9 +160,9 @@ function rewriteNode(node, loadable, rootConfig) {
   return next;
 }
 
-export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}, entry) {
+export function rewritePresetConfig(config, loadable = packageLoadable(), rootConfig = {}, entry, selector = true) {
   const group = Array.isArray(config) && entry?.group === true && entry.isolate?.compaction === true;
-  if (!isPreset(config) && !group) return config;
+  if (!takeoverSelected(config, entry, selector) || (!isPreset(config) && !group)) return config;
   return rewriteNode(config, loadable, rootConfig);
 }
 
@@ -160,7 +206,7 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
   ctx.effect(() => () => { gate.active = false; });
   const enabled = () => {
     const value = config.takeoverPresets ?? true;
-    return typeof value === "boolean" ? value : value.get();
+    return typeof value === "boolean" || Array.isArray(value) ? value : value.get();
   };
   const seen = new Set();
   gate.disposeListener = ctx.on("internal/config", function (fiber, next) {
@@ -169,10 +215,14 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
       warnCompactionStandDown(ctx);
       return resolved;
     }
-    if (!gate.active || !enabled()) return resolved;
+    if (!gate.active) return resolved;
+    const selector = enabled();
+    if (!selector || (Array.isArray(selector) && selector.length === 0)) return resolved;
     const loadable = packageLoadable();
     const entry = fiber?.entry?.options;
-    const rewritten = rewritePresetConfig(resolved, loadable, config, entry);
+    const presetIds = outerPresetIds(fiber);
+    const selectedEntry = presetIds.length ? { ...entry, presetId: presetIds[0], presetIds } : entry;
+    const rewritten = rewritePresetConfig(resolved, loadable, config, selectedEntry, selector);
     const id = rewritten?.id || rewritten?.config?.id || entry?.id;
     if (rewritten !== resolved && id && !seen.has(String(id))) {
       seen.add(String(id));

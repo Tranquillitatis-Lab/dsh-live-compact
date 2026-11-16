@@ -11,7 +11,9 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
+import { workerData } from "node:worker_threads";
 import {
+  constants as fsConstants,
   chmodSync,
   appendFileSync,
   closeSync,
@@ -40,6 +42,10 @@ const lockedDirs = new Map();
 const lockedFiles = new Map();
 let shadowFuseState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const shadowWarnings = new Set();
+const DECISION_ROTATION_INTERVAL_MS = 1000;
+const decisionRotationAt = new Map();
+const decisionUsageBytes = new Map();
+const decisionUsageMtime = new Map();
 
 // No shared byte ledger. A positively dead holder leaves an immutable fence:
 // recovery enables the original shared scans, never ownership or an estimate.
@@ -48,7 +54,9 @@ const ROTATION_OWNER = ".spine-rotation.owner";
 const ROTATION_SHARED = ".spine-rotation.shared";
 const ROTATION_RECOVERED = ".spine-rotation.recovered";
 const USAGE_MAX_AGE_MS = 60_000;
-const rotationOwner = randomBytes(24).toString("hex");
+const rotationOwner = /^[0-9a-f]{48}$/.test(workerData?.spineOwner || "")
+  ? workerData.spineOwner
+  : randomBytes(24).toString("hex");
 let rotationScope = null;
 let shadowUsage = null;
 
@@ -295,7 +303,13 @@ function releaseRotationGuard(root, identity, guard) {
 
 function acquireRotationGuard(root, identity) {
   const lock = join(root, ROTATION_LOCK);
-  const record = { pid: process.pid, id: randomBytes(24).toString("hex") };
+  // A host transaction gets a fresh fence token every time. Managed workers
+  // keep their stable owner token so a timed-out parent can recover exactly
+  // the worker-held lock without touching another transaction.
+  const transactionId = workerData?.spineWorker === 1
+    ? rotationOwner
+    : randomBytes(24).toString("hex");
+  const record = { pid: process.pid, id: transactionId };
   let guard;
   try {
     const published = publishRotationRecord(lock, record);
@@ -483,6 +497,32 @@ export function withShadowRoot(dir, action) {
   }
 }
 
+// Used only after a worker thread has been terminated. The owner token prevents
+// a parent from deleting another process's live rotation lock when recovering
+// a timed-out worker that shares process.pid with the host.
+export function recoverTimedOutShadowWorker(root, owner) {
+  try {
+    const real = realDirectory(root);
+    const lock = join(real, ROTATION_LOCK);
+    const record = readRotationRecord(lock);
+    if (record.pid !== process.pid || record.id !== owner) return false;
+    try { unlinkSync(lock); } catch (error) { if (error?.code !== "ENOENT") return false; }
+    const ownerFile = join(real, ROTATION_OWNER);
+    try {
+      const current = readRotationOwner(ownerFile);
+      if (current.pid === process.pid && current.id === owner) unlinkSync(ownerFile);
+    } catch (error) {
+      if (error?.code !== "ENOENT") return false;
+    }
+    // Keep the shared fence immutable. It may represent another participant;
+    // recovery of this worker must never re-enable an exclusive fast path.
+    syncRotationDirectory(real);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resetShadowAccessState() {
   cachedSid = "";
   lockedDirs.clear();
@@ -583,7 +623,7 @@ export function noteShadowWarning(logger, error) {
 const SESSION_MARK = /^# spine-session (\S+)/;
 
 export function isPluginShadowName(name) {
-  return PLUGIN_NAME.test(name);
+  return name === "spine-decisions.jsonl" || PLUGIN_NAME.test(name);
 }
 
 export function sanitizeSessionKey(key) {
@@ -621,6 +661,89 @@ export function shadowFileBody(sessionKey, body) {
 
 export const STATS_NAME = "spine-stats.json";
 export const CUTS_NAME = "spine-cuts.jsonl";
+export const DECISIONS_NAME = "spine-decisions.jsonl";
+
+export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
+  try {
+    if (!existsSync(dir)) return false;
+    const body = `${JSON.stringify({
+      v: 1,
+      ts: new Date().toISOString(),
+      ...record,
+    })}\n`;
+    const file = join(dir, DECISIONS_NAME);
+    return withShadowRoot(dir, () => {
+      const path = scopedFile(file, rotationScope.root);
+      if (!path) throw coordinationError(new Error("shadow decision outside root scope"));
+      const rotationKey = rotationScope.root;
+      const now = Date.now();
+      const lastRotation = decisionRotationAt.get(rotationKey) || 0;
+      const incomingBytes = Buffer.byteLength(body, "utf8");
+      const cap = shadowMaxBytes();
+      let knownUsage = decisionUsageBytes.get(rotationKey);
+      let rootMtime = null;
+      try { rootMtime = statSync(rotationKey).mtimeMs; } catch {}
+      const knownMtime = decisionUsageMtime.get(rotationKey);
+      const fastPath = rotationScope.exclusive && shadowUsage?.root === rotationKey &&
+        shadowUsage?.identity === rotationScope.identity &&
+        now - lastRotation < DECISION_ROTATION_INTERVAL_MS &&
+        Number.isSafeInteger(knownUsage) && rootMtime !== null && knownMtime === rootMtime;
+      if (!fastPath) {
+        const rotation = rotateShadowLocked({
+          incomingBytes,
+          protectPath: path,
+          protectPaths,
+          sessionKey: record.sid || record.sessionId || "default",
+          cap,
+        });
+        if (!rotation.ok || rotation.oversize) return false;
+        decisionRotationAt.set(rotationKey, now);
+        knownUsage = rotation.used;
+        decisionUsageBytes.set(rotationKey, knownUsage);
+        try { decisionUsageMtime.set(rotationKey, statSync(rotationKey).mtimeMs); } catch {}
+      } else if (Number.isSafeInteger(knownUsage) && knownUsage + incomingBytes > cap) {
+        return false;
+      }
+      if (existsSync(path)) {
+        const beforeOpen = lstatSync(path, { bigint: true });
+        if (!beforeOpen.isFile() || beforeOpen.nlink !== 1n) {
+          throw coordinationError(new Error("shadow decision is not a single-link regular file"));
+        }
+        const noFollow = fsConstants.O_NOFOLLOW;
+        const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | (noFollow ?? 0));
+        try {
+          const opened = fstatSync(fd, { bigint: true });
+          const named = lstatSync(path, { bigint: true });
+          if (!opened.isFile() || opened.nlink !== 1n || !named.isFile() || named.nlink !== 1n ||
+              opened.dev !== named.dev || opened.ino !== named.ino) {
+            throw coordinationError(new Error("shadow decision identity changed"));
+          }
+          writeFileSync(fd, body);
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        if (shadowUsage && isPluginShadowName(basename(path))) {
+          shadowUsage.bytes += Buffer.byteLength(body, "utf8");
+        }
+        decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
+        if (rootMtime !== null) decisionUsageMtime.set(rotationKey, rootMtime);
+      } else {
+        writeShadowFileLocked(path, body, {}, {
+          exclusive: false,
+          write: writeFileSync,
+          unlink: unlinkSync,
+          accessPath: file,
+        });
+        decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
+        if (rootMtime !== null) decisionUsageMtime.set(rotationKey, rootMtime);
+      }
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function readCutStats(dir) {
   try {
@@ -641,6 +764,91 @@ export function drainRewrite(notes) {
   if (!cuts.length) return 0;
   const later = cuts.slice(1).reduce((sum, note) => sum + (note.saved || 0), 0);
   return Math.max(0, (cuts[0].afterPrefix || 0) - later);
+}
+
+function acquireStatsLock(lock) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let fd;
+    let created = false;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+      created = true;
+      writeFileSync(fd, String(process.pid));
+      fsyncSync(fd);
+      return fd;
+    } catch (error) {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
+      if (created) {
+        try { unlinkSync(lock); } catch {}
+      }
+      if (error?.code !== "EEXIST") return null;
+      let pid = null;
+      let observedText = "";
+      let observedStat;
+      try {
+        observedText = readFileSync(lock, "utf8").trim();
+        pid = /^[1-9]\d*$/.test(observedText) ? Number(observedText) : null;
+        observedStat = statSync(lock);
+      } catch {
+        return null;
+      }
+      const dead = pid !== null && processAlive(pid) === false;
+      // Pre-1.1.12 locks were empty files. Only recover one that is old enough
+      // to be a legacy crash artifact; a just-created empty lock may still be
+      // between open(wx) and its PID write.
+      const legacyEmpty = observedText === "" && Number.isFinite(observedStat?.mtimeMs) &&
+        Date.now() - observedStat.mtimeMs >= 1000;
+      if (dead || legacyEmpty) {
+        const recovery = `${lock}.recover`;
+        let recoveryFd;
+        let removed = false;
+        try {
+          recoveryFd = openSync(recovery, "wx", 0o600);
+          writeFileSync(recoveryFd, String(process.pid));
+          fsyncSync(recoveryFd);
+        } catch (recoveryError) {
+          if (recoveryFd !== undefined) {
+            try { closeSync(recoveryFd); } catch {}
+            try { unlinkSync(recovery); } catch {}
+          }
+          if (recoveryError?.code === "EEXIST") {
+            let recoveryPid = null;
+            try {
+              const text = readFileSync(recovery, "utf8").trim();
+              recoveryPid = /^[1-9]\d*$/.test(text) ? Number(text) : null;
+            } catch {}
+            if (recoveryPid !== null && processAlive(recoveryPid) === false) {
+              try { unlinkSync(recovery); } catch {}
+              continue;
+            }
+          }
+          return null;
+        }
+        try {
+          let current = "";
+          let currentStat;
+          try {
+            current = readFileSync(lock, "utf8").trim();
+            currentStat = statSync(lock);
+          } catch {}
+          const unchanged = current === observedText && currentStat && observedStat &&
+            currentStat.dev === observedStat.dev && currentStat.ino === observedStat.ino &&
+            currentStat.size === observedStat.size && currentStat.mtimeMs === observedStat.mtimeMs;
+          if (unchanged && (dead || legacyEmpty)) {
+            try { unlinkSync(lock); removed = true; } catch {}
+          }
+        } finally {
+          try { closeSync(recoveryFd); } catch {}
+          try { unlinkSync(recovery); } catch {}
+        }
+        if (removed) continue;
+      }
+      return null;
+    }
+  }
+  return null;
 }
 
 export function flushDrainStats(dir, notes, meta = {}) {
@@ -677,12 +885,8 @@ function recordDrainStats(dir, { cuts = 0, saved = 0, rewrite = 0 } = {}) {
     const file = join(dir, STATS_NAME);
     const lock = join(dir, "spine-stats.lock");
     const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    let fd;
-    try {
-      fd = openSync(lock, "wx");
-    } catch {
-      return null;
-    }
+    const fd = acquireStatsLock(lock);
+    if (fd === null) return null;
     try {
       const prev = readCutStats(dir);
       const locked = {
@@ -711,12 +915,8 @@ export function recordCutStats(dir, { saved = 0, rewrite = 0 } = {}) {
     const file = join(dir, STATS_NAME);
     const lock = join(dir, "spine-stats.lock");
     const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    let fd;
-    try {
-      fd = openSync(lock, "wx");
-    } catch {
-      return null;
-    }
+    const fd = acquireStatsLock(lock);
+    if (fd === null) return null;
     try {
       const prev = readCutStats(dir);
       const locked = {
@@ -1100,6 +1300,11 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     }
     renameSync(target, file);
     protectedPath = file;
+    if (basename(file) !== DECISIONS_NAME) {
+      decisionRotationAt.delete(rotationScope.root);
+      decisionUsageBytes.delete(rotationScope.root);
+      decisionUsageMtime.delete(rotationScope.root);
+    }
 
     // Keep the caller's spelling for the permission cache/runner. The opened
     // descriptor and the final path now refer to the same published object.

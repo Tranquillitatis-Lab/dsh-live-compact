@@ -63,6 +63,17 @@ test("the volatile switch controls future preset loads and preserves existing re
   owner.dispose();
 });
 
+test("a preset allowlist only rewrites the selected preset IDs", () => {
+  const host = gateHost();
+  const owner = host.mount();
+  installPresetGate(owner, { takeoverPresets: { get: () => ["standard"] } });
+  const standard = host.load({ id: "standard", plugins: [{ name: STOCK_ENGINE }] });
+  const qq = host.load({ id: "qq-chat-v2", plugins: [{ name: STOCK_ENGINE }] });
+  assert.equal(standard.plugins[0].name, "dsh-live-compact");
+  assert.equal(qq.plugins[0].name, STOCK_ENGINE);
+  owner.dispose();
+});
+
 test("a disabled root gate is not re-enabled by a nested engine", () => {
   const host = gateHost();
   const owner = host.mount();
@@ -97,6 +108,41 @@ test("isolated compaction groups replace stock in place without a preset id", ()
   assert.deepEqual(rewritten.slice(1), rows.slice(1));
   assert.deepEqual(rows, original);
   assert.equal(rewritePresetConfig(rows, false, {}, groupEntry)[0], rows[0]);
+});
+
+test("a preset allowlist leaves an unselected isolated group unchanged", () => {
+  const rows = groupRows();
+  const unchanged = rewritePresetConfig(rows, true, {}, groupEntry, ["standard"]);
+  assert.equal(unchanged, rows);
+  assert.equal(unchanged[0].name, STOCK_ENGINE);
+});
+
+test("a group inherits the outer preset ID for allowlist selection", () => {
+  const rows = groupRows();
+  const selected = rewritePresetConfig(rows, true, {}, { ...groupEntry, presetId: "standard" }, ["standard"]);
+  assert.equal(selected[0].name, "dsh-live-compact");
+});
+
+test("a nested group follows parent.fiber for allowlist selection", () => {
+  const host = gateHost();
+  const owner = host.mount();
+  installPresetGate(owner, { takeoverPresets: { get: () => ["standard"] } });
+  const rows = groupRows();
+  const nested = { entry: { options: groupEntry }, parent: { fiber: { entry: { options: { id: "standard" } } } } };
+  const selected = host.load(rows, nested);
+  assert.equal(selected[0].name, "dsh-live-compact");
+  owner.dispose();
+});
+
+test("a nested group follows an arbitrary outer preset ID", () => {
+  const host = gateHost();
+  const owner = host.mount();
+  installPresetGate(owner, { takeoverPresets: { get: () => ["deep-ptc"] } });
+  const rows = groupRows();
+  const nested = { entry: { options: groupEntry }, parent: { fiber: { entry: { options: { id: "deep-ptc" } } } } };
+  const selected = host.load(rows, nested);
+  assert.equal(selected[0].name, "dsh-live-compact");
+  owner.dispose();
 });
 
 test("ordinary arrays and non-isolated groups are not takeover targets", () => {

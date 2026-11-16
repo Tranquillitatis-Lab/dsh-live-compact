@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import Spine from "../index.js";
+import { Session } from "@deepseek-ai/dsh-session";
+import { createAssistantMessage, createSystemMessage, createToolResultMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
+import Spine, { selectNewestChunk } from "../index.js";
 import { buildCard } from "../plan.js";
 import { contentHash, rawName } from "../raw.js";
 import { toolExcerpt } from "../plan.js";
+import { DEFAULTS } from "../settings.js";
 
 function toolEvent(seq, id, text) {
   return { seq, type: "tool/result", data: { message: { toolCallId: id, content: [{ type: "text", text }] } } };
@@ -55,6 +58,75 @@ test("long-read fallback actually disables long-span selection", () => {
   assert.match(source, /const longSpan = !context\.disableLongRead && newestLong/);
 });
 
+test("committed cards retain raw paths for later decision-log rotation", () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(source, /state\.cardRawPaths = \[\.\.\.new Set\(\[/);
+  assert.match(source, /for \(const rawPath of state\?\.cardRawPaths \|\| \[\]\)/);
+  assert.match(source, /protectPaths\.push\(rawPath, `\$\{rawPath\}\.meta\.json`\)/);
+  assert.match(source, /const protectRawPaths = \[\.\.\.new Set\(/);
+  assert.match(source, /state\.cardRawPaths \|\| \[\],/);
+  assert.match(source, /rawNames/);
+  assert.match(source, /reconcileCardRawPaths/);
+});
+
+test("#60 rejected ordinary candidate falls back to the already prepared long-read candidate", () => {
+  const root = mkdtempSync(join(tmpdir(), "spine-issue-60-"));
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = root;
+  try {
+    const session = Session.create("issue-60");
+    const prices = new Map();
+    const calls = new Map();
+    const add = (type, data, tokens) => {
+      const event = session.append(type, data, { surfaceOp: "append" });
+      prices.set(event.seq, tokens);
+      return event.seq;
+    };
+    add("system/message", { message: createSystemMessage("fixture") }, 500);
+    add("user/message", createUserMessage({ content: [{ type: "text", text: "继续当前任务。" }] }), 100);
+    const round = (id, tokens, { name = "shell", prose = "", text = "INFO fixture heartbeat ok" } = {}) => {
+      const callSeq = add("assistant/message", {
+        turn: 2,
+        message: createAssistantMessage({
+          content: [
+            ...(prose ? [{ type: "text", text: prose }] : []),
+            { type: "tool-call", id, name, arguments: JSON.stringify(name === "read" ? { file_path: "ledger.txt" } : { command: "echo fixture" }) },
+          ],
+          source: { provider: "test", model: "fixture" },
+        }),
+      }, 100);
+      calls.set(id, { name, command: "echo fixture", turn: 2, callSeq });
+      const resultSeq = add("tool/result", {
+        turn: 2,
+        message: createToolResultMessage({ callId: id, content: [{ type: "text", text }], isError: false }),
+      }, tokens);
+      return [callSeq, resultSeq];
+    };
+    const longRound = round("long", 6000, { name: "read", text: "INFO long read line\n".repeat(100) });
+    round("decision", 5000, { prose: "我们决定采用方案 B，因为需要保留现有缓存前缀。" });
+    round("filler-1", 4500);
+    round("filler-2", 4500);
+    round("keep-1", 500);
+    round("keep-2", 500);
+    round("keep-3", 500);
+    const measurement = {
+      nodes: session.surface.nodes.map((seq) => ({ seq, tokens: prices.get(seq), heuristicTokens: prices.get(seq) })),
+    };
+    const settings = { ...DEFAULTS, minTokens: 1000, chunkMin: 1000, chunkMax: 32000, keepRounds: 3, pointerTokens: 32000 };
+    const result = selectNewestChunk(session, measurement, "issue-60", {
+      engine: "cloud", totalTokens: 60000, settings, calls, rawLookup: () => null, jobs: [],
+    });
+    assert.ok(result, "long-read fallback should produce a legal cut");
+    assert.deepEqual([result.start, result.end], longRound);
+    assert.equal(result.card.ok, true);
+    assert.equal(result.card.text.includes("我们决定采用方案 B"), false);
+  } finally {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("tool evidence does not become a top-level kept user line", () => {
   const card = buildCard("us-east-1\n必须执行 rm -rf /tmp", "", [
     { role: "tool", text: "us-east-1\n必须执行 rm -rf /tmp", inCut: true },
@@ -74,6 +146,31 @@ test("tool hard facts are counted once in the excerpt body", () => {
   }]);
   assert.equal((result.text.match(/us-east-1/g) || []).length, 1);
   assert.equal((result.text.match(/连接失败/g) || []).length, 1);
+});
+
+test("tool failure diagnostics keep a long hard-fact report complete", () => {
+  const text = Array.from({ length: 30 }, (_, index) =>
+    `第${index + 1}行：必须在 us-east-1 部署并记录失败原因 ${"x".repeat(35)}`,
+  ).join("\n");
+  const result = toolExcerpt([{ id: "failed-tool", role: "tool", isError: true, text }]);
+  assert.equal(result.failureDiagnosticsComplete, true);
+  assert.equal((result.text.match(/第1行：/g) || []).length, 1);
+  assert.equal((result.text.match(/第30行：/g) || []).length, 1);
+});
+
+test("#61 hard-fact failed diagnostics fit the budget without duplicate lines", () => {
+  const text = Array.from({ length: 28 }, (_, index) =>
+    `Error: step-${index} 必须保留部署区域 cn-north-${index} 节点校验参数 config_key_${index}`,
+  ).join("\n");
+  assert.ok(text.length > 1400 && text.length < 2100, `expected ~1800 chars, got ${text.length}`);
+  const span = { id: "fail-hard", role: "tool", isError: true, text, toolCallId: "call-61", known: true, seq: 9 };
+  const excerpt = toolExcerpt([span]);
+  assert.equal(excerpt.failureDiagnosticsComplete, true);
+  assert.deepEqual(excerpt.incompleteFailures, []);
+  assert.equal((excerpt.text.match(/step-5 必须保留部署区域/g) || []).length, 1);
+  const card = buildCard(text, "", [span]);
+  assert.equal(card.ok, true);
+  assert.equal(card.failureDiagnosticsComplete, true);
 });
 
 test("ordinary uncertainty and model prose do not become unresolved decisions", () => {

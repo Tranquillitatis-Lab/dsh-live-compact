@@ -115,6 +115,382 @@ test("turn-stopping runs maintenance before a disposed CLI agent can swallow it"
   assert.ok(chunks.length >= 1, `expected a turn-stopping cut, got ${chunks.length}`);
 });
 
+test("turn-stopping does not mark a boundary when maintenance fails", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "stopping-failed",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    turnEndEvent: null,
+    lastStoppingTurnEndSeq: -1,
+  };
+  const events = [{ seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } }];
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.finishTurn = async () => false;
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  assert.equal(state.lastStoppingTurnEndSeq, -1);
+  assert.equal(state.turnEndSeq, 7);
+});
+
+test("turn-stopping keeps a failed cut retryable", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 24000 }));
+  const { engine, ctx } = h.engine({ minTokens: 20000 }, "cloud");
+  h.capture(engine, f);
+  const agent = f.agent();
+  engine.stateFor(agent);
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  engine.flushPendingCaptures = async () => {};
+  ctx.tokenMeter.measure = () => ({ nodes: f.measure().nodes, totalTokens: 60000, totalHeuristicTokens: 60000 });
+  engine.commitSelectedSpan = async () => false;
+  f.user("失败切刀必须保留下一次边界重试。");
+  for (let round = 0; round < 8; round += 1) f.round(`failed-cut-${round}`, { tokens: 4000, turn: 2 });
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  assert.equal(engine.stateFor(agent).lastStoppingTurnEndSeq, -1);
+});
+
+test("failed catch-up keeps the stopping owner barrier", () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "failed-owner",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceOwner: {},
+    turnEndPending: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [] } };
+  engine.stateFor = () => state;
+  engine.pendingCatchups = new Map();
+  engine.pendingCatchupJobs = new Set();
+  const task = {
+    key: state.key,
+    agent,
+    finished: false,
+    failed: true,
+    promise: Promise.resolve(),
+    resolve() {},
+  };
+  engine.finishCaptureCatchup(task);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+  assert.equal(state.turnEndPending, true);
+});
+
+test("late turn-stopping cleanup does not clear a newer maintenance owner", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "late-owner",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+  };
+  let releaseCatchup;
+  const catchup = new Promise((resolve) => { releaseCatchup = resolve; });
+  const agent = {
+    session: { id: "late-owner", snapshotEvents: () => Array.from({ length: 129 }, (_, seq) => ({ seq })) },
+  };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: false, promise: catchup });
+  engine.finishTurn = async () => {};
+  const oldRun = engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  await setImmediate();
+  const newOwner = {};
+  const newAbort = new AbortController();
+  state.maintenanceOwner = newOwner;
+  state.maintenanceAbort = newAbort;
+  state.warming = true;
+  state.pendingMaintenance = true;
+  releaseCatchup();
+  await oldRun;
+  assert.equal(state.maintenanceOwner, newOwner);
+  assert.equal(state.maintenanceAbort, newAbort);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+});
+
+test("turn-stopping forwards a late abort and does not hold the caller", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "abort-stopping",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+  };
+  let release;
+  const catchup = new Promise((resolve) => { release = resolve; });
+  const events = Array.from({ length: 129 }, (_, seq) => ({ seq }));
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: false, promise: catchup });
+  engine.finishTurn = async () => { throw new Error("finishTurn must not run after abort"); };
+  const controller = new AbortController();
+  const run = engine.runTurnStoppingMaintenance(agent, controller.signal);
+  await setImmediate();
+  controller.abort({ kind: "disposed" });
+  let timer;
+  try {
+    await Promise.race([
+      run,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("abort was not forwarded")), 100); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(state.maintenanceAbort.signal.aborted, true);
+  release();
+  await Promise.allSettled([state.maintenanceJob]);
+});
+
+test("pre-step timeout keeps the running maintenance fenced", async () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "prestep-timeout",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceAbort: new AbortController(),
+    maintenanceJob: new Promise(() => {}),
+  };
+  const agent = { session: { id: state.key } };
+  engine.stateFor = () => state;
+  engine.pendingCatchups = new Map();
+  engine.prestepWaitTimeoutMs = 5;
+  engine.recordDecision = () => {};
+  engine.ctx = { logger: { warn() {} } };
+  await engine.waitForMaintenance(agent);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+  assert.ok(state.maintenanceAbort.signal.aborted);
+  assert.ok(state.maintenanceJob);
+});
+
+test("catch-up retry defers behind an active turn-stopping owner", () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "retry-owner",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceOwner: {},
+    turnEndPending: false,
+  };
+  const agent = { session: { id: state.key } };
+  let scheduled = 0;
+  engine.stateFor = () => state;
+  engine.standDown = () => false;
+  engine.scheduleMaintenanceRetry = () => { scheduled += 1; };
+  engine.pendingCatchups = new Map([[state.key, {}]]);
+  engine.pendingCatchupJobs = new Map();
+  const task = {
+    key: state.key,
+    agent,
+    finished: false,
+    captureBlocked: true,
+    retryRequested: false,
+    maintenanceRequested: false,
+    promise: Promise.resolve(),
+    resolve() {},
+  };
+  engine.finishCaptureCatchup(task);
+  assert.equal(scheduled, 0);
+  assert.equal(state.turnEndPending, true);
+  assert.equal(state.maintenanceOwner != null, true);
+});
+
+test("owner keeps the barrier when catch-up temporarily lacks a completed boundary", () => {
+  const engine = Object.create(Spine.prototype);
+  const state = {
+    key: "owner-boundary-gap",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceOwner: {},
+    turnEndPending: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [] } };
+  engine.stateFor = () => state;
+  engine.standDown = () => false;
+  engine.pendingCatchups = new Map([[state.key, {}]]);
+  engine.pendingCatchupJobs = new Map();
+  const task = {
+    key: state.key,
+    agent,
+    finished: false,
+    captureBlocked: false,
+    retryRequested: false,
+    maintenanceRequested: false,
+    promise: Promise.resolve(),
+    resolve() {},
+  };
+  engine.finishCaptureCatchup(task);
+  assert.equal(state.warming, true);
+  assert.equal(state.pendingMaintenance, true);
+  assert.equal(state.turnEndPending, true);
+});
+
+test("turn/end does not run a second maintenance pass after turn-stopping handled its boundary", async () => {
+  const engine = Object.create(Spine.prototype);
+  const event = { seq: 7, type: "turn/end", data: { reason: { kind: "completed" } } };
+  const state = {
+    key: "same-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [event] } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; return true; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  engine.scheduleTurnEndMaintenance(agent, event.seq, event);
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, event.seq);
+});
+
+test("turn/end arriving after turn-stopping is deduplicated by the active turn/start", async () => {
+  const engine = Object.create(Spine.prototype);
+  const events = [{ seq: 1, type: "turn/start", data: { turn: 2 } }];
+  const state = {
+    key: "reverse-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    lastStoppingTurnStartSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; return true; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  events.push({ seq: 2, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } });
+  engine.scheduleTurnEndMaintenance(agent, 2, events[1]);
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, 2);
+});
+
+test("a newer turn/start does not make an older delayed turn/end run twice", async () => {
+  const engine = Object.create(Spine.prototype);
+  const events = [{ seq: 1, type: "turn/start", data: { turn: 2 } }];
+  const state = {
+    key: "delayed-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    lastStoppingTurnStartSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; return true; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  events.push(
+    { seq: 3, type: "turn/start", data: { turn: 3 } },
+    { seq: 2, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } },
+  );
+  engine.scheduleTurnEndMaintenance(agent, 2, events.at(-1));
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, 2);
+});
+
+test("catch-up retry waits for an existing maintenance job instead of spinning", async () => {
+  const engine = Object.create(Spine.prototype);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const state = {
+    key: "retry-wait",
+    warming: true,
+    pendingMaintenance: true,
+    maintenanceOwner: null,
+    maintenanceAbort: null,
+    maintenanceJob: pending,
+    retryScheduled: false,
+    retryWaitingJob: null,
+    turnEndPending: false,
+    turnEndSeq: 2,
+    turnEndEvent: { seq: 2, type: "turn/end", data: { reason: { kind: "completed" } } },
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => [state.turnEndEvent] } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.pendingCuts = new Set();
+  engine.finishTurn = async () => true;
+  engine.scheduleMaintenanceRetry(agent);
+  await setImmediate();
+  assert.equal(state.retryWaitingJob, pending);
+  release();
+  state.maintenanceJob = null;
+  await setImmediate();
+  await setImmediate();
+  assert.equal(state.retryWaitingJob, null);
+  assert.equal(state.maintenanceJob, null);
+});
+
 test("agent/created seeds the live agent before the first turn/end", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));

@@ -140,6 +140,7 @@ test("#62 captureBlocked schedules a maintenance retry", async (t) => {
   engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
   await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
   await setImmediate();
+  await setImmediate();
   assert.equal(scheduled, 1);
 });
 
