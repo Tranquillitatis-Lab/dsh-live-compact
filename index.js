@@ -994,6 +994,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const prefix = `${key}\0`;
     const protectPaths = [];
     if (state?.lastCardPath) protectPaths.push(state.lastCardPath);
+    for (const rawPath of state?.cardRawPaths || []) {
+      if (!rawPath) continue;
+      protectPaths.push(rawPath, `${rawPath}.meta.json`);
+    }
     const liveIds = new Set();
     const session = state?.liveAgent?.session;
     for (const seq of session?.surface?.nodes || []) {
@@ -1051,6 +1055,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       lastStoppingTurnStartSeq: -1,
       rawCutRetryAttempts: 0,
       lastCardPath: "",
+      cardRawPaths: [],
     };
     this.sessionState.set(key, state);
     if (this.sessionState.size > MAX_TRACKED_SESSIONS) {
@@ -1875,7 +1880,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       });
     }
     const summarized = await this.summarize({ messages, liveCompact: { card: chunk.card } }, agent, signal);
-    if (typeof this.stateFor === "function") this.stateFor(agent).lastCardPath = chunk.card?.shadowFile || "";
+    if (typeof this.stateFor === "function") {
+      const state = this.stateFor(agent);
+      state.lastCardPath = chunk.card?.shadowFile || "";
+      state.cardRawPaths = [...new Set([...(state.cardRawPaths || []), ...(chunk.card?.rawPaths || [])])];
+    }
     signal?.throwIfAborted();
     if (this.standDown?.()) return false;
     assertCurrentSpan(shadowedSeqs);

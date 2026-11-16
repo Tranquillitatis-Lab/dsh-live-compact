@@ -58,6 +58,13 @@ test("long-read fallback actually disables long-span selection", () => {
   assert.match(source, /const longSpan = !context\.disableLongRead && newestLong/);
 });
 
+test("committed cards retain raw paths for later decision-log rotation", () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(source, /state\.cardRawPaths = \[\.\.\.new Set\(\[/);
+  assert.match(source, /for \(const rawPath of state\?\.cardRawPaths \|\| \[\]\)/);
+  assert.match(source, /protectPaths\.push\(rawPath, `\$\{rawPath\}\.meta\.json`\)/);
+});
+
 test("#60 rejected ordinary candidate falls back to the already prepared long-read candidate", () => {
   const root = mkdtempSync(join(tmpdir(), "spine-issue-60-"));
   const previous = process.env.SPINE_SHADOW_DIR;
