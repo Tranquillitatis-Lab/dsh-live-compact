@@ -45,7 +45,6 @@ const shadowWarnings = new Set();
 const DECISION_ROTATION_INTERVAL_MS = 1000;
 const decisionRotationAt = new Map();
 const decisionUsageBytes = new Map();
-const decisionUsageMtime = new Map();
 
 // No shared byte ledger. A positively dead holder leaves an immutable fence:
 // recovery enables the original shared scans, never ownership or an estimate.
@@ -514,9 +513,8 @@ export function recoverTimedOutShadowWorker(root, owner) {
     } catch (error) {
       if (error?.code !== "ENOENT") return false;
     }
-    try { unlinkSync(join(real, ROTATION_SHARED)); } catch (error) {
-      if (error?.code !== "ENOENT") return false;
-    }
+    // Keep the shared fence immutable. It may represent another participant;
+    // recovery of this worker must never re-enable an exclusive fast path.
     syncRotationDirectory(real);
     return true;
   } catch {
@@ -682,11 +680,8 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
       const incomingBytes = Buffer.byteLength(body, "utf8");
       const cap = shadowMaxBytes();
       let knownUsage = decisionUsageBytes.get(rotationKey);
-      let rootMtime = null;
-      try { rootMtime = statSync(rotationKey).mtimeMs; } catch {}
-      const knownMtime = decisionUsageMtime.get(rotationKey);
       const fastPath = now - lastRotation < DECISION_ROTATION_INTERVAL_MS &&
-        Number.isSafeInteger(knownUsage) && rootMtime !== null && knownMtime === rootMtime;
+        Number.isSafeInteger(knownUsage);
       if (!fastPath) {
         const rotation = rotateShadowLocked({
           incomingBytes,
@@ -699,7 +694,6 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
         decisionRotationAt.set(rotationKey, now);
         knownUsage = rotation.used;
         decisionUsageBytes.set(rotationKey, knownUsage);
-        try { decisionUsageMtime.set(rotationKey, statSync(rotationKey).mtimeMs); } catch {}
       } else if (Number.isSafeInteger(knownUsage) && knownUsage + incomingBytes > cap) {
         return false;
       }
@@ -726,7 +720,6 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
           shadowUsage.bytes += Buffer.byteLength(body, "utf8");
         }
         decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
-        if (rootMtime !== null) decisionUsageMtime.set(rotationKey, rootMtime);
       } else {
         writeShadowFileLocked(path, body, {}, {
           exclusive: false,
@@ -735,7 +728,6 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
           accessPath: file,
         });
         decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
-        if (rootMtime !== null) decisionUsageMtime.set(rotationKey, rootMtime);
       }
       return true;
     });
@@ -1302,7 +1294,6 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     if (basename(file) !== DECISIONS_NAME) {
       decisionRotationAt.delete(rotationScope.root);
       decisionUsageBytes.delete(rotationScope.root);
-      decisionUsageMtime.delete(rotationScope.root);
     }
 
     // Keep the caller's spelling for the permission cache/runner. The opened

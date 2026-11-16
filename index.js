@@ -17,8 +17,8 @@ import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, 
 import { createRequire } from "node:module";
 import { setImmediate as scheduleImmediate } from "node:timers";
 import { Worker } from "node:worker_threads";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
 import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, isToolFailure, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
@@ -44,6 +44,44 @@ import { inCooldown, skipLiveOfficialCompaction } from "./cooldown.js";
 import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
 
 const PI_AI_CATALOG = "@earendil-works/pi-ai/providers/all";
+const PI_AI_PACKAGE = "@earendil-works/pi-ai";
+
+function catalogExportTarget(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+  return value.import || value.node || value.default || value.require || "";
+}
+
+function catalogPackageRoots(anchor) {
+  let dir;
+  try { dir = anchor.startsWith("file:") ? dirname(fileURLToPath(anchor)) : dirname(anchor); } catch { return []; }
+  const roots = [];
+  for (let count = 0; count < 12; count += 1) {
+    roots.push(join(dir, "node_modules", PI_AI_PACKAGE));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return roots;
+}
+
+async function importCatalogFromPackage(root) {
+  const packageFile = join(root, "package.json");
+  if (!existsSync(packageFile)) return [];
+  let packageJson;
+  try { packageJson = JSON.parse(readFileSync(packageFile, "utf8")); } catch { return []; }
+  const target = catalogExportTarget(packageJson.exports?.["./providers/all"]);
+  const candidates = target
+    ? [resolvePath(root, target)]
+    : [join(root, "providers", "all.js"), join(root, "providers", "all.mjs"), join(root, "providers", "all", "index.js")];
+  for (const candidate of candidates) {
+    try {
+      const normalized = normalizeCatalogModule(await import(pathToFileURL(candidate).href));
+      if (normalized.length) return normalized;
+    } catch {}
+  }
+  return [];
+}
 
 function normalizeCatalogModule(loaded) {
   const source = loaded?.builtinProviders ? loaded : loaded?.default;
@@ -78,6 +116,10 @@ async function loadPiAiCatalog() {
     if (process.argv[1]) anchors.push(pathToFileURL(process.argv[1]).href);
   } catch {}
   for (const anchor of anchors) {
+    for (const root of catalogPackageRoots(anchor)) {
+      const normalized = await importCatalogFromPackage(root);
+      if (normalized.length) return normalized;
+    }
     try {
       const loaded = createRequire(anchor)(PI_AI_CATALOG);
       const normalized = normalizeCatalogModule(loaded);
@@ -130,6 +172,7 @@ function shadowWorkerFor(root) {
   const removeEntry = () => {
     if (shadowWorkers.get(key) === entry) shadowWorkers.delete(key);
   };
+  entry.removeEntry = removeEntry;
   const scheduleIdleExit = () => {
     if (entry.retired || entry.pending.size || entry.idleTimer) return;
     entry.idleTimer = setTimeout(() => {
@@ -144,7 +187,6 @@ function shadowWorkerFor(root) {
   };
   entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
-    const timedOut = entry.timedOut;
     entry.retired = true;
     if (entry.idleTimer) {
       clearTimeout(entry.idleTimer);
@@ -161,7 +203,7 @@ function shadowWorkerFor(root) {
     entry.pending.clear();
     removeEntry();
     worker.terminate()
-      .then(() => { if (timedOut) recoverTimedOutShadowWorker(entry.root, entry.ownerToken); })
+      .then(() => recoverTimedOutShadowWorker(entry.root, entry.ownerToken))
       .catch(() => {});
   };
   worker.on("message", (message) => {
@@ -225,7 +267,7 @@ function runShadowWorker(payload) {
       // Let the host exit while a blocked filesystem call drains. A bounded
       // recovery removes the poisoned entry later without killing a worker
       // that may still own a rotation lock.
-      entry.worker.unref?.();
+      if ([...entry.pending.values()].every((pending) => pending.timedOut)) entry.worker.unref?.();
       if (!entry.recoveryTimer) {
         entry.recoveryTimer = setTimeout(() => {
           if (entry.retired) return;
@@ -236,7 +278,7 @@ function runShadowWorker(payload) {
             pending.reject(Object.assign(new Error("spine: shadow worker recovery expired"), { code: "ESHADOWWORKER" }));
           }
           entry.pending.clear();
-          removeEntry();
+          entry.removeEntry?.();
           entry.worker.terminate()
             .then(() => recoverTimedOutShadowWorker(entry.root, entry.ownerToken))
             .catch(() => {});
@@ -274,7 +316,9 @@ function failShadowWorker(entry, error) {
   for (const [key, value] of shadowWorkers) {
     if (value === entry) shadowWorkers.delete(key);
   }
-  entry.worker.terminate().catch(() => {});
+  entry.worker.terminate()
+    .then(() => recoverTimedOutShadowWorker(entry.root, entry.ownerToken))
+    .catch(() => {});
 }
 
 function recoveryRetryable(record, dir, toolCallId) {
@@ -348,6 +392,14 @@ function latestCompletedTurnEnd(events) {
   let found = null;
   for (const event of events || []) {
     if (event?.type === "turn/end" && isCuttableTurnEnd(event)) found = event;
+  }
+  return found;
+}
+
+function latestTurnStart(events) {
+  let found = null;
+  for (const event of events || []) {
+    if (event?.type === "turn/start") found = event;
   }
   return found;
 }
@@ -825,8 +877,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     this.persistCapture = true;
     this.catalogPromise = loadPiAiCatalog().then((catalog) => {
       this.catalogCache = catalog;
+      if (!catalog.length) this.catalogPromise = null;
       return catalog;
-    }).catch(() => []);
+    }).catch(() => {
+      this.catalogPromise = null;
+      return [];
+    });
     if (process.env.SPINE_ENGINE_FAIL === "after-super") throw new Error("spine: after super");
     this.liveConfig = config;
     try {
@@ -974,6 +1030,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       turnEndSeq: -1,
       lastMaintenanceTurnEndSeq: -1,
       lastStoppingTurnEndSeq: -1,
+      lastStoppingTurnStartSeq: -1,
       rawCutRetryAttempts: 0,
       lastCardPath: "",
     };
@@ -1001,11 +1058,18 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return;
     }
     if (state.turnEndSeq <= state.lastMaintenanceTurnEndSeq) return;
-    if (state.lastStoppingTurnEndSeq >= 0 && state.turnEndSeq > state.lastStoppingTurnEndSeq) {
+    const activeStartSeq = latestTurnStart(events)?.seq;
+    const sameStoppingTurn = Number.isInteger(state.lastStoppingTurnStartSeq) &&
+      state.lastStoppingTurnStartSeq >= 0 && Number.isInteger(activeStartSeq)
+      ? state.lastStoppingTurnStartSeq === activeStartSeq
+      : state.lastStoppingTurnEndSeq >= 0 && state.turnEndSeq === state.lastStoppingTurnEndSeq;
+    if (state.lastStoppingTurnStartSeq >= 0 && Number.isInteger(activeStartSeq) && !sameStoppingTurn) {
+      state.lastStoppingTurnStartSeq = -1;
       state.lastStoppingTurnEndSeq = -1;
     }
-    if (state.lastStoppingTurnEndSeq >= 0 && state.turnEndSeq === state.lastStoppingTurnEndSeq) {
+    if (sameStoppingTurn) {
       state.lastMaintenanceTurnEndSeq = state.turnEndSeq;
+      state.lastStoppingTurnStartSeq = -1;
       state.lastStoppingTurnEndSeq = -1;
       return;
     }
@@ -1014,7 +1078,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     }
     state.warming = true;
     let job;
-    job = this.finishTurn(agent, events, { deferCapture: true })
+    job = (async () => {
+      await null;
+      return this.finishTurn(agent, events, { deferCapture: true });
+    })()
       .catch((error) => noteShadowWarning(this.ctx?.logger, error))
       .finally(() => {
         if (!state.pendingMaintenance) state.warming = false;
@@ -1042,12 +1109,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const maintenanceAbort = new AbortController();
     state.maintenanceOwner = owner;
     state.maintenanceAbort = maintenanceAbort;
-    const job = (async () => {
+    let job;
+    job = (async () => {
+      await null;
       try {
         const settings = readSettings(this.liveConfig);
         const events = agent.session.snapshotEvents();
         const stoppingEnd = latestCompletedTurnEnd(events);
         const stoppingSeq = stoppingEnd?.seq;
+        const stoppingStartSeq = latestTurnStart(events)?.seq;
         if (Number.isInteger(stoppingSeq)) {
           state.turnEndSeq = Number.isInteger(state.turnEndSeq) ? Math.max(state.turnEndSeq, stoppingSeq) : stoppingSeq;
           state.turnEndEvent = stoppingEnd;
@@ -1062,15 +1132,18 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (catchup?.promise && !catchup.finished) await catchup.promise;
         await this.flushPendingCaptures(agent.session);
         const completed = await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
-        if (completed === true && stoppingSeq !== undefined) state.lastStoppingTurnEndSeq = stoppingSeq;
+        if (completed === true && (stoppingSeq !== undefined || stoppingStartSeq !== undefined)) {
+          state.lastStoppingTurnEndSeq = stoppingSeq ?? -1;
+          state.lastStoppingTurnStartSeq = stoppingStartSeq ?? -1;
+        }
       } finally {
+        this.pendingCuts.delete(job);
         if (state.maintenanceOwner === owner) {
           state.warming = false;
           state.pendingMaintenance = false;
           state.maintenanceAbort = null;
           state.maintenanceOwner = null;
           if (state.maintenanceJob === job) state.maintenanceJob = null;
-          this.pendingCuts.delete(job);
           if (state.turnEndPending) {
             state.turnEndPending = false;
             this.scheduleTurnEndMaintenance(agent, state.turnEndSeq);
@@ -1154,6 +1227,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         });
         await Promise.race([settled, aborted]);
         waitSignal.removeEventListener("abort", abort);
+        if (!waitSignal.aborted) await new Promise((resolve) => scheduleImmediate(resolve));
         if (timeoutController.signal.aborted && !signal?.aborted) {
           state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
           if (Number.isInteger(state.turnEndSeq)) {
@@ -1412,6 +1486,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
         return;
       }
+      if (state.maintenanceJob) {
+        scheduleImmediate(() => this.scheduleMaintenanceRetry(agent));
+        return;
+      }
       const events = agent.session.snapshotEvents();
       const done = latestTurnCompleted(events);
       if (!done) {
@@ -1425,14 +1503,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const job = this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true })
         .catch((error) => noteShadowWarning(this.ctx?.logger, error))
         .finally(() => {
-          if (state.maintenanceJob !== job || state.maintenanceAbort !== retryAbort) return;
+          const sameJob = state.maintenanceJob === job && state.maintenanceAbort === retryAbort;
+          this.pendingCuts.delete(job);
+          if (!sameJob) return;
           const requeueBoundary = state.turnEndPending;
           state.turnEndPending = false;
           state.pendingMaintenance = false;
           state.warming = false;
           state.maintenanceAbort = null;
           state.maintenanceJob = null;
-          this.pendingCuts.delete(job);
           if (requeueBoundary) this.scheduleTurnEndMaintenance(agent, state.turnEndSeq, state.turnEndEvent);
         });
       state.maintenanceJob = job;
@@ -1444,7 +1523,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (this.standDown?.()) return null;
     const settings = readSettings(this.liveConfig);
     const state = this.stateFor(agent);
-    if (!state.maintenanceAbort || state.maintenanceAbort.signal.aborted) {
+    if (state.maintenanceAbort?.signal.aborted) return false;
+    if (!state.maintenanceAbort) {
       state.maintenanceAbort = new AbortController();
     }
     const signal = AbortSignal.any([AbortSignal.timeout(30000), state.maintenanceAbort.signal]);
@@ -1457,7 +1537,13 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       // the capture surface. Re-run maintenance without rescanning events.
     } else if (deferCapture) {
       state.pendingMaintenance = true;
-      catchup = this.scheduleCaptureCatchup(agent, ev, settings, { maintenanceRequested: true });
+      try {
+        catchup = this.scheduleCaptureCatchup(agent, ev, settings, { maintenanceRequested: true });
+      } catch (error) {
+        state.pendingMaintenance = false;
+        state.warming = false;
+        throw error;
+      }
     } else {
       if (ev.length > CAPTURE_EVENT_BATCH) {
         catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
@@ -1488,6 +1574,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         // started at that point, so let it finish under the bounded timeout;
         // user/host cancellation reasons still abort the operation.
         const op = maintenanceOperationSignal(agentSignal, signal);
+        if (op.aborted) return;
         const markCompleted = () => {
           if (!op.aborted && !signal.aborted) maintenanceCompleted = true;
         };
@@ -1936,8 +2023,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (!this.catalogPromise) {
       this.catalogPromise = loadPiAiCatalog().then((catalog) => {
         this.catalogCache = catalog;
+        if (!catalog.length) this.catalogPromise = null;
         return catalog;
-      }).catch(() => []);
+      }).catch(() => {
+        this.catalogPromise = null;
+        return [];
+      });
     }
     return this.catalogCache || [];
   }

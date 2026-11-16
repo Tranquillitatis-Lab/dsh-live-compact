@@ -343,6 +343,41 @@ test("turn/end does not run a second maintenance pass after turn-stopping handle
   assert.equal(state.lastMaintenanceTurnEndSeq, event.seq);
 });
 
+test("turn/end arriving after turn-stopping is deduplicated by the active turn/start", async () => {
+  const engine = Object.create(Spine.prototype);
+  const events = [{ seq: 1, type: "turn/start", data: { turn: 2 } }];
+  const state = {
+    key: "reverse-boundary",
+    warming: false,
+    pendingMaintenance: false,
+    maintenanceAbort: null,
+    maintenanceOwner: null,
+    maintenanceJob: null,
+    turnEndPending: false,
+    turnEndSeq: -1,
+    lastMaintenanceTurnEndSeq: -1,
+    lastStoppingTurnEndSeq: -1,
+    lastStoppingTurnStartSeq: -1,
+    turnEndScheduled: false,
+  };
+  const agent = { session: { id: state.key, snapshotEvents: () => events } };
+  engine.standDown = () => false;
+  engine.stateFor = () => state;
+  engine.liveConfig = {};
+  engine.pendingCuts = new Set();
+  engine.flushPendingCaptures = async () => {};
+  engine.captureNew = () => {};
+  engine.scheduleCaptureCatchup = () => ({ finished: true, progressed: false, retryRequested: false });
+  let finishes = 0;
+  engine.finishTurn = async () => { finishes += 1; return true; };
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  events.push({ seq: 2, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } });
+  engine.scheduleTurnEndMaintenance(agent, 2, events[1]);
+  await setImmediate();
+  assert.equal(finishes, 1);
+  assert.equal(state.lastMaintenanceTurnEndSeq, 2);
+});
+
 test("agent/created seeds the live agent before the first turn/end", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture({ totalTokens: 24000 }));
