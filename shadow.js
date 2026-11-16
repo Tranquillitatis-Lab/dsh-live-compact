@@ -303,7 +303,13 @@ function releaseRotationGuard(root, identity, guard) {
 
 function acquireRotationGuard(root, identity) {
   const lock = join(root, ROTATION_LOCK);
-  const record = { pid: process.pid, id: rotationOwner };
+  // A host transaction gets a fresh fence token every time. Managed workers
+  // keep their stable owner token so a timed-out parent can recover exactly
+  // the worker-held lock without touching another transaction.
+  const transactionId = workerData?.spineWorker === 1
+    ? rotationOwner
+    : randomBytes(24).toString("hex");
+  const record = { pid: process.pid, id: transactionId };
   let guard;
   try {
     const published = publishRotationRecord(lock, record);
