@@ -224,14 +224,9 @@ function runShadowWorker(payload) {
       if (!entry.recoveryTimer) {
         entry.recoveryTimer = setTimeout(() => {
           if (entry.retired) return;
-          entry.retired = true;
-          entry.timedOut = false;
-          for (const pending of entry.pending.values()) {
-            if (pending.timer) clearTimeout(pending.timer);
-            pending.reject(Object.assign(new Error("spine: shadow worker recovery expired"), { code: "ESHADOWWORKER" }));
-          }
-          entry.pending.clear();
-          removeEntry();
+          // Keep the entry and pending task fenced until the old worker
+          // responds or exits; its process-shared PID may still own a lock.
+          entry.recoveryTimer = null;
           entry.worker.unref?.();
         }, SHADOW_WORKER_RECOVERY_MS);
         entry.recoveryTimer.unref?.();

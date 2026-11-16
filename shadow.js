@@ -692,6 +692,7 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
           unlink: unlinkSync,
           accessPath: file,
         });
+        decisionUsageBytes.set(rotationKey, (knownUsage ?? 0) + incomingBytes);
       }
       return true;
     });
