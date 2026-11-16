@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -132,6 +132,36 @@ test("decision capacity rotation protects the committed card backup", () => {
     if (previous === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
     else process.env.SPINE_SHADOW_MAX_BYTES = previous;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shared decision capacity remeasures a sibling session write", () => {
+  const root = mkdtempSync(join(tmpdir(), "spine-decision-shared-cap-"));
+  const first = join(root, "first");
+  const sibling = join(root, "sibling");
+  const previousDir = process.env.SPINE_SHADOW_DIR;
+  const previousSingle = process.env.SPINE_SHADOW_SINGLE_PROCESS;
+  const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+  try {
+    mkdirSync(first, { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, "owner"), String(process.pid));
+    process.env.SPINE_SHADOW_DIR = root;
+    delete process.env.SPINE_SHADOW_SINGLE_PROCESS;
+    process.env.SPINE_SHADOW_MAX_BYTES = "256";
+    assert.equal(appendDecision(root, { sid: "first", phase: "before-sibling" }), true);
+    // The sibling directory already exists, so this write does not change the
+    // root mtime. Shared/default roots must still remeasure its bytes.
+    writeFileSync(join(sibling, "raw-0123456789abcdef.txt"), "r".repeat(200));
+    assert.equal(appendDecision(root, { sid: "first", phase: "after-sibling" }), false);
+  } finally {
+    if (previousDir === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previousDir;
+    if (previousSingle === undefined) delete process.env.SPINE_SHADOW_SINGLE_PROCESS;
+    else process.env.SPINE_SHADOW_SINGLE_PROCESS = previousSingle;
+    if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+    else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

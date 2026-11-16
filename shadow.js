@@ -684,7 +684,9 @@ export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
       let rootMtime = null;
       try { rootMtime = statSync(rotationKey).mtimeMs; } catch {}
       const knownMtime = decisionUsageMtime.get(rotationKey);
-      const fastPath = now - lastRotation < DECISION_ROTATION_INTERVAL_MS &&
+      const fastPath = rotationScope.exclusive && shadowUsage?.root === rotationKey &&
+        shadowUsage?.identity === rotationScope.identity &&
+        now - lastRotation < DECISION_ROTATION_INTERVAL_MS &&
         Number.isSafeInteger(knownUsage) && rootMtime !== null && knownMtime === rootMtime;
       if (!fastPath) {
         const rotation = rotateShadowLocked({
