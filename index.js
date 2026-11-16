@@ -1601,7 +1601,6 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         // started at that point, so let it finish under the bounded timeout;
         // user/host cancellation reasons still abort the operation.
         const op = maintenanceOperationSignal(agentSignal, signal);
-        if (op.aborted) return;
         const markCompleted = () => {
           if (!op.aborted && !signal.aborted) maintenanceCompleted = true;
         };
@@ -1622,7 +1621,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         }
         // Restored cards establish a baseline; a live card still skips once,
         // even when maintenance or engine construction is delayed.
-        if (skipLiveOfficialCompaction(agent.session)) {
+        if (!op.aborted && skipLiveOfficialCompaction(agent.session)) {
           this.recordDecision(state, { phase: "maintenance-skip", reason: "official-checkpoint" });
           this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
           settleTurnBaseline();
