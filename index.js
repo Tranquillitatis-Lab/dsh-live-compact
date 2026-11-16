@@ -2683,7 +2683,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const card = input?.liveCompact?.card;
       if (card?.needsBackup && !card.shadowFile) throw new Error("spine: omit refused; backup path missing");
       const restored = this.restoreRawMessages(input.messages, state.key);
-      await this.saveShadowAsync(restored, true, card?.shadowFile, state.key, card?.rawPaths || []);
+      const protectRawPaths = [...new Set([...(state.cardRawPaths || []), ...(card?.rawPaths || [])])];
+      await this.saveShadowAsync(restored, true, card?.shadowFile, state.key, protectRawPaths);
       if (card?.needsBackup && !existsSync(card.shadowFile)) throw new Error("spine: shadow backup was not written");
       const text = backupClaimOk(restored) ? decision.text : withoutFullBackupClaim(decision.text, card?.shadowFile);
       const block = { type: "text", text };
@@ -2696,6 +2697,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         false,
         officialShadowFile,
         state.key,
+        state.cardRawPaths || [],
       );
       state.lastCardPath = officialShadowFile;
     } catch (error) {

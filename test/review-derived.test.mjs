@@ -63,6 +63,8 @@ test("committed cards retain raw paths for later decision-log rotation", () => {
   assert.match(source, /state\.cardRawPaths = \[\.\.\.new Set\(\[/);
   assert.match(source, /for \(const rawPath of state\?\.cardRawPaths \|\| \[\]\)/);
   assert.match(source, /protectPaths\.push\(rawPath, `\$\{rawPath\}\.meta\.json`\)/);
+  assert.match(source, /const protectRawPaths = \[\.\.\.new Set\(/);
+  assert.match(source, /state\.cardRawPaths \|\| \[\],/);
 });
 
 test("#60 rejected ordinary candidate falls back to the already prepared long-read candidate", () => {
