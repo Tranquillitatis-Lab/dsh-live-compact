@@ -44,6 +44,9 @@ test("P1 Thunder send-less facts preserve their source role", () => {
 
 test("P1 turn baseline settles on an early maintenance return", () => {
   const source = String(Spine.prototype.finishTurn);
-  assert.match(source, /settleTurnBaseline\(\);[\s\S]{0,120}?markCompleted\(\);\n\s+return;/);
+  assert.equal(
+    (source.match(/settleTurnBaseline\(\);\n\s+markCompleted\(\);\n\s+return;/g) || []).length,
+    3,
+  );
   assert.match(source, /state\.maxTurnGrowth = 0;/);
 });
