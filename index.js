@@ -144,6 +144,7 @@ function shadowWorkerFor(root) {
   };
   entry.scheduleIdleExit = scheduleIdleExit;
   const fail = (error) => {
+    const timedOut = entry.timedOut;
     entry.retired = true;
     if (entry.idleTimer) {
       clearTimeout(entry.idleTimer);
@@ -159,7 +160,9 @@ function shadowWorkerFor(root) {
     }
     entry.pending.clear();
     removeEntry();
-    worker.terminate().catch(() => {});
+    worker.terminate()
+      .then(() => { if (timedOut) recoverTimedOutShadowWorker(entry.root, entry.ownerToken); })
+      .catch(() => {});
   };
   worker.on("message", (message) => {
     const task = entry.pending.get(message?.id);
@@ -1127,7 +1130,22 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (state.maintenanceJob) jobs.push(state.maintenanceJob);
         const catchup = this.pendingCatchups.get(state.key);
         if (catchup?.promise) jobs.push(catchup.promise);
-        if (!jobs.length) break;
+        if (!jobs.length) {
+          if (!(state.pendingMaintenance || state.warming || state.retryScheduled)) break;
+          await new Promise((resolve) => scheduleImmediate(resolve));
+          if (timeoutController.signal.aborted && !signal?.aborted) {
+            state.maintenanceAbort?.abort({ kind: "prestep-timeout" });
+            if (Number.isInteger(state.turnEndSeq)) {
+              state.lastMaintenanceTurnEndSeq = state.turnEndSeq - 1;
+              state.turnEndPending = true;
+              this.scheduleTurnEndMaintenance(agent, state.turnEndSeq, state.turnEndEvent);
+            }
+            this.recordDecision(state, { phase: "prestep", result: "timeout", timeoutMs });
+            this.ctx.logger?.warn?.(`spine: maintenance wait exceeded ${timeoutMs}ms; letting provider request continue`);
+            return;
+          }
+          continue;
+        }
         const settled = Promise.allSettled(jobs);
         let abort;
         const aborted = new Promise((resolve) => {
