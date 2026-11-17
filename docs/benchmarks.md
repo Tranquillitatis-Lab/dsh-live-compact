@@ -12,6 +12,12 @@
 
 ![OpenCode Aider / Web-Bench 对照](benchmarks-opencode-2026-11-09.png)
 
+## 1.1.12 DSH 三方 GLM-5.3 Flash WebUniverse 20
+
+最新的 DSH 原版、DSH Billion 与 Live Compact 1.1.12 三方对照见 [`benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.md`](benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.md)，结构化逐题数据见 [`benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.json`](benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.json)，配图见 [`benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.png`](benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.png)。
+
+这组固定 20 题中，Live Compact 1.1.12 + GLM 通过 18/20、387/391 rubric，真实小切 23 次，峰值 98,325；Billion 的真实小切没有按同一计数器采集。1.1.12 的 GLM 复测使用 `maxTokens=16,384`，墙钟含模型长输出与重试时间。
+
 ## 1.1.7 GLM-5.3 Flash Web-Bench React 20
 
 这是 2026-11-13 在同一 fixture（`7b31ca2b786eef120dd49ce63dd03d0c0006046d`）上的原版 DSH / Live Compact 对照。两边都完成 20/20 任务和 59/59 浏览器验收。
