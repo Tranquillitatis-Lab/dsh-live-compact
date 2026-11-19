@@ -16,6 +16,8 @@
 
 ![OpenCode Aider / Web-Bench 对照](docs/benchmarks-opencode-2026-11-09.png)
 
+![GPT-6.2 LUNA：DSH 原版、DSH Billion 与 Live Compact 三方对照](docs/benchmark-dsh-three-way-gpt6-luna-2026-11-19.png)
+
 ![1.1.12 GLM-5.3 Flash：DSH 原版、DSH Billion 与 Live Compact 三方对照](docs/benchmark-dsh-three-way-glm53-1.1.12-2026-11-17.png)
 
 
