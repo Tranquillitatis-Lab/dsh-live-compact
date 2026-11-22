@@ -3,3 +3,4 @@ shadow/
 *.log
 .DS_Store
 test/equivalence/work/
+test/memory/.tmp/
