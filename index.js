@@ -1145,6 +1145,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   rawSeenOverride = null;
   callIndexOverride = null;
   captureCursorOverride = null;
+  retryableCaptureSeqsOverride = null;
   pendingCaptures = new Set();
   pendingCaptureJobs = new Map();
   pendingCaptureKeys = new Set();
@@ -1185,7 +1186,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   get retryableCaptureSeqs() {
+    if (this.retryableCaptureSeqsOverride) return this.retryableCaptureSeqsOverride;
     return new SessionBucketMapView(this, "retryableCaptureSeqs", true);
+  }
+
+  set retryableCaptureSeqs(value) {
+    this.retryableCaptureSeqsOverride = value;
   }
 
   tablesFor(key, create = true) {
