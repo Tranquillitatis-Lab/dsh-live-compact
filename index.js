@@ -772,9 +772,28 @@ export function saveShadowImpl(
   access = {},
   rotationIO = {},
 ) {
+  return saveShadowBodyImpl(
+    shadowFileBody(warnKey, shadowBody(messages)),
+    required,
+    shadowFile,
+    warnKey,
+    protectPaths,
+    access,
+    rotationIO,
+  );
+}
+
+function saveShadowBodyImpl(
+  body,
+  required,
+  shadowFile,
+  warnKey = DEFAULT_KEY,
+  protectPaths = [],
+  access = {},
+  rotationIO = {},
+) {
   const shadow = shadowDirectory();
   const file = shadowFilePath(shadowFile, warnKey);
-  const body = shadowFileBody(warnKey, shadowBody(messages));
   const cap = shadowMaxBytes();
   const result = saveShadowTransaction({
     shadow,
@@ -3010,6 +3029,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     });
   }
 
+  restoreShadowBody(messages, key) {
+    const chunks = [];
+    let claimOk = true;
+    for (const message of messages || []) {
+      const id = message?.toolCallId || message?.message?.toolCallId;
+      const restored = id ? restoreToolText(message, this.rawSeen.get(`${key}\0${id}`)) : message;
+      if (messageText(restored).includes(PRUNE_MARKER)) claimOk = false;
+      chunks.push(shadowSections(restored));
+    }
+    return { body: chunks.join("\n\n"), claimOk };
+  }
+
+  async saveFusedRestoreAsync(messages, key, required, shadowFile, protectPaths, access = {}, rotationIO = {}) {
+    const { body, claimOk } = this.restoreShadowBody(messages, key);
+    await this.saveShadowBodyAsync(shadowFileBody(key, body), required, shadowFile, key, protectPaths, access, rotationIO);
+    return claimOk;
+  }
+
   warnShadowFull(key, shadow, used, cap) {
     const id = key || DEFAULT_KEY;
     const bucket = this.tablesFor(id);
@@ -3057,6 +3094,28 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     access = {},
     rotationIO = {},
   ) {
+    const saveBody = this.saveShadowBodyAsync || SpineCompactionEngine.prototype.saveShadowBodyAsync;
+    return saveBody.call(
+      this,
+      shadowFileBody(warnKey, shadowBody(messages)),
+      required,
+      shadowFile,
+      warnKey,
+      protectPaths,
+      access,
+      rotationIO,
+    );
+  }
+
+  async saveShadowBodyAsync(
+    body,
+    required,
+    shadowFile,
+    warnKey = DEFAULT_KEY,
+    protectPaths = [],
+    access = {},
+    rotationIO = {},
+  ) {
     if (this.standDown?.()) return { ok: false, reason: "stand-down" };
     if (!access.runner && (access.platform ?? process.platform) === "win32" && shadowAccessFused()) {
       const error = new Error("spine: shadow permission already failed; backup refused");
@@ -3069,11 +3128,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     // a worker cannot observe those injected failures. Keep test/fault-injection
     // paths synchronous while production uses the complete off-thread txn.
     if (injected || process.env.NODE_TEST_CONTEXT) {
-      return this.saveShadow(messages, required, shadowFile, warnKey, protectPaths, access, rotationIO);
+      return saveShadowBodyImpl.call(this, body, required, shadowFile, warnKey, protectPaths, access, rotationIO);
     }
     const shadow = shadowDirectory();
     const file = shadowFilePath(shadowFile, warnKey);
-    const body = shadowFileBody(warnKey, shadowBody(messages));
     const cap = shadowMaxBytes();
     const result = await runShadowWorker({
       shadow,
@@ -3115,23 +3173,33 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (decision.kind === "local") {
       const card = input?.liveCompact?.card;
       if (card?.needsBackup && !card.shadowFile) throw new Error("spine: omit refused; backup path missing");
-      const restored = this.restoreRawMessages(input.messages, state.key);
       const protectRawPaths = [...new Set([...(state.cardRawPaths || []), ...(card?.rawPaths || [])])];
-      await this.saveShadowAsync(restored, true, card?.shadowFile, state.key, protectRawPaths);
+      let claimOk;
+      if (process.env.SPINE_RESTORE_FUSED === "0") {
+        const restored = this.restoreRawMessages(input.messages, state.key);
+        await this.saveShadowAsync(restored, true, card?.shadowFile, state.key, protectRawPaths);
+        claimOk = backupClaimOk(restored);
+      } else {
+        claimOk = await this.saveFusedRestoreAsync(input.messages, state.key, true, card?.shadowFile, protectRawPaths);
+      }
       if (card?.needsBackup && !existsSync(card.shadowFile)) throw new Error("spine: shadow backup was not written");
-      const text = backupClaimOk(restored) ? decision.text : withoutFullBackupClaim(decision.text, card?.shadowFile);
+      const text = claimOk ? decision.text : withoutFullBackupClaim(decision.text, card?.shadowFile);
       const block = { type: "text", text };
       return { summary: [block], provider: "local", model: "spine-extract", rawOutput: [block] };
     }
     try {
       const officialShadowFile = freshShadowFile("official", state.key);
-      await this.saveShadowAsync(
-        this.restoreRawMessages(input.messages, state.key),
-        false,
-        officialShadowFile,
-        state.key,
-        state.cardRawPaths || [],
-      );
+      if (process.env.SPINE_RESTORE_FUSED === "0") {
+        await this.saveShadowAsync(
+          this.restoreRawMessages(input.messages, state.key),
+          false,
+          officialShadowFile,
+          state.key,
+          state.cardRawPaths || [],
+        );
+      } else {
+        await this.saveFusedRestoreAsync(input.messages, state.key, false, officialShadowFile, state.cardRawPaths || []);
+      }
       state.lastCardPath = officialShadowFile;
     } catch (error) {
       if (
