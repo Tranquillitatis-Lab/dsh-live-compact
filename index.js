@@ -358,6 +358,40 @@ function shadowWorkerFor(root) {
   return entry;
 }
 
+// Optional zero-copy handoff (SPINE_SAVE_TRANSFER=1): encode the
+// body into a freshly allocated ArrayBuffer and move it to the worker via
+// postMessage transferList instead of structured-cloning it. The buffer is
+// dedicated (never the small-string Buffer pool) and referenced by nothing else
+// on the sender side — session state, restored arrays, the fused body cache,
+// raw backups and the pendingCuts queue never see it — so the post-transfer
+// detach cannot alias anything. Any refusal falls back to the untouched
+// structured-clone payload, so a task is never dropped or reordered.
+function shadowTransferBuffer(payload) {
+  if (process.env.SPINE_SAVE_TRANSFER !== "1") return null;
+  const body = payload?.body;
+  if (typeof body !== "string" || body.length === 0) return null;
+  const bytes = Buffer.byteLength(body, "utf8");
+  const arrayBuffer = new ArrayBuffer(bytes);
+  Buffer.from(arrayBuffer, 0, bytes).write(body, "utf8");
+  return arrayBuffer;
+}
+
+function postShadowTaskMessage(entry, id, payload) {
+  const arrayBuffer = shadowTransferBuffer(payload);
+  if (arrayBuffer === null) {
+    entry.worker.postMessage({ id, payload });
+    return;
+  }
+  try {
+    const body = Buffer.from(arrayBuffer, 0, arrayBuffer.byteLength);
+    entry.worker.postMessage({ id, payload: { ...payload, body } }, [arrayBuffer]);
+  } catch {
+    // Transfer refused: retry on the structured-clone path with the original
+    // payload, keeping FIFO order (both posts happen inside this dispatch).
+    entry.worker.postMessage({ id, payload });
+  }
+}
+
 function dispatchShadowTask(entry, payload, task) {
   const id = entry.nextId++;
   entry.inflightTasks += 1;
@@ -399,7 +433,7 @@ function dispatchShadowTask(entry, payload, task) {
   task.timer = timer;
   entry.pending.set(id, task);
   try {
-    entry.worker.postMessage({ id, payload });
+    postShadowTaskMessage(entry, id, payload);
   } catch (error) {
     clearTimeout(timer);
     entry.pending.delete(id);
