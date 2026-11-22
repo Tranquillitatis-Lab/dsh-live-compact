@@ -1,0 +1,1015 @@
+{
+  "config": {},
+  "cuts": [],
+  "decisions": [
+    {
+      "phase": "maintenance-skip",
+      "reason": "below-min-tokens",
+      "sid": "runtime-1",
+      "totalTokens": 16000,
+      "ts": "<ISO>",
+      "v": 1
+    },
+    {
+      "catalogReady": false,
+      "engine": "local",
+      "model": "",
+      "phase": "engine",
+      "provider": "",
+      "sid": "runtime-1",
+      "source": "fixture",
+      "ts": "<ISO>",
+      "v": 1
+    },
+    {
+      "catalogReady": false,
+      "engine": "local",
+      "model": "",
+      "phase": "engine",
+      "provider": "",
+      "sid": "runtime-1",
+      "source": "fixture",
+      "ts": "<ISO>",
+      "v": 1
+    }
+  ],
+  "env": {},
+  "eventHash": "9ebf84723b87d2620ebeeb4d6a52a4f48cef94a6c093505d5d7475d4ec51dc20",
+  "events": [
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "runtime fixture",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "system",
+          "source": {
+            "kind": "system-prompt"
+          }
+        }
+      },
+      "seq": 0,
+      "surfaceOp": "append",
+      "time": 1700000000014,
+      "type": "system/message"
+    },
+    {
+      "data": {
+        "content": [
+          {
+            "text": "读取日志并继续当前任务。",
+            "type": "text"
+          }
+        ],
+        "id": "<UUID>",
+        "role": "user",
+        "source": {
+          "kind": "user"
+        }
+      },
+      "seq": 1,
+      "surfaceOp": "append",
+      "time": 1700000000021,
+      "type": "user/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "long",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 1
+      },
+      "seq": 2,
+      "surfaceOp": "append",
+      "time": 1700000000028,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\n",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "long",
+            "kind": "tool"
+          },
+          "toolCallId": "long"
+        },
+        "turn": 1
+      },
+      "seq": 3,
+      "surfaceOp": "append",
+      "time": 1700000000035,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"command\":\"echo fixture\"}",
+              "id": "short-0",
+              "name": "shell",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 1
+      },
+      "seq": 4,
+      "surfaceOp": "append",
+      "time": 1700000000042,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO fixture heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "short-0",
+            "kind": "tool"
+          },
+          "toolCallId": "short-0"
+        },
+        "turn": 1
+      },
+      "seq": 5,
+      "surfaceOp": "append",
+      "time": 1700000000049,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"command\":\"echo fixture\"}",
+              "id": "short-1",
+              "name": "shell",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 1
+      },
+      "seq": 6,
+      "surfaceOp": "append",
+      "time": 1700000000056,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO fixture heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "short-1",
+            "kind": "tool"
+          },
+          "toolCallId": "short-1"
+        },
+        "turn": 1
+      },
+      "seq": 7,
+      "surfaceOp": "append",
+      "time": 1700000000063,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"command\":\"echo fixture\"}",
+              "id": "short-2",
+              "name": "shell",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 1
+      },
+      "seq": 8,
+      "surfaceOp": "append",
+      "time": 1700000000070,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO fixture heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "short-2",
+            "kind": "tool"
+          },
+          "toolCallId": "short-2"
+        },
+        "turn": 1
+      },
+      "seq": 9,
+      "surfaceOp": "append",
+      "time": 1700000000077,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "本轮结束。",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 1
+      },
+      "seq": 10,
+      "surfaceOp": "append",
+      "time": 1700000000084,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-1-0",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 11,
+      "surfaceOp": "append",
+      "time": 1700000000098,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO growth probe heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-1-0",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-1-0"
+        },
+        "turn": 2
+      },
+      "seq": 12,
+      "surfaceOp": "append",
+      "time": 1700000000105,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-1-1",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 13,
+      "surfaceOp": "append",
+      "time": 1700000000112,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO growth probe heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-1-1",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-1-1"
+        },
+        "turn": 2
+      },
+      "seq": 14,
+      "surfaceOp": "append",
+      "time": 1700000000119,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-1-2",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 15,
+      "surfaceOp": "append",
+      "time": 1700000000126,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO growth probe heartbeat ok",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-1-2",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-1-2"
+        },
+        "turn": 2
+      },
+      "seq": 16,
+      "surfaceOp": "append",
+      "time": 1700000000133,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-2-0",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 17,
+      "surfaceOp": "append",
+      "time": 1700000000154,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO second growth probe",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-2-0",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-2-0"
+        },
+        "turn": 2
+      },
+      "seq": 18,
+      "surfaceOp": "append",
+      "time": 1700000000161,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-2-1",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 19,
+      "surfaceOp": "append",
+      "time": 1700000000168,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO second growth probe",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-2-1",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-2-1"
+        },
+        "turn": 2
+      },
+      "seq": 20,
+      "surfaceOp": "append",
+      "time": 1700000000175,
+      "type": "tool/result"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "arguments": "{\"file_path\":\"ledger.txt\"}",
+              "id": "grow-2-2",
+              "name": "read",
+              "type": "tool-call"
+            }
+          ],
+          "id": "<UUID>",
+          "role": "assistant",
+          "source": {
+            "kind": "model",
+            "model": "no-network",
+            "provider": "test"
+          }
+        },
+        "step": 0,
+        "stream": [],
+        "turn": 2
+      },
+      "seq": 21,
+      "surfaceOp": "append",
+      "time": 1700000000182,
+      "type": "assistant/message"
+    },
+    {
+      "data": {
+        "message": {
+          "content": [
+            {
+              "text": "INFO second growth probe",
+              "type": "text"
+            }
+          ],
+          "id": "<UUID>",
+          "isError": false,
+          "role": "tool",
+          "source": {
+            "callId": "grow-2-2",
+            "kind": "tool"
+          },
+          "toolCallId": "grow-2-2"
+        },
+        "turn": 2
+      },
+      "seq": 22,
+      "surfaceOp": "append",
+      "time": 1700000000189,
+      "type": "tool/result"
+    }
+  ],
+  "kind": "local",
+  "log": {
+    "infos": [
+      "spine engine=local source=fixture"
+    ],
+    "warnings": []
+  },
+  "meta": {
+    "case": "multiround-medium",
+    "corpusVersion": "1",
+    "node": "v26.7.0",
+    "src": "baseline"
+  },
+  "rawSeen": [
+    {
+      "aclVerified": true,
+      "bytes": 7800,
+      "key": "runtime-1\u0000long",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "3ba6cf9288d925026d3e1c594305e4782e5e3fad079a85c7b00d5b06093c8d4b",
+      "toolCallId": "long"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 25,
+      "key": "runtime-1\u0000short-0",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+      "toolCallId": "short-0"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 25,
+      "key": "runtime-1\u0000short-1",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+      "toolCallId": "short-1"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 25,
+      "key": "runtime-1\u0000short-2",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+      "toolCallId": "short-2"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 30,
+      "key": "runtime-1\u0000grow-1-0",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829",
+      "toolCallId": "grow-1-0"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 30,
+      "key": "runtime-1\u0000grow-1-1",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829",
+      "toolCallId": "grow-1-1"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 30,
+      "key": "runtime-1\u0000grow-1-2",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829",
+      "toolCallId": "grow-1-2"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 24,
+      "key": "runtime-1\u0000grow-2-0",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217",
+      "toolCallId": "grow-2-0"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 24,
+      "key": "runtime-1\u0000grow-2-1",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217",
+      "toolCallId": "grow-2-1"
+    },
+    {
+      "aclVerified": true,
+      "bytes": 24,
+      "key": "runtime-1\u0000grow-2-2",
+      "ok": true,
+      "path": "runtime-1/raw-<HEX>.txt",
+      "reason": null,
+      "recovered": null,
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217",
+      "toolCallId": "grow-2-2"
+    }
+  ],
+  "restores": [
+    {
+      "meta": {
+        "bytes": 7800,
+        "label": "第 1 轮读到的 ledger.txt",
+        "name": "read",
+        "sha256": "3ba6cf9288d925026d3e1c594305e4782e5e3fad079a85c7b00d5b06093c8d4b",
+        "toolCallId": "long",
+        "turn": 1
+      },
+      "raw": "INFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\n",
+      "restored": {
+        "bytes": 7800,
+        "existed": true,
+        "label": "第 1 轮读到的 ledger.txt",
+        "ok": true,
+        "path": "<ROOT>\\runtime-1\\raw-<HEX>.txt",
+        "sha256": "3ba6cf9288d925026d3e1c594305e4782e5e3fad079a85c7b00d5b06093c8d4b",
+        "toolCallId": "long"
+      },
+      "toolCallId": "long"
+    },
+    {
+      "meta": {
+        "bytes": 25,
+        "label": "",
+        "name": "shell",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-0",
+        "turn": 1
+      },
+      "raw": "INFO fixture heartbeat ok",
+      "restored": {
+        "bytes": 25,
+        "existed": true,
+        "label": "",
+        "ok": true,
+        "path": "<ROOT>\\runtime-1\\raw-<HEX>.txt",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-0"
+      },
+      "toolCallId": "short-0"
+    },
+    {
+      "meta": {
+        "bytes": 25,
+        "label": "",
+        "name": "shell",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-1",
+        "turn": 1
+      },
+      "raw": "INFO fixture heartbeat ok",
+      "restored": {
+        "bytes": 25,
+        "existed": true,
+        "label": "",
+        "ok": true,
+        "path": "<ROOT>\\runtime-1\\raw-<HEX>.txt",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-1"
+      },
+      "toolCallId": "short-1"
+    },
+    {
+      "meta": {
+        "bytes": 25,
+        "label": "",
+        "name": "shell",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-2",
+        "turn": 1
+      },
+      "raw": "INFO fixture heartbeat ok",
+      "restored": {
+        "bytes": 25,
+        "existed": true,
+        "label": "",
+        "ok": true,
+        "path": "<ROOT>\\runtime-1\\raw-<HEX>.txt",
+        "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb",
+        "toolCallId": "short-2"
+      },
+      "toolCallId": "short-2"
+    }
+  ],
+  "shadowTree": [
+    {
+      "bytes": null,
+      "content": "<PID>",
+      "path": "runtime-1/owner",
+      "sha256": "a101bedd30959cf67d57f45890980bd1eaa24c7b359e3a33ee54002c675e2dac"
+    },
+    {
+      "bytes": 25,
+      "content": "INFO fixture heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb"
+    },
+    {
+      "bytes": 146,
+      "content": "{\"toolCallId\":\"short-1\",\"bytes\":25,\"sha256\":\"0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb\",\"turn\":1,\"name\":\"shell\",\"label\":\"\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "2e88997c4acc226018e098852ae1e96a4337c460b8faa557d4c4544a4e44dd52"
+    },
+    {
+      "bytes": 30,
+      "content": "INFO growth probe heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-1-1\",\"bytes\":30,\"sha256\":\"a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "9cf68520903c17b9612451f08381869fa40ecf3cb14a6177b8d9d5dbecaa99a0"
+    },
+    {
+      "bytes": 30,
+      "content": "INFO growth probe heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-1-0\",\"bytes\":30,\"sha256\":\"a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "6a7443bdeb66677c043a7fe214a54b5c009c684f56237dfa69b04e21f84cde66"
+    },
+    {
+      "bytes": 24,
+      "content": "INFO second growth probe",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-2-0\",\"bytes\":24,\"sha256\":\"1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "d73665864700c578e733b37af41aeb76185e3dad469e49d03dbed580586095e8"
+    },
+    {
+      "bytes": 24,
+      "content": "INFO second growth probe",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-2-2\",\"bytes\":24,\"sha256\":\"1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "964e0512fd0c5f53e445ce638ae900ed6919d8588c1b93551150069d316d9cb6"
+    },
+    {
+      "bytes": 30,
+      "content": "INFO growth probe heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-1-2\",\"bytes\":30,\"sha256\":\"a4d4e897c49f152962baf0d5d319de10d8d65cec7dfd482eb3d8f2ef372e0829\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "16e5eed0215ca40ac338162cc48f1ff109eeb3c6bb2d3b8bacbe7cd36aa70322"
+    },
+    {
+      "bytes": 25,
+      "content": "INFO fixture heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb"
+    },
+    {
+      "bytes": 146,
+      "content": "{\"toolCallId\":\"short-0\",\"bytes\":25,\"sha256\":\"0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb\",\"turn\":1,\"name\":\"shell\",\"label\":\"\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "7929a696837847ba39647f2c57215aff104155817344fdce8acdfcb7eaa149ee"
+    },
+    {
+      "bytes": 24,
+      "content": "INFO second growth probe",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217"
+    },
+    {
+      "bytes": 175,
+      "content": "{\"toolCallId\":\"grow-2-1\",\"bytes\":24,\"sha256\":\"1f15bfd5e791c4a58a1fa9198f0b70a6142b8067353f045f02981965af803217\",\"turn\":2,\"name\":\"read\",\"label\":\"第 2 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "5a9255c94efd13cb13c8acd993d6c5693794fc53a68957439ef80e973590fd65"
+    },
+    {
+      "bytes": 25,
+      "content": "INFO fixture heartbeat ok",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb"
+    },
+    {
+      "bytes": 146,
+      "content": "{\"toolCallId\":\"short-2\",\"bytes\":25,\"sha256\":\"0becebd5ea282ad17532a61c80db4e2ac86c6ce4305e5b7080f2f5d09abaa2eb\",\"turn\":1,\"name\":\"shell\",\"label\":\"\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "aa1de7b1f69fa5203ce391c1c1038fa70b766a5bbe685bf46764a67b98c5762c"
+    },
+    {
+      "bytes": 7800,
+      "content": "INFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\nINFO fixture heartbeat ok\n",
+      "path": "runtime-1/raw-<HEX>.txt",
+      "sha256": "3ba6cf9288d925026d3e1c594305e4782e5e3fad079a85c7b00d5b06093c8d4b"
+    },
+    {
+      "bytes": 173,
+      "content": "{\"toolCallId\":\"long\",\"bytes\":7800,\"sha256\":\"3ba6cf9288d925026d3e1c594305e4782e5e3fad079a85c7b00d5b06093c8d4b\",\"turn\":1,\"name\":\"read\",\"label\":\"第 1 轮读到的 ledger.txt\"}",
+      "path": "runtime-1/raw-<HEX>.txt.meta.json",
+      "sha256": "ebab003d02c44c6d097a31d3e06b4c7072e54017e1dba752d6424bcf123cdfce"
+    },
+    {
+      "bytes": 37,
+      "content": "{\"v\":1,\"key\":\"runtime-1\",\"cursor\":23}",
+      "path": "runtime-1/spine-capture-168957e8d7dc810a091762d5cd16db9da1a4a817f39c580ed44cdd1bf8b87e7f.json",
+      "sha256": "5e46603764d201a31f3663f3d4eefb94a8d2e5b11c8b15a82afef552809ddafa"
+    },
+    {
+      "bytes": 447,
+      "content": "{\"v\":1,\"ts\":\"<ISO>\",\"sid\":\"runtime-1\",\"phase\":\"maintenance-skip\",\"reason\":\"below-min-tokens\",\"totalTokens\":16000}\n{\"v\":1,\"ts\":\"<ISO>\",\"sid\":\"runtime-1\",\"phase\":\"engine\",\"engine\":\"local\",\"source\":\"fixture\",\"provider\":\"\",\"model\":\"\",\"catalogReady\":false}\n{\"v\":1,\"ts\":\"<ISO>\",\"sid\":\"runtime-1\",\"phase\":\"engine\",\"engine\":\"local\",\"source\":\"fixture\",\"provider\":\"\",\"model\":\"\",\"catalogReady\":false}\n",
+      "path": "spine-decisions.jsonl",
+      "sha256": "2d47c1c2a523d674d8eb3320719e8629fd6681a187e4fcdc63a752f5f291858e"
+    }
+  ],
+  "stats": [],
+  "summaries": [],
+  "summarizeInputs": [],
+  "surface": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22
+  ]
+}
