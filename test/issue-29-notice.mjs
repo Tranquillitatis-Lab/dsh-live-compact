@@ -26,7 +26,7 @@ const hostNoticeKinds = [
 const hostPluginNoticeSources = [
   { kind: "plugin", plugin: "time-context", form: "snapshot", sections: [{ name: "time-context", text: reminder }] },
   { kind: "plugin", plugin: "tool-jobs", form: "notice", summary: "job completed" },
-  { kind: "plugin", plugin: "skill-catalog", form: "catalog", entries: [{ name: "skill-catalog", description: reminder }] },
+  { kind: "plugin", plugin: "skill-catalog", form: "catalog" },
   { kind: "plugin", plugin: "runtime-context", form: "snapshot", sections: [{ name: "runtime-context", text: reminder }] },
   { kind: "plugin", plugin: "subagent-settled", form: "notice", summary: "subagent settled" },
   { kind: "plugin", plugin: "retry", form: "notice", summary: "retry notice" },
@@ -239,8 +239,7 @@ const negatives = [
   ["nearby producer name", { source: { ...source, kind: "progress-rules-evil" } }],
   ["plugin notice missing summary", { source: { kind: "plugin", plugin: "goal", form: "notice" } }],
   ["plugin snapshot missing sections", { source: { kind: "plugin", plugin: "time-context", form: "snapshot" } }],
-  ["plugin catalog missing entries", { source: { kind: "plugin", plugin: "skill-catalog", form: "catalog" } }],
-  ["plugin catalog wrong entry shape", { source: { kind: "plugin", plugin: "skill-catalog", form: "catalog", entries: [{ name: "skill-catalog" }] } }],
+  ["plugin catalog extra entries", { source: { kind: "plugin", plugin: "skill-catalog", form: "catalog", entries: [] } }],
   ["plugin unknown form", { source: { kind: "plugin", plugin: "retry", form: "instructions" } }],
   ["missing form", { source: { kind: source.kind, summary: source.summary } }],
   ["missing summary", { source: { kind: source.kind, form: source.form } }],

@@ -73,14 +73,6 @@ function validSnapshotSections(sections) {
     && typeof section.text === "string");
 }
 
-function validCatalogEntries(entries) {
-  return Array.isArray(entries) && entries.every((entry) => entry
-    && typeof entry === "object"
-    && exactKeys(entry, ["name", "description"])
-    && typeof entry.name === "string"
-    && typeof entry.description === "string");
-}
-
 function isHostInjectedPluginSource(source) {
   if (source.kind !== "plugin" || !HOST_INJECTED_MESSAGE_KINDS.has(source.plugin)) return false;
   switch (source.form) {
@@ -92,10 +84,7 @@ function isHostInjectedPluginSource(source) {
         && validSnapshotSections(source.sections);
     case "catalog":
       return source.plugin === "skill-catalog"
-        && (exactKeys(source, ["kind", "plugin", "form", "entries"])
-          || exactKeys(source, ["kind", "plugin", "form", "entries", "update"]))
-        && (source.update === undefined || source.update === true)
-        && validCatalogEntries(source.entries);
+        && exactKeys(source, ["kind", "plugin", "form"]);
     default:
       return false;
   }
