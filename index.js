@@ -58,14 +58,53 @@ const HOST_INJECTED_MESSAGE_KINDS = new Set([
   "goal",
   "tool-goal",
 ]);
-const HOST_INJECTED_PLUGIN_FORMS = new Set(["notice", "snapshot"]);
+const HOST_INJECTED_PLUGIN_FORMS = new Set(["notice", "snapshot", "catalog"]);
+
+function exactKeys(value, keys) {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => actual.includes(key));
+}
+
+function validSnapshotSections(sections) {
+  return Array.isArray(sections) && sections.every((section) => section
+    && typeof section === "object"
+    && exactKeys(section, ["name", "text"])
+    && typeof section.name === "string"
+    && typeof section.text === "string");
+}
+
+function validCatalogEntries(entries) {
+  return Array.isArray(entries) && entries.every((entry) => entry
+    && typeof entry === "object"
+    && exactKeys(entry, ["name", "description"])
+    && typeof entry.name === "string"
+    && typeof entry.description === "string");
+}
+
+function isHostInjectedPluginSource(source) {
+  if (source.kind !== "plugin" || !HOST_INJECTED_MESSAGE_KINDS.has(source.plugin)) return false;
+  switch (source.form) {
+    case "notice":
+      return exactKeys(source, ["kind", "plugin", "form", "summary"])
+        && typeof source.summary === "string";
+    case "snapshot":
+      return exactKeys(source, ["kind", "plugin", "form", "sections"])
+        && validSnapshotSections(source.sections);
+    case "catalog":
+      return source.plugin === "skill-catalog"
+        && (exactKeys(source, ["kind", "plugin", "form", "entries"])
+          || exactKeys(source, ["kind", "plugin", "form", "entries", "update"]))
+        && (source.update === undefined || source.update === true)
+        && validCatalogEntries(source.entries);
+    default:
+      return false;
+  }
+}
 
 function isHostInjectedSource(source) {
   if (!source || typeof source !== "object") return false;
   if (HOST_INJECTED_MESSAGE_KINDS.has(source.kind)) return true;
-  return source.kind === "plugin"
-    && HOST_INJECTED_MESSAGE_KINDS.has(source.plugin)
-    && HOST_INJECTED_PLUGIN_FORMS.has(source.form);
+  return HOST_INJECTED_PLUGIN_FORMS.has(source.form) && isHostInjectedPluginSource(source);
 }
 
 function catalogExportTarget(value) {
