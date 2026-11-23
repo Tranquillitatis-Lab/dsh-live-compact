@@ -131,10 +131,11 @@ test("the running host persists a turn-stopping cut before it closes the session
   }
   h.capture(engine, f);
 
-  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal, 2);
 
   assert.ok(persisted.some((event) => event.surfaceOp?.op === "replace"), h.warnings.join("\n"));
-  assert.ok(persisted.some((event) => event.type === "compaction/end"));
+  const lifecycle = persisted.filter((event) => ["compaction/start", "compaction/end"].includes(event.type));
+  assert.deepEqual(lifecycle.map((event) => event.data.turn), [2, 2]);
   assert.ok(!persisted.some((event) => event.type === "turn/end"));
 });
 
