@@ -12,13 +12,24 @@ import { fixture, runtime } from "./helpers/runtime.mjs";
 
 // Copied data contract only. Never import/execute the downloaded producer.
 const source = { kind: "progress-rules", form: "notice", summary: "过程纪律：要求正文通报" };
+const hostNoticeKinds = [
+  "time-context",
+  "tool-jobs",
+  "skill-catalog",
+  "runtime-context",
+  "subagent-settled",
+  "retry",
+  "goal",
+  "tool-goal",
+];
 const reminder = '（过程纪律提醒）先通报。\r\n必须保留 notice-only-7391。\n"引号" \\ 👋\t';
 const estimate = (message) => Math.ceil(JSON.stringify(message.content).length / 4) + 8;
 const bytes = (value) => Buffer.from(JSON.stringify(value));
 const summaryText = (f) => messageText({ content: f.summaries().at(-1)?.data.summary });
 let serial = 0;
 
-function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config = {}, tokens = 600, after = false } = {}) {
+function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, noticeKinds = null,
+  config = {}, tokens = 600, after = false } = {}) {
   const h = runtime(t, { liveSessions: true });
   const { engine, ctx } = h.engine(config, engineKind);
   const published = [];
@@ -37,8 +48,10 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   const prefix = [...f.session.surface.nodes];
   const prefixBytes = bytes(f.session.deriveMessages());
   const notices = [];
-  const inject = () => {
-    const message = { ...createUserMessage({ content: [{ type: "text", text: reminder }], source }), ...notice };
+  const inject = (kind = null) => {
+    const messageSource = kind ? { kind } : source;
+    const message = { ...createUserMessage({ content: [{ type: "text", text: reminder }], source: messageSource }), ...notice };
+    if (kind) message.source = messageSource;
     for (const key of Object.keys(notice)) if (notice[key] === undefined) delete message[key];
     const seq = f.add("user/message", message, estimate(message));
     notices.push(seq);
@@ -46,8 +59,9 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   };
   const target = [];
   if (mode === "ordinary") {
-    for (let index = 0; index < 3; index++) {
-      if (index) target.push(inject());
+    const sequence = Array.isArray(noticeKinds) ? noticeKinds : [null, null];
+    for (let index = 0; index <= sequence.length; index++) {
+      if (index) target.push(inject(sequence[index - 1]));
       target.push(...f.round(`candidate-${index}`, { tokens, text: "INFO disposable heartbeat\n".repeat(250) }));
     }
   } else {
@@ -79,6 +93,28 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   engine.commitSelectedSpan = (...args) => { tickets.push(args[1]); return commit(...args); };
   return { h, engine, ctx, f, agent, target, notices, kept, prefix, prefixBytes, published, originals, originalCount,
     originalSurface, tickets, counters: () => ({ maintenance, flushes }) };
+}
+
+for (const engineKind of ["local", "cloud"]) {
+  test(`${engineKind}: dense host bookkeeping messages do not fragment a cut`, async (t) => {
+    const x = setup(t, { engineKind, noticeKinds: hostNoticeKinds });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, 1, x.h.warnings.join("\n"));
+    assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+    assert.ok(x.target.length > 10, "fixture must contain repeated host injections");
+    assertUnchanged(x);
+  });
+
+  test(`${engineKind}: a real user message still stops host-notice expansion`, async (t) => {
+    const x = setup(t, { engineKind, notice: { source: { kind: "time-context" } }, after: true });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, engineKind === "cloud" ? 1 : 0, x.h.warnings.join("\n"));
+    if (engineKind === "cloud") {
+      assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+      assert.ok(x.f.session.surface.nodes.includes(x.target.at(-1) + 1));
+    }
+    assertUnchanged(x);
+  });
 }
 
 function assertUnchanged(x) {
@@ -202,9 +238,6 @@ const negatives = [
   ["agent instructions", { source: { kind: "agent-instructions", form: "instructions" } }],
   ["skill instructions", { source: { kind: "skill-invocation", form: "instructions" } }],
   ["relay", { source: { kind: "relay", form: "notice" } }],
-  ["goal", { source: { kind: "goal" } }],
-  ["snapshot", { source: { kind: "runtime-context", form: "snapshot" } }],
-  ["subagent final output", { source: { kind: "subagent-settled", form: "notice" } }],
   ["model selection", { source: { kind: "model-selection", form: "notice" } }],
 ];
 

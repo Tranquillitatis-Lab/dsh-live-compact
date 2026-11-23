@@ -1,5 +1,10 @@
 # 版本变更
 
+## 1.1.13
+
+- **#69 宿主注入边界**：`time-context`、`tool-jobs`、`skill-catalog`、`runtime-context`、`subagent-settled`、`retry`、`goal` 和 `tool-goal` 这八类 DSH `user/message` bookkeeping 事件不再阻断小切回溯；未知来源、缺失来源和真实 `user` 消息仍保持硬边界。
+- **#62 回归保护**：保留 shadow worker 的 eval/import 启动、`already-pruned` 游标推进和 `captureBlocked` 维护重试路径，并在候选门禁中继续覆盖。
+
 ## 1.1.12
 
 - **#62 Worker 启动与游标修复**：用 eval import 引导 shadow worker，保留宿主原生启动参数；`already-pruned` 结果标为不可恢复并推进 capture cursor，后续事件继续捕获。

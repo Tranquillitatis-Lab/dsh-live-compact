@@ -45,6 +45,19 @@ import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
 
 const PI_AI_CATALOG = "@earendil-works/pi-ai/providers/all";
 const PI_AI_PACKAGE = "@earendil-works/pi-ai";
+// DSH emits these user/message records as host bookkeeping. They are carried in
+// the same event channel as user input, but must not fragment a compactable span.
+// Keep unknown kinds conservative because source metadata is not authentication.
+const HOST_INJECTED_MESSAGE_KINDS = new Set([
+  "time-context",
+  "tool-jobs",
+  "skill-catalog",
+  "runtime-context",
+  "subagent-settled",
+  "retry",
+  "goal",
+  "tool-goal",
+]);
 
 function catalogExportTarget(value) {
   if (typeof value === "string") return value;
@@ -465,17 +478,19 @@ function eventRole(session, seq) {
   return "other";
 }
 
-// progress-rules 0.2.1's pre-step contract, not a general notice permission.
+// progress-rules 0.2.1's pre-step contract plus the host's explicit bookkeeping kinds.
 // Session source metadata does not authenticate producer identity. Unknown/extra metadata
 // stays a boundary; neither body text nor the raw role is used as a substitute. A real
 // user event that is not the complete contract is therefore a hard boundary for the
-// cloud fallback path; only a fully validated plugin notice may be crossed there.
+// cloud fallback path. Only a fully validated plugin notice or known host bookkeeping
+// event may be crossed there.
 function classifyUserEvent(session, seq) {
   const event = session.eventAt(seq);
   const data = event?.data;
   const source = data?.source;
   const content = data?.content;
-  const progressNotice = event?.type === "user/message" && !isCheckpoint(session, seq)
+  const isUserMessage = event?.type === "user/message";
+  const progressNotice = isUserMessage && !isCheckpoint(session, seq)
     && source?.kind === "progress-rules" && source.form === "notice";
   const pluginNotice = progressNotice
     && data?.role === "user"
@@ -488,10 +503,13 @@ function classifyUserEvent(session, seq) {
     && Array.isArray(content) && content.length === 1
     && content[0]?.type === "text" && typeof content[0].text === "string"
     && Object.keys(content[0]).length === 2;
+  const hostInjectedNotice = isUserMessage && !pluginNotice
+    && HOST_INJECTED_MESSAGE_KINDS.has(source?.kind);
+  const genuineUserBoundary = isUserMessage && !pluginNotice && !hostInjectedNotice;
   return {
     pluginNotice,
-    untrustedNotice: event?.type === "user/message" && !pluginNotice,
-    isGenuineUserBoundary: event?.type === "user/message" && !pluginNotice,
+    untrustedNotice: genuineUserBoundary,
+    isGenuineUserBoundary: genuineUserBoundary,
   };
 }
 
