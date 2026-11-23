@@ -1620,9 +1620,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       try {
         const settings = readSettings(this.liveConfig);
         const events = agent.session.snapshotEvents();
-        const stoppingEnd = latestCompletedTurnEnd(events);
+        const stoppingStartSeq = latestTurnStart(events)?.seq;
+        const previousEnd = latestCompletedTurnEnd(events);
+        const stoppingEnd = stoppingStartSeq === undefined || previousEnd?.seq > stoppingStartSeq
+          ? previousEnd : null;
         const stoppingSeq = stoppingEnd?.seq;
-        const stoppingStartSeq = (turnStartForBoundary(events, stoppingEnd) || latestTurnStart(events))?.seq;
         if (Number.isInteger(stoppingSeq)) {
           state.turnEndSeq = Number.isInteger(state.turnEndSeq) ? Math.max(state.turnEndSeq, stoppingSeq) : stoppingSeq;
           state.turnEndEvent = stoppingEnd;
@@ -1638,7 +1640,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (maintenanceAbort.signal.aborted) return false;
         await this.flushPendingCaptures(agent.session);
         if (maintenanceAbort.signal.aborted) return false;
-        const completed = await this.finishTurn(agent, events, { maintenanceRetry: true, skipCapture: true });
+        const completed = await this.finishTurn(agent, events, {
+          maintenanceRetry: true,
+          skipCapture: true,
+          withinTurnStopping: agent.status === "running" && !!signal,
+        });
         if (completed === true && (stoppingSeq !== undefined || stoppingStartSeq !== undefined)) {
           state.lastStoppingTurnEndSeq = stoppingSeq ?? -1;
           state.lastStoppingTurnStartSeq = stoppingStartSeq ?? -1;
@@ -2096,8 +2102,12 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       const jobs = collectJobs(ev);
       const calls = indexToolCalls(ev);
       try {
-        await agent.runMaintenance(async (agentSignal) => {
-          if (this.standDown?.()) return;
+        // The driver awaits turn-stopping before it writes turn/end and may
+        // dispose the session immediately afterwards. During that hook the
+        // driver owns the session and its abort is forwarded above.
+        const runMaintenance = options.withinTurnStopping ? (job) => job() : agent.runMaintenance.bind(agent);
+        await runMaintenance(async (agentSignal) => {
+          if (this.standDown?.() || signal.aborted) return;
           // DSH disposes a completed CLI agent by aborting maintenance with the
           // lifecycle marker `{ kind: "disposed" }`. A local cut has already
           // started at that point, so let it finish under the bounded timeout;

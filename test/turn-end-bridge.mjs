@@ -115,6 +115,29 @@ test("turn-stopping runs maintenance before a disposed CLI agent can swallow it"
   assert.ok(chunks.length >= 1, `expected a turn-stopping cut, got ${chunks.length}`);
 });
 
+test("the running host persists a turn-stopping cut before it closes the session", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine({}, "cloud");
+  const agent = f.agent();
+  agent.status = "running";
+  agent.runMaintenance = () => { throw new Error("agent already has active work"); };
+  let persisted = [];
+  ctx.sessions.flush = async (session) => { persisted = session.snapshotEvents(); };
+  f.add("turn/start", { turn: 2 }, 0, {});
+  f.user("Run the current task before closing the session.");
+  for (let round = 0; round < 8; round += 1) {
+    f.round(`before-close-${round}`, { tokens: 4000, turn: 2 });
+  }
+  h.capture(engine, f);
+
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
+
+  assert.ok(persisted.some((event) => event.surfaceOp?.op === "replace"), h.warnings.join("\n"));
+  assert.ok(persisted.some((event) => event.type === "compaction/end"));
+  assert.ok(!persisted.some((event) => event.type === "turn/end"));
+});
+
 test("turn-stopping does not mark a boundary when maintenance fails", async () => {
   const engine = Object.create(Spine.prototype);
   const state = {
@@ -387,7 +410,11 @@ test("turn/end does not run a second maintenance pass after turn-stopping handle
 
 test("turn/end arriving after turn-stopping is deduplicated by the active turn/start", async () => {
   const engine = Object.create(Spine.prototype);
-  const events = [{ seq: 1, type: "turn/start", data: { turn: 2 } }];
+  const events = [
+    { seq: 1, type: "turn/start", data: { turn: 1 } },
+    { seq: 2, type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } },
+    { seq: 3, type: "turn/start", data: { turn: 2 } },
+  ];
   const state = {
     key: "reverse-boundary",
     warming: false,
@@ -413,11 +440,11 @@ test("turn/end arriving after turn-stopping is deduplicated by the active turn/s
   let finishes = 0;
   engine.finishTurn = async () => { finishes += 1; return true; };
   await engine.runTurnStoppingMaintenance(agent, new AbortController().signal);
-  events.push({ seq: 2, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } });
-  engine.scheduleTurnEndMaintenance(agent, 2, events[1]);
+  events.push({ seq: 4, type: "turn/end", data: { turn: 2, reason: { kind: "completed" } } });
+  engine.scheduleTurnEndMaintenance(agent, 4, events.at(-1));
   await setImmediate();
   assert.equal(finishes, 1);
-  assert.equal(state.lastMaintenanceTurnEndSeq, 2);
+  assert.equal(state.lastMaintenanceTurnEndSeq, 4);
 });
 
 test("a newer turn/start does not make an older delayed turn/end run twice", async () => {
