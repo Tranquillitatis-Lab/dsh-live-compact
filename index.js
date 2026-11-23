@@ -806,7 +806,10 @@ export function saveShadowImpl(
   access = {},
   rotationIO = {},
 ) {
-  return saveShadowBodyImpl(
+  // 保留调用方 this（引擎与测试都以 saveShadow.call(thisArg, …) 传入
+  // ctx/logger 与 warn 回调），逐层转发，避免松散调用丢失 this。
+  return saveShadowBodyImpl.call(
+    this,
     shadowFileBody(warnKey, shadowBody(messages)),
     required,
     shadowFile,
@@ -1996,223 +1999,226 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const settings = readSettings(this.liveConfig);
     const state = this.stateFor(agent);
     if (state.maintenanceAbort?.signal.aborted) return false;
-    if (!state.maintenanceAbort) {
-      state.maintenanceAbort = new AbortController();
-    }
+    const ownedAbort = state.maintenanceAbort ? null : new AbortController();
+    if (ownedAbort) state.maintenanceAbort = ownedAbort;
     const signal = AbortSignal.any([AbortSignal.timeout(30000), state.maintenanceAbort.signal]);
-    let maintenanceCompleted = false;
-    const ev = events || agent.session.snapshotEvents();
-    const deferCapture = options.deferCapture === true;
-    let catchup = { finished: true, progressed: false, retryRequested: false };
-    if (options.skipCapture) {
-      // A completed idle catch-up or a failed-cut retry already established
-      // the capture surface. Re-run maintenance without rescanning events.
-    } else if (deferCapture) {
-      state.pendingMaintenance = true;
-      try {
-        catchup = this.scheduleCaptureCatchup(agent, ev, settings, { maintenanceRequested: true });
-      } catch (error) {
-        state.pendingMaintenance = false;
-        state.warming = false;
-        throw error;
-      }
-    } else {
-      if (ev.length > CAPTURE_EVENT_BATCH) {
-        catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
-      } else {
-        await this.flushPendingCaptures(agent.session);
-        this.captureNew(agent.session, ev, settings);
-      }
-    }
-    // Never enter the host's maintenance gate while another session's
-    // catch-up is still running. The host may serialize runMaintenance across
-    // agents; defer this pass and retry after the catch-up settles instead of
-    // making finishTurn wait or holding the global gate.
-    if (catchup?.promise && !catchup.finished) {
-      if (options.maintenanceRetry || (!deferCapture && ev.length <= CAPTURE_EVENT_BATCH)) {
-        await catchup.promise;
-      } else {
-        return null;
-      }
-    }
-    await this.flushPendingCaptures(agent.session);
-    const jobs = collectJobs(ev);
-    const calls = indexToolCalls(ev);
     try {
-      await agent.runMaintenance(async (agentSignal) => {
-        if (this.standDown?.()) return;
-        // DSH disposes a completed CLI agent by aborting maintenance with the
-        // lifecycle marker `{ kind: "disposed" }`. A local cut has already
-        // started at that point, so let it finish under the bounded timeout;
-        // user/host cancellation reasons still abort the operation.
-        const op = maintenanceOperationSignal(agentSignal, signal);
-        const markCompleted = () => {
-          if (!op.aborted && !signal.aborted) maintenanceCompleted = true;
-        };
-        let measurement = this.ctx.tokenMeter.measure(agent.session);
-        const settleTurnBaseline = () => {
-          state.turnBase = measurement.totalTokens;
-          state.maxTurnGrowth = 0;
-        };
-        if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) {
-          this.recordDecision(state, {
-            phase: "maintenance-skip",
-            reason: measurement.totalTokens < settings.minTokens ? "below-min-tokens" : "above-big-gate",
-            totalTokens: measurement.totalTokens,
-          });
-          settleTurnBaseline();
-          markCompleted();
-          return;
+      let maintenanceCompleted = false;
+      const ev = events || agent.session.snapshotEvents();
+      const deferCapture = options.deferCapture === true;
+      let catchup = { finished: true, progressed: false, retryRequested: false };
+      if (options.skipCapture) {
+        // A completed idle catch-up or a failed-cut retry already established
+        // the capture surface. Re-run maintenance without rescanning events.
+      } else if (deferCapture) {
+        state.pendingMaintenance = true;
+        try {
+          catchup = this.scheduleCaptureCatchup(agent, ev, settings, { maintenanceRequested: true });
+        } catch (error) {
+          state.pendingMaintenance = false;
+          state.warming = false;
+          throw error;
         }
-        // Restored cards establish a baseline; a live card still skips once,
-        // even when maintenance or engine construction is delayed.
-        if (!op.aborted && skipLiveOfficialCompaction(agent.session)) {
-          this.recordDecision(state, { phase: "maintenance-skip", reason: "official-checkpoint" });
-          this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
-          settleTurnBaseline();
-          markCompleted();
-          return;
+      } else {
+        if (ev.length > CAPTURE_EVENT_BATCH) {
+          catchup = this.scheduleCaptureCatchup(agent, ev, settings, { freezeSnapshot: true });
+        } else {
+          await this.flushPendingCaptures(agent.session);
+          this.captureNew(agent.session, ev, settings);
         }
-        if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
-          this.recordDecision(state, { phase: "maintenance-skip", reason: "cooldown" });
-          settleTurnBaseline();
-          markCompleted();
-          return;
+      }
+      // Never enter the host's maintenance gate while another session's
+      // catch-up is still running. The host may serialize runMaintenance across
+      // agents; defer this pass and retry after the catch-up settles instead of
+      // making finishTurn wait or holding the global gate.
+      if (catchup?.promise && !catchup.finished) {
+        if (options.maintenanceRetry || (!deferCapture && ev.length <= CAPTURE_EVENT_BATCH)) {
+          await catchup.promise;
+        } else {
+          return null;
         }
-        this.ensurePruneGuard();
-        // The pi-ai catalog is loaded asynchronously so ESM-only providers are
-        // discoverable. Do not classify the first request as local merely
-        // because catalogProviders() was called before the import settled.
-        if (this.catalogPromise) await this.catalogPromise;
-        const resolved = this.engineFor(agent);
-        if (state.engine !== resolved.engine || state.engineSource !== resolved.source) {
-          this.ctx.logger?.info?.(`spine engine=${resolved.engine} source=${resolved.source}`);
-          state.engine = resolved.engine;
-          state.engineSource = resolved.source;
-        }
-        this.recordDecision(state, {
-          phase: "engine",
-          engine: resolved.engine,
-          source: resolved.source,
-          provider: agent?.session?.requestHeader?.()?.config?.provider || "",
-          model: agent?.session?.requestHeader?.()?.config?.model || "",
-          catalogReady: this.catalogCache.length > 0,
-        });
-        const cloud = resolved.engine !== "local";
-        // 预测下一轮会过 32000 时收尾；没有增长基线时仍由已有 48000 紧急线接管。
-        // Drain a projected request over 32000. Without a growth baseline, the existing 48000 urgent line still takes over.
-        const last = measurement.totalTokens;
-        const base = state.turnBase ?? last;
-        const growth = Math.max(0, last - base);
-        state.maxTurnGrowth = Math.max(state.maxTurnGrowth || 0, growth);
-        const projected = state.maxTurnGrowth > 0 && last + state.maxTurnGrowth > settings.keepRoundTokens;
-        const drain = cloud && (projected || last >= URGENT_TOKENS);
-        const drainNotes = [];
-        let maintenanceFailed = false;
-        for (let pass = 0; pass < 8; pass += 1) {
-          const measured = measurement;
-          if (drain && measured.totalTokens <= settings.keepRoundTokens) break;
-          const chunk = selectNewestChunk(agent.session, measured, state.key, {
-            settings,
-            engine: resolved.engine,
-            jobs,
-            calls,
-            rawLookup: (id) => this.rawSeen.get(`${state.key}\0${id}`),
-            totalTokens: measured.totalTokens,
-            drain,
-          });
-          if (chunk === null) {
-            if (drain && measured.totalTokens > settings.keepRoundTokens) {
-              this.recordDecision(state, {
-                phase: "cut-skip",
-                reason: "no-legal-span",
-                totalTokens: measured.totalTokens,
-                drain: true,
-              });
-              this.ctx.logger?.warn?.(`spine drain stopped at ${measured.totalTokens}; no legal span`);
-            } else {
-              this.recordDecision(state, { phase: "cut-skip", reason: "no-legal-span", totalTokens: measured.totalTokens, drain: false });
-              this.ctx.logger?.debug?.("spine cut skipped");
-            }
-            break;
+      }
+      await this.flushPendingCaptures(agent.session);
+      const jobs = collectJobs(ev);
+      const calls = indexToolCalls(ev);
+      try {
+        await agent.runMaintenance(async (agentSignal) => {
+          if (this.standDown?.()) return;
+          // DSH disposes a completed CLI agent by aborting maintenance with the
+          // lifecycle marker `{ kind: "disposed" }`. A local cut has already
+          // started at that point, so let it finish under the bounded timeout;
+          // user/host cancellation reasons still abort the operation.
+          const op = maintenanceOperationSignal(agentSignal, signal);
+          const markCompleted = () => {
+            if (!op.aborted && !signal.aborted) maintenanceCompleted = true;
+          };
+          let measurement = this.ctx.tokenMeter.measure(agent.session);
+          const settleTurnBaseline = () => {
+            state.turnBase = measurement.totalTokens;
+            state.maxTurnGrowth = 0;
+          };
+          if (measurement.totalTokens < settings.minTokens || measurement.totalTokens >= settings.bigGate) {
+            this.recordDecision(state, {
+              phase: "maintenance-skip",
+              reason: measurement.totalTokens < settings.minTokens ? "below-min-tokens" : "above-big-gate",
+              totalTokens: measurement.totalTokens,
+            });
+            settleTurnBaseline();
+            markCompleted();
+            return;
           }
-          const tailBeyondKept = chunk.after - (chunk.keptTokens || 0);
-          if (!drain && tailBeyondKept > MAX_TAIL && measured.totalTokens < URGENT_TOKENS) break;
-          const before = measured.totalTokens;
-          const started = Date.now();
-          let reduced = false;
-          try {
-            state.localOnly = true;
-            state.approvedCard = chunk.card;
-            const committed = await this.commitSelectedSpan(agent, chunk, op, { drain });
-            if (committed === false) {
-              maintenanceFailed = true;
+          // Restored cards establish a baseline; a live card still skips once,
+          // even when maintenance or engine construction is delayed.
+          if (!op.aborted && skipLiveOfficialCompaction(agent.session)) {
+            this.recordDecision(state, { phase: "maintenance-skip", reason: "official-checkpoint" });
+            this.ctx.logger?.info?.("spine cooldown: live official compaction seen, skip this pass");
+            settleTurnBaseline();
+            markCompleted();
+            return;
+          }
+          if (inCooldown(agent.session, { windowMs: settings.cooldownMs })) {
+            this.recordDecision(state, { phase: "maintenance-skip", reason: "cooldown" });
+            settleTurnBaseline();
+            markCompleted();
+            return;
+          }
+          this.ensurePruneGuard();
+          // The pi-ai catalog is loaded asynchronously so ESM-only providers are
+          // discoverable. Do not classify the first request as local merely
+          // because catalogProviders() was called before the import settled.
+          if (this.catalogPromise) await this.catalogPromise;
+          const resolved = this.engineFor(agent);
+          if (state.engine !== resolved.engine || state.engineSource !== resolved.source) {
+            this.ctx.logger?.info?.(`spine engine=${resolved.engine} source=${resolved.source}`);
+            state.engine = resolved.engine;
+            state.engineSource = resolved.source;
+          }
+          this.recordDecision(state, {
+            phase: "engine",
+            engine: resolved.engine,
+            source: resolved.source,
+            provider: agent?.session?.requestHeader?.()?.config?.provider || "",
+            model: agent?.session?.requestHeader?.()?.config?.model || "",
+            catalogReady: this.catalogCache.length > 0,
+          });
+          const cloud = resolved.engine !== "local";
+          // 预测下一轮会过 32000 时收尾；没有增长基线时仍由已有 48000 紧急线接管。
+          // Drain a projected request over 32000. Without a growth baseline, the existing 48000 urgent line still takes over.
+          const last = measurement.totalTokens;
+          const base = state.turnBase ?? last;
+          const growth = Math.max(0, last - base);
+          state.maxTurnGrowth = Math.max(state.maxTurnGrowth || 0, growth);
+          const projected = state.maxTurnGrowth > 0 && last + state.maxTurnGrowth > settings.keepRoundTokens;
+          const drain = cloud && (projected || last >= URGENT_TOKENS);
+          const drainNotes = [];
+          let maintenanceFailed = false;
+          for (let pass = 0; pass < 8; pass += 1) {
+            const measured = measurement;
+            if (drain && measured.totalTokens <= settings.keepRoundTokens) break;
+            const chunk = selectNewestChunk(agent.session, measured, state.key, {
+              settings,
+              engine: resolved.engine,
+              jobs,
+              calls,
+              rawLookup: (id) => this.rawSeen.get(`${state.key}\0${id}`),
+              totalTokens: measured.totalTokens,
+              drain,
+            });
+            if (chunk === null) {
+              if (drain && measured.totalTokens > settings.keepRoundTokens) {
+                this.recordDecision(state, {
+                  phase: "cut-skip",
+                  reason: "no-legal-span",
+                  totalTokens: measured.totalTokens,
+                  drain: true,
+                });
+                this.ctx.logger?.warn?.(`spine drain stopped at ${measured.totalTokens}; no legal span`);
+              } else {
+                this.recordDecision(state, { phase: "cut-skip", reason: "no-legal-span", totalTokens: measured.totalTokens, drain: false });
+                this.ctx.logger?.debug?.("spine cut skipped");
+              }
               break;
             }
-            measurement = this.ctx.tokenMeter.measure(agent.session);
-            const after = measurement.totalTokens;
-            reduced = after < before;
-            const saved = before - after;
-            if (saved > 0) {
-              this.recordDecision(state, {
-                phase: "cut",
-                result: "committed",
-                before,
-                after,
-                saved,
-                tokens: chunk.tokens,
-                drain,
-              });
-              drainNotes.push({
-                kind: "cut",
-                saved,
-                afterPrefix: Math.max(0, after - (chunk.prefix || 0)),
-                tailBeyondKept,
-                prefix: chunk.prefix || 0,
-                total: after,
-                tokens: chunk.tokens,
-                gate: "cut",
-              });
-            }
-            this.ctx.logger?.info?.(`spine cut ${Date.now() - started}ms ${before} -> ${after} chunk=${chunk.tokens} saved=${saved}`);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("raw backup missing before cut") && error?.retryable === true) {
-              catchup.retryRequested = true;
-              if (catchup.finished && state.rawCutRetryAttempts < CAPTURE_RETRY_LIMIT) {
-                state.rawCutRetryAttempts += 1;
-                this.scheduleMaintenanceRetry(agent);
+            const tailBeyondKept = chunk.after - (chunk.keptTokens || 0);
+            if (!drain && tailBeyondKept > MAX_TAIL && measured.totalTokens < URGENT_TOKENS) break;
+            const before = measured.totalTokens;
+            const started = Date.now();
+            let reduced = false;
+            try {
+              state.localOnly = true;
+              state.approvedCard = chunk.card;
+              const committed = await this.commitSelectedSpan(agent, chunk, op, { drain });
+              if (committed === false) {
+                maintenanceFailed = true;
+                break;
               }
+              measurement = this.ctx.tokenMeter.measure(agent.session);
+              const after = measurement.totalTokens;
+              reduced = after < before;
+              const saved = before - after;
+              if (saved > 0) {
+                this.recordDecision(state, {
+                  phase: "cut",
+                  result: "committed",
+                  before,
+                  after,
+                  saved,
+                  tokens: chunk.tokens,
+                  drain,
+                });
+                drainNotes.push({
+                  kind: "cut",
+                  saved,
+                  afterPrefix: Math.max(0, after - (chunk.prefix || 0)),
+                  tailBeyondKept,
+                  prefix: chunk.prefix || 0,
+                  total: after,
+                  tokens: chunk.tokens,
+                  gate: "cut",
+                });
+              }
+              this.ctx.logger?.info?.(`spine cut ${Date.now() - started}ms ${before} -> ${after} chunk=${chunk.tokens} saved=${saved}`);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (message.includes("raw backup missing before cut") && error?.retryable === true) {
+                catchup.retryRequested = true;
+                if (catchup.finished && state.rawCutRetryAttempts < CAPTURE_RETRY_LIMIT) {
+                  state.rawCutRetryAttempts += 1;
+                  this.scheduleMaintenanceRetry(agent);
+                }
+              }
+              maintenanceFailed = true;
+              this.recordDecision(state, { phase: "cut", result: "failed", reason: message, drain });
+              this.ctx.logger?.warn?.(`spine cut failed: ${message}`);
+              break;
             }
-            maintenanceFailed = true;
-            this.recordDecision(state, { phase: "cut", result: "failed", reason: message, drain });
-            this.ctx.logger?.warn?.(`spine cut failed: ${message}`);
-            break;
+            if (!reduced) {
+              maintenanceFailed = true;
+              this.ctx.logger?.warn?.(`spine cut did not reduce ${before}; leaving the prefix for the gate`);
+              break;
+            }
+            if (!drain) break;
           }
-          if (!reduced) {
-            maintenanceFailed = true;
-            this.ctx.logger?.warn?.(`spine cut did not reduce ${before}; leaving the prefix for the gate`);
-            break;
+          if (drainNotes.length) flushDrainStats(shadowDirectory(), drainNotes, { sid: state.key, drain });
+          state.turnBase = measurement.totalTokens;
+          state.maxTurnGrowth = 0;
+          await this.ctx.sessions?.flush?.(agent.session);
+          this.rememberPrefix(agent);
+          if (!maintenanceFailed) {
+            state.rawCutRetryAttempts = 0;
+            markCompleted();
           }
-          if (!drain) break;
-        }
-        if (drainNotes.length) flushDrainStats(shadowDirectory(), drainNotes, { sid: state.key, drain });
-        state.turnBase = measurement.totalTokens;
-        state.maxTurnGrowth = 0;
-        await this.ctx.sessions?.flush?.(agent.session);
-        this.rememberPrefix(agent);
-        if (!maintenanceFailed) {
-          state.rawCutRetryAttempts = 0;
-          markCompleted();
-        }
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.ctx.logger?.warn?.(`spine after-turn skipped: ${message}`);
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.ctx.logger?.warn?.(`spine after-turn skipped: ${message}`);
+      } finally {
+        state.localOnly = false;
+      }
+      return maintenanceCompleted;
     } finally {
-      state.localOnly = false;
+      if (ownedAbort && state.maintenanceAbort === ownedAbort) state.maintenanceAbort = null;
     }
-    return maintenanceCompleted;
   }
 
   async flushPendingCaptures(session = null, ids = null) {
