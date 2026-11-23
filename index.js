@@ -58,6 +58,15 @@ const HOST_INJECTED_MESSAGE_KINDS = new Set([
   "goal",
   "tool-goal",
 ]);
+const HOST_INJECTED_PLUGIN_FORMS = new Set(["notice", "snapshot"]);
+
+function isHostInjectedSource(source) {
+  if (!source || typeof source !== "object") return false;
+  if (HOST_INJECTED_MESSAGE_KINDS.has(source.kind)) return true;
+  return source.kind === "plugin"
+    && HOST_INJECTED_MESSAGE_KINDS.has(source.plugin)
+    && HOST_INJECTED_PLUGIN_FORMS.has(source.form);
+}
 
 function catalogExportTarget(value) {
   if (typeof value === "string") return value;
@@ -503,8 +512,7 @@ function classifyUserEvent(session, seq) {
     && Array.isArray(content) && content.length === 1
     && content[0]?.type === "text" && typeof content[0].text === "string"
     && Object.keys(content[0]).length === 2;
-  const hostInjectedNotice = isUserMessage && !pluginNotice
-    && HOST_INJECTED_MESSAGE_KINDS.has(source?.kind);
+  const hostInjectedNotice = isUserMessage && !pluginNotice && isHostInjectedSource(source);
   const genuineUserBoundary = isUserMessage && !pluginNotice && !hostInjectedNotice;
   return {
     pluginNotice,

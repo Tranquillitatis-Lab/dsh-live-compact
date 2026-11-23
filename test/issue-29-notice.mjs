@@ -12,6 +12,7 @@ import { fixture, runtime } from "./helpers/runtime.mjs";
 
 // Copied data contract only. Never import/execute the downloaded producer.
 const source = { kind: "progress-rules", form: "notice", summary: "过程纪律：要求正文通报" };
+const reminder = '（过程纪律提醒）先通报。\r\n必须保留 notice-only-7391。\n"引号" \\ 👋\t';
 const hostNoticeKinds = [
   "time-context",
   "tool-jobs",
@@ -22,7 +23,16 @@ const hostNoticeKinds = [
   "goal",
   "tool-goal",
 ];
-const reminder = '（过程纪律提醒）先通报。\r\n必须保留 notice-only-7391。\n"引号" \\ 👋\t';
+const hostPluginNoticeSources = [
+  { kind: "plugin", plugin: "time-context", form: "snapshot", sections: [{ name: "time-context", text: reminder }] },
+  { kind: "plugin", plugin: "tool-jobs", form: "notice", summary: "job completed" },
+  { kind: "plugin", plugin: "skill-catalog", form: "snapshot", sections: [{ name: "skill-catalog", text: reminder }] },
+  { kind: "plugin", plugin: "runtime-context", form: "snapshot", sections: [{ name: "runtime-context", text: reminder }] },
+  { kind: "plugin", plugin: "subagent-settled", form: "notice", summary: "subagent settled" },
+  { kind: "plugin", plugin: "retry", form: "notice", summary: "retry notice" },
+  { kind: "plugin", plugin: "goal", form: "notice", summary: "goal notice" },
+  { kind: "plugin", plugin: "tool-goal", form: "notice", summary: "goal tool notice" },
+];
 const estimate = (message) => Math.ceil(JSON.stringify(message.content).length / 4) + 8;
 const bytes = (value) => Buffer.from(JSON.stringify(value));
 const summaryText = (f) => messageText({ content: f.summaries().at(-1)?.data.summary });
@@ -49,7 +59,9 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, notice
   const prefixBytes = bytes(f.session.deriveMessages());
   const notices = [];
   const inject = (kind = null) => {
-    const messageSource = kind ? { kind } : source;
+    const messageSource = kind
+      ? (typeof kind === "object" ? kind : { kind })
+      : source;
     const message = { ...createUserMessage({ content: [{ type: "text", text: reminder }], source: messageSource }), ...notice };
     if (kind) message.source = messageSource;
     for (const key of Object.keys(notice)) if (notice[key] === undefined) delete message[key];
@@ -97,7 +109,7 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, notice
 
 for (const engineKind of ["local", "cloud"]) {
   test(`${engineKind}: dense host bookkeeping messages do not fragment a cut`, async (t) => {
-    const x = setup(t, { engineKind, noticeKinds: hostNoticeKinds });
+    const x = setup(t, { engineKind, noticeKinds: [...hostNoticeKinds, ...hostPluginNoticeSources] });
     await x.engine.finishTurn(x.agent);
     assert.equal(x.f.summaries().length, 1, x.h.warnings.join("\n"));
     assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
