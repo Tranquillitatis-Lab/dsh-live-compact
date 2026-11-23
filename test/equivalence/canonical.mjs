@@ -19,12 +19,17 @@ export function canonicalText(text) {
     .replace(HEX_RAND, "<HEX>");
 }
 
-export function canonicalize(value, root) {
-  if (typeof value === "string") return canonicalText(root ? stripRoot(value, root) : value);
-  if (Array.isArray(value)) return value.map((item) => canonicalize(item, root));
+export function canonicalize(value, root, key = "") {
+  if (typeof value === "string") {
+    const text = canonicalText(root ? stripRoot(value, root) : value);
+    // Raw restore records contain absolute paths.  The checked-in baseline was
+    // captured on Windows, while Linux/macOS use POSIX separators.
+    return key === "path" || key.endsWith("Path") ? text.replaceAll("\\", "/") : text;
+  }
+  if (Array.isArray(value)) return value.map((item) => canonicalize(item, root, key));
   if (value && typeof value === "object") {
     const out = {};
-    for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key], root);
+    for (const childKey of Object.keys(value).sort()) out[childKey] = canonicalize(value[childKey], root, childKey);
     return out;
   }
   return value;

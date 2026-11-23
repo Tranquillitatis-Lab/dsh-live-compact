@@ -4,6 +4,7 @@
 // meta 段不参与比较（其中记录了来源树名，按设计就不同）。
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { canonicalize } from "./canonical.mjs";
 
 const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 
@@ -37,8 +38,8 @@ function whitelisted(path, entries) {
 }
 
 export function compareCase(baseline, current, { caseName, entries = [] } = {}) {
-  const { meta: _baselineMeta, ...baselineRest } = baseline;
-  const { meta: _currentMeta, ...currentRest } = current;
+  const { meta: _baselineMeta, ...baselineRest } = canonicalize(baseline);
+  const { meta: _currentMeta, ...currentRest } = canonicalize(current);
   const diffs = diffPaths(baselineRest, currentRest);
   const scoped = entries.filter((entry) => !entry?.case || entry.case === caseName);
   return { diffs, failures: diffs.filter((diff) => !whitelisted(diff.path, scoped)) };

@@ -35,7 +35,7 @@ try {
   resetShadowAccessState();
   trip();
   await assert.rejects(
-    saveShadowBodyAsync.call(host(), body, true, file, "session", [], {}),
+    saveShadowBodyAsync.call(host(), body, true, file, "session", [], { platform: "win32" }),
     { code: "ESHADOWACCESS" },
   );
   assert.equal(existsSync(file), false, "fused save must not write the file");
