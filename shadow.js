@@ -40,6 +40,22 @@ const PLUGIN_NAME = /^(?:(?:cut|official|shadow)-\d+-[0-9a-f]{8}|raw-[0-9a-f]{16
 let cachedSid = "";
 const lockedDirs = new Map();
 const lockedFiles = new Map();
+// 锁表硬上界（P1-4）：两张表只是"该路径已完成 ACL 收紧"的记忆缓存，不是锁本身；
+// 真正的锁是固化在文件/目录上的 DACL（win32）或权限位（其他平台），不受本表影响。
+// 淘汰安全性论证：
+// 1. 淘汰 ≠ 解锁——条目被淘汰后，下次 tightenShadow 对该路径只是重新执行一次
+//    幂等的收紧 runner；runner 失败仍抛 ESHADOWACCESS 并触发 fuse（fail-closed），
+//    绝不会把"拿不到锁"变成"绕过锁"。
+// 2. 名字一次性不变式——raw 分片名 = sha256(toolCallId) 前 16 hex（raw.js rawName），
+//    cut/official/shadow 分片名含随机 hex，staging tmp 名含 randomBytes(8)：
+//    名字全局唯一、绝不复用，被淘汰的路径键不会被新文件继承，因此既不会出现
+//    "同名新文件误命中旧缓存"，也不会造成同名双重加锁。
+// 3. 即便假设发生同名重建，tightenShadow 的缓存命中还需通过 sameAccessEntry 的
+//    dev:ino:birthtimeNs 身份比对，身份不同必 miss，旧对象的 ACL 记忆绝不会套到
+//    新对象上。
+// 正常情况下 rotation 会随删除同步回收条目（见 releaseLockedFile），锁表规模随
+// 磁盘存活分片数收敛；本上界 4096 只是兜底（写入失败清理路径等残留）。
+const MAX_LOCK_ENTRIES = 4096;
 let shadowFuseState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 const shadowWarnings = new Set();
 const DECISION_ROTATION_INTERVAL_MS = 1000;
@@ -533,6 +549,27 @@ export function resetShadowAccessState() {
   shadowWarnings.clear();
 }
 
+// 记录锁表条目；超过硬上界时按插入序淘汰最旧条目。Map 迭代保持插入序，对已存在
+// 键重复 set 不会改变其位置也不增长表，因此每次新插入至多淘汰一条。安全性论证
+// 见 MAX_LOCK_ENTRIES 处注释：淘汰只是放弃"免重跑收紧"的记忆，不是解锁。
+function rememberLockedEntry(map, key, value) {
+  map.set(key, value);
+  while (map.size > MAX_LOCK_ENTRIES) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}
+
+// rotation/清理删除文件后同步释放其锁表条目，使锁表随分片删除收敛。键与
+// accessEntry 的 canonical 规则一致：真实父目录 + 文件名。父目录已消失时算不出
+// canonical 键，留待硬上界兜底；对不存在的键 delete 是无害空操作。
+function releaseLockedFile(path) {
+  try {
+    lockedFiles.delete(join(realDirectory(dirname(path)), basename(path)));
+  } catch {}
+}
+
 export function shadowAccessFused() {
   return Atomics.load(shadowFuseState, 0) !== 0;
 }
@@ -602,7 +639,7 @@ function lockedDirectory(entry) {
   const previous = lockedDirs.get(entry.absolute) ?? lockedDirs.get(entry.canonical);
   if (!previous) return false;
   if (!sameAccessEntry(previous, entry)) throw new Error("spine: shadow permission directory identity changed");
-  lockedDirs.set(entry.absolute, previous);
+  rememberLockedEntry(lockedDirs, entry.absolute, previous);
   return true;
 }
 
@@ -1111,10 +1148,10 @@ export function defaultShadowAccessRunner({
     const after = accessEntry(path, kind);
     if (!sameAccessEntry(before, after)) throw new Error("spine: shadow permission target identity changed");
     if (kind === "dir") {
-      lockedDirs.set(after.absolute, after);
-      lockedDirs.set(after.canonical, after);
+      rememberLockedEntry(lockedDirs, after.absolute, after);
+      rememberLockedEntry(lockedDirs, after.canonical, after);
     } else {
-      lockedFiles.set(after.canonical, after);
+      rememberLockedEntry(lockedFiles, after.canonical, after);
     }
   } catch (error) {
     error.step = kind === "file" ? "file" : "dir";
@@ -1180,7 +1217,7 @@ export function tightenCreatedShadow(file, fd, access, { remember = true, skipRu
       if (!entry.identity || entry.identity !== accessIdentity(opened) || opened.nlink !== 1n) {
         throw new Error("spine: shadow published file identity changed");
       }
-      if (remember) lockedFiles.set(entry.canonical, entry);
+      if (remember) rememberLockedEntry(lockedFiles, entry.canonical, entry);
       return;
     } catch (cause) {
       tripFuse();
@@ -1199,7 +1236,7 @@ export function tightenCreatedShadow(file, fd, access, { remember = true, skipRu
           throw new Error("spine: shadow created file identity changed");
         }
         // Only this wx-created object is known to inherit our confirmed DACL.
-        if (remember) lockedFiles.set(entry.canonical, entry);
+        if (remember) rememberLockedEntry(lockedFiles, entry.canonical, entry);
         return;
       }
     } catch (cause) {
@@ -1300,6 +1337,9 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     }
     renameSync(target, file);
     protectedPath = file;
+    // staging 临时名一次性且永不复用：发布后其锁表条目已成死重，随 rename 同步
+    // 释放，避免每次保存向 lockedFiles 残留一个永不复用的条目。
+    releaseLockedFile(target);
     if (basename(file) !== DECISIONS_NAME) {
       decisionRotationAt.delete(rotationScope.root);
       decisionUsageBytes.delete(rotationScope.root);
@@ -1593,6 +1633,9 @@ function rotateShadowLocked({
         break;
       }
     }
+    // 文件已被删除（或本就 ENOENT）：同步释放其锁表条目，使锁表随 rotation
+    // 收敛而不是只增不减。unlink 失败（文件仍在盘上）时不会走到这里。
+    releaseLockedFile(file.path);
     used -= file.size;
     freed += file.size;
     deleted += 1;
@@ -1600,6 +1643,9 @@ function rotateShadowLocked({
       try {
         unlink(`${file.path}.meta.json`);
       } catch {}
+      // meta.json 通常已随之删除；即便 unlink 因占用等失败，释放缓存条目也是
+      // 安全方向——下次 tightenShadow 会重新收紧（fail-closed），不会绕过锁。
+      releaseLockedFile(`${file.path}.meta.json`);
     }
   }
   const fits = used + incomingBytes <= cap;

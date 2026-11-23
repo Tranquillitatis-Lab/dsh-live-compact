@@ -1,0 +1,30 @@
+{
+  "exp": "B",
+  "src": "current",
+  "date": "2026-11-22T17:27:19.530Z",
+  "node": "v26.7.0",
+  "params": {
+    "sessions": 3,
+    "turns": 3,
+    "payloadKb": 512
+  },
+  "peakHeapUsed": 35783832,
+  "preDisposeHeapUsed": 15015368,
+  "postDisposeHeapUsed": 11245472,
+  "heapDrop": 3769896,
+  "preDisposeRss": 120614912,
+  "postDisposeRss": 98783232,
+  "rssDrop": 21831680,
+  "workersBefore": 1,
+  "workersAfter": 0,
+  "workerExit": true,
+  "workerExitMs": 78.00799999999981,
+  "threadsBefore": 14,
+  "threadsAfter": 13,
+  "disposedFlagBefore": false,
+  "disposedFlagAfter": true,
+  "warnings": 2,
+  "firstWarning": "spine cut failed: spine: shadow rotation coordination unavailable; backup refused",
+  "baseHeapUsed": 7771896,
+  "baseRss": 74739712
+}
