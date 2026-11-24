@@ -42,6 +42,17 @@ test("P1 Thunder send-less facts preserve their source role", () => {
   assert.match(prompt, /- \[unknown\] 缺少原始备份。/);
 });
 
+test("issue #68 Thunder budgets Japanese, Korean and Han code points", () => {
+  const prose = (uncovered, proseTokens) => buildSendLess({ uncovered, proseTokens })
+    .split("Uncovered prose to summarize:\n").at(-1);
+  for (const character of ["あ", "カ", "ｰ", "한", "ᄀ", "ㄱ", "汉", "㐀", "﨑", "𠀀"]) {
+    assert.equal(prose(character.repeat(4), 2), character.repeat(3), character);
+  }
+  assert.equal(prose("abcdefgh", 1), "abcd");
+  assert.equal(prose("あab", 1), "あa");
+  assert.equal(prose("abc😀", 1), "abc");
+});
+
 test("P1 turn baseline settles on an early maintenance return", () => {
   const source = String(Spine.prototype.finishTurn);
   assert.equal(
