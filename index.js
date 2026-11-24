@@ -2467,8 +2467,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       ended = true;
       await this.ctx.sessions.flush(session);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       if (started && !ended) {
-        const message = error instanceof Error ? error.message : String(error);
         try {
           session.append("compaction/end", replaced ? lifecycle : { ...lifecycle, error: message });
         } catch {}
@@ -2501,7 +2501,24 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const owned = this.ownedSignal(signal);
     this.pinLiveAgent(state, agent);
     try {
-      return await super.compactIfNeeded(agent, trigger, owned.signal);
+      const result = await super.compactIfNeeded(agent, trigger, owned.signal);
+      state.reportedPressureConfigError = undefined;
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.constructor.name === "TargetPressureConfigError" &&
+          state.reportedPressureConfigError !== error.message && existsSync(shadowDirectory())) {
+        state.reportedPressureConfigError = error.message;
+        try {
+          this.recordDecision(state, {
+            phase: "official-compaction",
+            trigger,
+            result: "rejected",
+            reason: "invalid-pressure-config",
+            detail: error.message,
+          });
+        } catch {}
+      }
+      throw error;
     } finally {
       this.unpinLiveAgent(state);
       owned.dispose?.();

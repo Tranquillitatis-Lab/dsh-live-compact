@@ -2,6 +2,7 @@
 
 ## 1.1.13
 
+- #56 在已有 shadow 目录记录宿主压力预算拒绝的具体原因。小切替换后归档写入失败时保留原始错误。
 - **#67 Windows 子进程兼容**：固定 ACL 脚本由 PowerShell 5.1 的 `-Command` 接收。路径和 SID 通过子进程环境传递，备份前验读实际 DACL。
 - **#68 雷霆正文预算**：按 CJK 权重估算假名、谚文、扩展汉字和兼容汉字，并在完整码点处截断正文。
 - **#69 宿主注入边界**：`time-context`、`tool-jobs`、`skill-catalog`、`runtime-context`、`subagent-settled`、`retry`、`goal` 和 `tool-goal` 这八类 DSH `user/message` bookkeeping 事件不再阻断小切回溯；未知来源、缺失来源和真实 `user` 消息仍保持硬边界。

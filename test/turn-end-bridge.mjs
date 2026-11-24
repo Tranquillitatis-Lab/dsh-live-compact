@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import Spine from "../index.js";
+import { DECISIONS_NAME, STATS_NAME } from "../shadow.js";
 import { fixture, runtime } from "./helpers/runtime.mjs";
 
 test("20 completed user tasks on turn/end produce repeated cloud cuts", async (t) => {
@@ -137,6 +140,68 @@ test("the running host persists a turn-stopping cut before it closes the session
   const lifecycle = persisted.filter((event) => ["compaction/start", "compaction/end"].includes(event.type));
   assert.deepEqual(lifecycle.map((event) => event.data.turn), [2, 2]);
   assert.ok(!persisted.some((event) => event.type === "turn/end"));
+});
+
+test("a flush failure after a live replacement reports the original persistence error", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine({}, "cloud");
+  const agent = f.agent();
+  agent.status = "running";
+  f.add("turn/start", { turn: 2 }, 0, {});
+  f.user("Keep the current task recoverable when the storage write fails.");
+  for (let round = 0; round < 8; round += 1) {
+    f.round(`before-flush-error-${round}`, { tokens: 4000, turn: 2 });
+  }
+  h.capture(engine, f);
+  ctx.sessions.flush = async (session) => {
+    if (session.snapshotEvents().some((event) => event.surfaceOp?.op === "replace")) {
+      throw new Error("fixture archive write failed");
+    }
+  };
+
+  await engine.runTurnStoppingMaintenance(agent, new AbortController().signal, 2);
+
+  assert.equal(f.session.snapshotEvents().filter((event) => event.surfaceOp?.op === "replace").length, 1);
+  assert.equal(f.session.snapshotEvents().filter((event) => event.type === "compaction/end").length, 1);
+  assert.ok(h.warnings.includes("spine compaction persistence unknown after replacement: fixture archive write failed"),
+    h.warnings.join("\n"));
+  assert.equal(existsSync(join(h.root, STATS_NAME)), false);
+});
+
+test("the host's invalid pressure budget is recorded once when shadow storage is available", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine();
+  const agent = f.agent();
+  const config = { provider: "test", model: "no-network", maxTokens: 262144 };
+  f.session.requestHeader = () => ({ config });
+  ctx.llm = { resolveModelInfo: async () => ({ context: { contextWindow: 262144 } }) };
+  const shadow = join(h.root, "later");
+  process.env.SPINE_SHADOW_DIR = shadow;
+  const checkPressure = () => engine.compactIfNeeded(agent, "pressure", new AbortController().signal);
+  const expected = /reserves 262144 completion tokens of its 262144-token context window, leaving no message budget/;
+
+  await assert.rejects(checkPressure, expected);
+  assert.equal(existsSync(shadow), false);
+  mkdirSync(shadow, { mode: 0o700 });
+  await assert.rejects(checkPressure, expected);
+  await assert.rejects(checkPressure, expected);
+  const decisions = readFileSync(join(shadow, DECISIONS_NAME), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].sid, f.session.id);
+  assert.equal(decisions[0].phase, "official-compaction");
+  assert.equal(decisions[0].trigger, "pressure");
+  assert.equal(decisions[0].result, "rejected");
+  assert.equal(decisions[0].reason, "invalid-pressure-config");
+  assert.match(decisions[0].detail, expected);
+  assert.equal(h.pruneCalls, 0);
+  config.maxTokens = 32768;
+  assert.equal(await checkPressure(), null);
+  config.maxTokens = 262144;
+  await assert.rejects(checkPressure, expected);
+  assert.equal(readFileSync(join(shadow, DECISIONS_NAME), "utf8").trim().split("\n").length, 2);
+  assert.equal(f.summaries().length, 0);
 });
 
 test("turn-stopping does not mark a boundary when maintenance fails", async () => {
