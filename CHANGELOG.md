@@ -4,6 +4,7 @@
 
 - **#68 雷霆正文预算**：按 CJK 权重估算假名、谚文、扩展汉字和兼容汉字，并在完整码点处截断正文。
 - **#69 宿主注入边界**：`time-context`、`tool-jobs`、`skill-catalog`、`runtime-context`、`subagent-settled`、`retry`、`goal` 和 `tool-goal` 这八类 DSH `user/message` bookkeeping 事件不再阻断小切回溯；未知来源、缺失来源和真实 `user` 消息仍保持硬边界。
+- **#69 续接上下文**：小切归档保留宿主原生快照和技能目录的来源记录，续接由 DSH 重新投影当前说明，卡片只保留任务内容与证据。
 - **#62 回归保护**：保留 shadow worker 的 eval/import 启动、`already-pruned` 游标推进和 `captureBlocked` 维护重试路径，并在候选门禁中继续覆盖。
 
 ## 1.1.12

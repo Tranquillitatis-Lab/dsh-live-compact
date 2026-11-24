@@ -96,6 +96,20 @@ function isHostInjectedSource(source) {
   return HOST_INJECTED_PLUGIN_FORMS.has(source.form) && isHostInjectedPluginSource(source);
 }
 
+function isReprojectedHostContext(source) {
+  if (!source || typeof source !== "object") return false;
+  if (source.kind === "runtime-context" && source.form === "snapshot") {
+    return exactKeys(source, ["kind", "form", "sections"]) && validSnapshotSections(source.sections);
+  }
+  if (source.kind !== "skill-catalog" || source.form !== "catalog") return false;
+  const keys = source.update === true ? ["kind", "form", "entries", "update"] : ["kind", "form", "entries"];
+  return exactKeys(source, keys) && Array.isArray(source.entries)
+    && source.entries.every((entry) => entry && typeof entry === "object"
+      && exactKeys(entry, ["name", "description"])
+      && typeof entry.name === "string" && entry.name.length > 0
+      && typeof entry.description === "string");
+}
+
 function catalogExportTarget(value) {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object") return "";
@@ -999,6 +1013,10 @@ export function selectNewestChunk(session, measurement, key = DEFAULT_KEY, conte
         if (block?.type === "tool-call" && block.id) callSeqs.set(block.id, nodes[index]);
       }
       if (index < spanStart || index > spanEnd) continue;
+      // The host republishes these native snapshots when their surface nodes
+      // are replaced. Keep their original event links without reciting stale
+      // instructions in the card. Older source envelopes remain ordinary pieces.
+      if (event?.type === "user/message" && isReprojectedHostContext(event.data?.source)) continue;
       const toolCallId = event?.data?.message?.toolCallId || "";
       const call = toolCallId ? context.calls?.get?.(toolCallId) : null;
       const isTool = event?.type === "tool/result";

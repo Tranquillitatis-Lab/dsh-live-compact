@@ -117,6 +117,23 @@ for (const engineKind of ["local", "cloud"]) {
     assertUnchanged(x);
   });
 
+  test(`${engineKind}: native host snapshots stay in the archive without stale copies in the card`, async (t) => {
+    const runtime = { kind: "runtime-context", form: "snapshot", sections: [{ name: "sandbox", text: reminder }] };
+    const catalog = { kind: "skill-catalog", form: "catalog", entries: [{ name: "example", description: reminder }] };
+    const x = setup(t, { engineKind, noticeKinds: [runtime, catalog, { ...catalog, update: true }] });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, 1, x.h.warnings.join("\n"));
+    assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+    assert.ok(!summaryText(x.f).includes("notice-only-7391"));
+    assertUnchanged(x);
+
+    const legacy = setup(t, { engineKind, noticeKinds: [runtime.kind, catalog.kind, { ...catalog, update: false }] });
+    await legacy.engine.finishTurn(legacy.agent);
+    assert.equal(legacy.f.summaries().length, 1, legacy.h.warnings.join("\n"));
+    assert.match(summaryText(legacy.f), /notice-only-7391/);
+    assertUnchanged(legacy);
+  });
+
   test(`${engineKind}: a real user message still stops host-notice expansion`, async (t) => {
     const x = setup(t, { engineKind, notice: { source: { kind: "time-context" } }, after: true });
     await x.engine.finishTurn(x.agent);
