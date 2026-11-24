@@ -181,6 +181,50 @@ test("a capped tool task queues one follow-up in the original session", async (t
   assert.equal(queued.length, 0);
 });
 
+test("a reasoning-only cap before any recovery tool gets one final follow-up", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine();
+  engine.finishTurn = async () => true;
+  const agent = f.agent();
+  agent.status = "running";
+  const queued = [];
+  agent.inbox = { nextTurn: queued, nextStep: [] };
+  agent.followup = (message) => queued.push(message);
+  const signal = new AbortController().signal;
+  const finishAtLimit = (turn) => f.add("assistant/message", {
+    turn,
+    message: { content: [{ type: "reasoning", text: "A plan without a tool call." }] },
+    stream: [{ type: "chunk", time: 0, chunk: { type: "finish", reason: { kind: "max-tokens" } } }],
+  });
+
+  f.add("turn/start", { turn: 2 }, 0, {});
+  f.user("Implement and verify the requested change.");
+  f.round("inspected-before-limit", { turn: 2 });
+  finishAtLimit(2);
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 2 });
+  assert.equal(queued.length, 1);
+  const [recovery] = queued.splice(0);
+
+  f.add("turn/end", { turn: 2, reason: { kind: "max-tokens" } }, 0, {});
+  f.add("turn/start", { turn: 3 }, 0, {});
+  f.add("user/message", recovery);
+  finishAtLimit(3);
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 3 });
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 3 });
+  assert.equal(queued.length, 1);
+  const [lastRecovery] = queued.splice(0);
+  assert.equal(lastRecovery.source.kind, "spine-output-recovery-final");
+  assert.match(lastRecovery.content[0].text, /one small tool call/);
+
+  f.add("turn/end", { turn: 3, reason: { kind: "max-tokens" } }, 0, {});
+  f.add("turn/start", { turn: 4 }, 0, {});
+  f.add("user/message", lastRecovery);
+  finishAtLimit(4);
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 4 });
+  assert.equal(queued.length, 0);
+});
+
 test("output recovery yields to normal completion, pending input, cancellation and incomplete tool calls", async (t) => {
   const h = runtime(t);
   const { engine, ctx } = h.engine();
