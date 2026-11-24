@@ -29,9 +29,10 @@ function tools(env = ENV) {
 function fakeExec(calls, env = ENV) {
   const { whoami } = tools(env);
   return (file, args, options) => {
-    calls.push({ file, args: [...args], options });
+    const call = { file, args: [...args], options };
+    calls.push(call);
     if (file === whoami) return `"DESKTOP-P0","${SID}"`;
-    windowsAclCall(file, args, options, env, SID);
+    call.acl = windowsAclCall(file, args, options, env, SID);
     return "DSH_SHADOW_ACL_OK";
   };
 }
@@ -101,7 +102,7 @@ test("a file DACL is requested separately with no inherited ACEs", () => {
     writeFileSync(file, "");
     defaultShadowAccessRunner({ path: file, kind: "file", platform: "win32", env: ENV, execFile: fakeExec(calls) });
     assert.equal(calls[1].options.env.DSH_SHADOW_ACL_KIND, "file");
-    const script = Buffer.from(calls[1].args[4], "base64").toString("utf16le");
+    const { script } = calls[1].acl;
     assert.match(script, /\$inheritance = \[Security.AccessControl.InheritanceFlags\]::None/);
     assert.match(script, /if \(\$kind -eq 'dir'\) \{[\s\S]*?ContainerInherit/);
   } finally {

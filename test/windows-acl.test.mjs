@@ -57,7 +57,24 @@ test("replacement script drops all prior explicit ACEs and checks the whole prot
   assert.equal(JSON.parse(readFileSync(new URL("../package.json", import.meta.url))).files.includes("shadow.js"), true);
 });
 
-test("paths remain environment data and the encoded program stays identical", (t) => {
+test("Windows shadow creation succeeds when the launcher refuses encoded commands", (t) => {
+  const f = fixture(t);
+  const execute = f.access.execFile;
+  f.access.execFile = (file, args, options) => {
+    if (args.includes("-EncodedCommand")) {
+      const error = new Error("spawn EPERM");
+      error.code = "EPERM";
+      throw error;
+    }
+    return execute(file, args, options);
+  };
+  ensureShadowDir(f.dir, f.access);
+  assert.equal(f.actions.length, 1);
+  assert.equal(f.actions[0].kind, "dir");
+  assert.equal(shadowAccessFused(), false);
+});
+
+test("paths travel as environment data with one fixed PowerShell program", (t) => {
   const env = { ...ENV, dsh_shadow_acl_path: "stale", DsH_ShAdOw_AcL_sId: "stale" };
   const f = fixture(t, env);
   ensureShadowDir(f.dir, f.access);

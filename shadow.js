@@ -1044,7 +1044,6 @@ try {
   exit 1
 }
 `;
-const WINDOWS_ACL_COMMAND = Buffer.from(WINDOWS_ACL_SCRIPT, "utf16le").toString("base64");
 
 export function shadowAccessPlan(platform = process.platform, userSid = "", kind = "dir") {
   if (platform === "win32") {
@@ -1141,7 +1140,8 @@ export function defaultShadowAccessRunner({
     });
     const result = execFile(
       powershellPath,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", WINDOWS_ACL_COMMAND],
+      // Issue #67 reported a build that rejects -EncodedCommand after whoami.
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_ACL_SCRIPT],
       { env: childEnv, encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 15000, maxBuffer: 65536 },
     );
     if (String(result).trim() !== "DSH_SHADOW_ACL_OK") throw new Error("spine: shadow DACL verification not confirmed");
