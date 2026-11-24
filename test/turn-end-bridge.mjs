@@ -142,6 +142,74 @@ test("the running host persists a turn-stopping cut before it closes the session
   assert.ok(!persisted.some((event) => event.type === "turn/end"));
 });
 
+test("a capped tool task queues one follow-up in the original session", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine();
+  engine.finishTurn = async () => true;
+  const agent = f.agent();
+  agent.status = "running";
+  const queued = [];
+  agent.inbox = { nextTurn: queued, nextStep: [] };
+  agent.followup = (message) => queued.push(message);
+  const signal = new AbortController().signal;
+  const addStop = (turn) => f.add("assistant/message", {
+    turn,
+    message: { content: [{ type: "reasoning", text: "Unfinished work" }] },
+    stream: [{ type: "chunk", time: 0, chunk: { type: "finish", reason: { kind: "max-tokens" } } }],
+  });
+
+  f.add("turn/start", { turn: 2 }, 0, {});
+  f.user("Implement and verify the requested change.");
+  f.round("before-limit", { turn: 2 });
+  addStop(2);
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 2 });
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 2 });
+
+  assert.equal(queued.length, 1);
+  const [recovery] = queued.splice(0);
+  assert.equal(recovery.role, "user");
+  assert.equal(recovery.source.kind, "spine-output-recovery");
+  assert.match(recovery.content[0].text, /original request/);
+
+  f.add("turn/end", { turn: 2, reason: { kind: "max-tokens" } }, 0, {});
+  f.add("turn/start", { turn: 3 }, 0, {});
+  f.add("user/message", recovery);
+  f.round("during-recovery", { turn: 3 });
+  addStop(3);
+  await ctx.serial("agent/turn-stopping", { agent, signal, turn: 3 });
+  assert.equal(queued.length, 0);
+});
+
+test("output recovery yields to normal completion, pending input, cancellation and incomplete tool calls", async (t) => {
+  const h = runtime(t);
+  const { engine, ctx } = h.engine();
+  engine.finishTurn = async () => true;
+  for (const state of ["completed", "pending", "cancelled", "unanswered-tool", "no-tool-work"]) {
+    const f = h.use(fixture());
+    const agent = f.agent();
+    agent.status = "running";
+    const queued = [];
+    agent.inbox = { nextTurn: state === "pending" ? [{}] : [], nextStep: [] };
+    agent.followup = (message) => queued.push(message);
+    const abort = new AbortController();
+    if (state === "cancelled") abort.abort();
+    f.add("turn/start", { turn: 2 }, 0, {});
+    f.user("Implement and verify the requested change.");
+    if (state !== "no-tool-work") f.round(`before-${state}`, { turn: 2 });
+    const content = state === "unanswered-tool"
+      ? [{ type: "tool-call", id: "unanswered", name: "shell", arguments: "{}" }]
+      : [{ type: "text", text: "Part of the response." }];
+    f.add("assistant/message", {
+      turn: 2,
+      message: { content },
+      stream: [{ type: "chunk", time: 0, chunk: { type: "finish", reason: { kind: state === "completed" ? "stop" : "max-tokens" } } }],
+    });
+    await ctx.serial("agent/turn-stopping", { agent, signal: abort.signal, turn: 2 });
+    assert.equal(queued.length, 0, state);
+  }
+});
+
 test("a flush failure after a live replacement reports the original persistence error", async (t) => {
   const h = runtime(t);
   const f = h.use(fixture());
