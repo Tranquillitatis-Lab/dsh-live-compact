@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import Spine from "../index.js";
-import { DECISIONS_NAME, STATS_NAME } from "../shadow.js";
+import { DECISIONS_NAME, MAINTENANCE_NAME, STATS_NAME } from "../shadow.js";
 import { fixture, runtime } from "./helpers/runtime.mjs";
 
 test("20 completed user tasks on turn/end produce repeated cloud cuts", async (t) => {
@@ -281,22 +281,60 @@ test("a flush failure after a live replacement reports the original persistence 
   assert.equal(existsSync(join(h.root, STATS_NAME)), false);
 });
 
-test("the host's invalid pressure budget is recorded once when shadow storage is available", async (t) => {
+test("turn-stopping exposes in-progress maintenance before waiting for capture", async (t) => {
   const h = runtime(t);
-  const f = h.use(fixture());
-  const { engine, ctx } = h.engine();
+  const f = h.use(fixture({ totalTokens: 1000 }));
+  const { engine } = h.engine({ minTokens: 20000 });
   const agent = f.agent();
+  agent.status = "running";
+  f.add("turn/start", { turn: 2 }, 0, {});
+  let releaseCapture;
+  const blockedCapture = new Promise((resolve) => { releaseCapture = resolve; });
+  let enteredCapture;
+  const entered = new Promise((resolve) => { enteredCapture = resolve; });
+  engine.flushPendingCaptures = () => {
+    enteredCapture();
+    return blockedCapture;
+  };
+  const maintenance = engine.runTurnStoppingMaintenance(agent, new AbortController().signal, 2);
+  const file = join(h.root, MAINTENANCE_NAME);
+  const rows = () => readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  try {
+    await entered;
+    assert.equal(existsSync(file), true);
+    const [started] = rows();
+    assert.equal(started.sid, f.session.id);
+    assert.equal(started.turn, 2);
+    assert.equal(started.result, "started");
+  } finally {
+    releaseCapture();
+    await maintenance;
+  }
+  const [started, completed] = rows();
+  assert.equal(completed.operation, started.operation);
+  assert.equal(completed.result, "completed");
+  assert.equal(completed.cuts, 0);
+});
+
+test("the host's invalid pressure budget is recorded on a cold shadow root", async (t) => {
+  const h = runtime(t, { modelTransport: async function* ({ purpose }) {
+    assert.equal(purpose, "compaction");
+    yield { type: "text-delta", index: 0, text: "The original task remains active after correcting the budget." };
+    yield { type: "finish", reason: { kind: "stop" } };
+  } });
+  const f = h.use(fixture());
+  const { engine, ctx } = h.engine({ thresholdRatio: 0.8, retainTokens: 8192, headroomTokens: 65536 });
+  const agent = { ...f.agent(), options: {} };
   const config = { provider: "test", model: "no-network", maxTokens: 262144 };
   f.session.requestHeader = () => ({ config });
-  ctx.llm = { resolveModelInfo: async () => ({ context: { contextWindow: 262144 } }) };
+  ctx.llm.resolveModelInfo = async () => ({ context: { contextWindow: 262144 } });
   const shadow = join(h.root, "later");
   process.env.SPINE_SHADOW_DIR = shadow;
   const checkPressure = () => engine.compactIfNeeded(agent, "pressure", new AbortController().signal);
   const expected = /reserves 262144 completion tokens of its 262144-token context window, leaving no message budget/;
 
   await assert.rejects(checkPressure, expected);
-  assert.equal(existsSync(shadow), false);
-  mkdirSync(shadow, { mode: 0o700 });
+  assert.equal(existsSync(join(shadow, DECISIONS_NAME)), true);
   await assert.rejects(checkPressure, expected);
   await assert.rejects(checkPressure, expected);
   const decisions = readFileSync(join(shadow, DECISIONS_NAME), "utf8").trim().split("\n").map(JSON.parse);
@@ -314,6 +352,17 @@ test("the host's invalid pressure budget is recorded once when shadow storage is
   await assert.rejects(checkPressure, expected);
   assert.equal(readFileSync(join(shadow, DECISIONS_NAME), "utf8").trim().split("\n").length, 2);
   assert.equal(f.summaries().length, 0);
+
+  f.add("turn/start", { turn: 2 }, 0, {});
+  f.round("pressure-history", { tokens: 145000, turn: 2 });
+  f.round("pressure-tail", { tokens: 10000, turn: 2 });
+  config.maxTokens = 32768;
+  assert.ok(await checkPressure(), "the corrected model budget must allow official compaction");
+  assert.equal(h.modelCalls, 1);
+  assert.deepEqual(
+    f.session.snapshotEvents().filter((event) => event.type.startsWith("compaction/")).map((event) => event.type),
+    ["compaction/start", "compaction/summary", "compaction/end"],
+  );
 });
 
 test("turn-stopping does not mark a boundary when maintenance fails", async () => {

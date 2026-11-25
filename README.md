@@ -2,7 +2,7 @@
 
 一段对话做久了，读过的日志、跑过的命令和工具输出会越积越多。Live Compact 会在每轮结束时检查，能安全收短的长输出就整理一下。这一步在本机做，无需再请求模型。只替换选中的一段，切点前面的内容保持原样。整理前会备份原文，备份失败就保留原来的内容。
 
-当前稳定版 [v1.1.13](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.13)。版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版 [v1.1.14](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.14)。版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 测评实证
 
@@ -33,13 +33,13 @@
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.13
+dsh plugin --profile headless add dsh-live-compact@1.1.14
 ```
 
 网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.13
+dsh plugin --profile web add dsh-live-compact@1.1.14
 ```
 
 想先装到本机看版本：
@@ -191,8 +191,8 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.13
-dsh plugin --profile web add dsh-live-compact@1.1.13
+dsh plugin --profile headless add dsh-live-compact@1.1.14
+dsh plugin --profile web add dsh-live-compact@1.1.14
 ```
 
 想先装到本机看版本：
@@ -216,6 +216,8 @@ dsh-live-compact --version
 DSH-TUI 先不要装。本包已补预设压缩隔离组的接管；TUI 仍需适配 `spine-checkpoint` 的局部卡片显示，两仓联合验收后再开放支持。
 
 被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`。Unix 权限为目录 0700 / 文件 0600；Windows 新建/修正后的备份允许当前用户、SYSTEM、Administrators，历史文件及缓存限制见上面的 ACL 说明。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。插件自己不会去搜。
+
+`spine-maintenance.jsonl` 在已有 shadow 目录记录轮末维护状态。同一个 `operation` 对应一次尝试，`deferred` 表示补抓未结束，`completed` 的 `cuts` 是该次提交的小切数。宿主拒绝模型压力预算时，配置原因会写入 `spine-decisions.jsonl`。
 
 `dsh-live-compact stats` 的 `saved` 是切完当下少掉的 token，`rewrite` 是同一次收尾实际要重写的尾巴，只记一次。同一步连切不会按刀数把尾巴乘上去。这两个数口径不同，比值不是盈亏。桌面端没有终端，`rg "spine cut"` 只在终端输出里找得到。每个 shadow 根的 `spine-cuts.jsonl` 最多保留 1 MiB 最近的完整逐刀明细，累计计数记录在 `spine-stats.json`。
 

@@ -27,6 +27,7 @@ import {
   ensureShadowDir,
   ensureShadowDirIdentity,
   appendDecision,
+  appendMaintenanceStatus,
   directoryIdentity,
   flushDrainStats,
   noteShadowWarning,
@@ -48,6 +49,31 @@ import { activeCompactionPeers, warnCompactionStandDown } from "./gate.js";
 
 const PI_AI_CATALOG = "@earendil-works/pi-ai/providers/all";
 const PI_AI_PACKAGE = "@earendil-works/pi-ai";
+
+function startMaintenanceStatus(state, turn, turnEndSeq) {
+  const hasTurn = Number.isSafeInteger(turn) && turn >= 0;
+  const hasEnd = Number.isSafeInteger(turnEndSeq) && turnEndSeq >= 0;
+  if (!hasTurn && !hasEnd) return null;
+  const observation = {
+    sid: state.key,
+    operation: randomUUID(),
+    turn: hasTurn ? turn : null,
+    turnEndSeq: hasEnd ? turnEndSeq : null,
+    cuts: 0,
+  };
+  appendMaintenanceStatus(shadowDirectory(), { ...observation, result: "started" });
+  return observation;
+}
+
+function endMaintenanceStatus(observation, outcome, signal) {
+  if (!observation) return;
+  let result = "failed";
+  if (outcome === true) result = "completed";
+  else if (signal?.aborted) result = "cancelled";
+  else if (outcome === null) result = "deferred";
+  appendMaintenanceStatus(shadowDirectory(), { ...observation, result });
+}
+
 // DSH emits these user/message records as host bookkeeping. They are carried in
 // the same event channel as user input, but must not fragment a compactable span.
 // Keep unknown kinds conservative because source metadata is not authentication.
@@ -1499,7 +1525,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       if (!rawKey.startsWith(prefix) || !raw?.path || !liveIds.has(rawKey.slice(prefix.length))) continue;
       protectPaths.push(raw.path, `${raw.path}.meta.json`);
     }
-    appendDecision(shadowDirectory(), { sid: key, ...record }, { protectPaths });
+    return appendDecision(shadowDirectory(), { sid: key, ...record }, { protectPaths });
   }
 
   reconcileCardRawPaths(state, session) {
@@ -1656,6 +1682,8 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     let job;
     job = (async () => {
       await null;
+      let observation;
+      let outcome = false;
       try {
         const settings = readSettings(this.liveConfig);
         const events = agent.session.snapshotEvents();
@@ -1664,6 +1692,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         const stoppingEnd = stoppingStartSeq === undefined || previousEnd?.seq > stoppingStartSeq
           ? previousEnd : null;
         const stoppingSeq = stoppingEnd?.seq;
+        observation = startMaintenanceStatus(state, turn ?? stoppingEnd?.data?.turn, stoppingSeq);
         if (Number.isInteger(stoppingSeq)) {
           state.turnEndSeq = Number.isInteger(state.turnEndSeq) ? Math.max(state.turnEndSeq, stoppingSeq) : stoppingSeq;
           state.turnEndEvent = stoppingEnd;
@@ -1681,17 +1710,19 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (maintenanceAbort.signal.aborted) return false;
         const stoppingTurn = agent.status === "running" && signal && Number.isSafeInteger(turn)
           ? turn : undefined;
-        const completed = await this.finishTurn(agent, events, {
+        outcome = await this.finishTurn(agent, events, {
           maintenanceRetry: true,
           skipCapture: true,
           stoppingTurn,
+          observation,
         });
-        if (completed === true && (stoppingSeq !== undefined || stoppingStartSeq !== undefined)) {
+        if (outcome === true && (stoppingSeq !== undefined || stoppingStartSeq !== undefined)) {
           state.lastStoppingTurnEndSeq = stoppingSeq ?? -1;
           state.lastStoppingTurnStartSeq = stoppingStartSeq ?? -1;
         }
         if (stoppingTurn !== undefined) this.queueOutputRecovery(agent, signal, stoppingTurn, events);
       } finally {
+        endMaintenanceStatus(observation, outcome, maintenanceAbort.signal);
         this.unpinLiveAgent(state);
         signal?.removeEventListener("abort", forwardAbort);
         this.pendingCuts.delete(job);
@@ -2158,9 +2189,15 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     const ownedAbort = state.maintenanceAbort ? null : new AbortController();
     if (ownedAbort) state.maintenanceAbort = ownedAbort;
     const signal = AbortSignal.any([AbortSignal.timeout(30000), state.maintenanceAbort.signal]);
+    let observation = options.observation;
+    let outcome = false;
     try {
       let maintenanceCompleted = false;
       const ev = events || agent.session.snapshotEvents();
+      if (!observation) {
+        const boundary = latestCompletedTurnEnd(ev) || state.turnEndEvent;
+        observation = startMaintenanceStatus(state, boundary?.data?.turn, boundary?.seq);
+      }
       const deferCapture = options.deferCapture === true;
       let catchup = { finished: true, progressed: false, retryRequested: false };
       if (options.skipCapture) {
@@ -2191,6 +2228,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         if (options.maintenanceRetry || (!deferCapture && ev.length <= CAPTURE_EVENT_BATCH)) {
           await catchup.promise;
         } else {
+          outcome = null;
           return null;
         }
       }
@@ -2359,6 +2397,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
             }
             if (!drain) break;
           }
+          if (observation) observation.cuts = drainNotes.filter((note) => note.kind === "cut" && note.saved > 0).length;
           if (drainNotes.length) flushDrainStats(shadowDirectory(), drainNotes, { sid: state.key, drain });
           state.turnBase = measurement.totalTokens;
           state.maxTurnGrowth = 0;
@@ -2375,9 +2414,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       } finally {
         state.localOnly = false;
       }
-      return maintenanceCompleted;
+      outcome = maintenanceCompleted;
+      return outcome;
     } finally {
       if (ownedAbort && state.maintenanceAbort === ownedAbort) state.maintenanceAbort = null;
+      if (!options.observation) endMaintenanceStatus(observation, outcome, signal);
     }
   }
 
@@ -2582,16 +2623,17 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
       return result;
     } catch (error) {
       if (error instanceof Error && error.constructor.name === "TargetPressureConfigError" &&
-          state.reportedPressureConfigError !== error.message && existsSync(shadowDirectory())) {
-        state.reportedPressureConfigError = error.message;
+          state.reportedPressureConfigError !== error.message) {
         try {
-          this.recordDecision(state, {
+          ensureShadowDir(shadowDirectory());
+          const recorded = this.recordDecision(state, {
             phase: "official-compaction",
             trigger,
             result: "rejected",
             reason: "invalid-pressure-config",
             detail: error.message,
           });
+          if (recorded) state.reportedPressureConfigError = error.message;
         } catch {}
       }
       throw error;

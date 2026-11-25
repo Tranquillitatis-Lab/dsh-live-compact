@@ -728,7 +728,9 @@ export function shadowFileBody(sessionKey, body) {
 export const STATS_NAME = "spine-stats.json";
 export const CUTS_NAME = "spine-cuts.jsonl";
 export const DECISIONS_NAME = "spine-decisions.jsonl";
+export const MAINTENANCE_NAME = "spine-maintenance.jsonl";
 const CUTS_LOG_MAX_BYTES = 1024 * 1024;
+const MAINTENANCE_LOG_MAX_BYTES = 256 * 1024;
 
 export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
   try {
@@ -939,7 +941,7 @@ function completeLogSuffix(bytes, discardFirst) {
   return bytes.subarray(first, end);
 }
 
-function cutLogSuffix(fd, size, budget) {
+function logSuffix(fd, size, budget) {
   // Include one byte before the retained range to recognize an exact line boundary.
   const offset = Math.max(0, size - budget - 1);
   const bytes = Buffer.alloc(size - offset);
@@ -952,16 +954,16 @@ function cutLogSuffix(fd, size, budget) {
   return completeLogSuffix(bytes.subarray(0, read), size > budget);
 }
 
-function verifyCutLogFile(file, observed) {
+function verifyLogFile(file, observed) {
   const named = lstatSync(file, { bigint: true });
   if (!named.isFile() || named.nlink !== 1n || !observed.isFile() || observed.nlink !== 1n ||
       !accessIdentity(named) || accessIdentity(named) !== accessIdentity(observed) ||
       named.size !== observed.size || named.mtimeNs !== observed.mtimeNs || named.ctimeNs !== observed.ctimeNs) {
-    throw new Error("spine: cut log identity changed");
+    throw new Error("spine: log identity changed");
   }
 }
 
-function replaceCutLog(file, observed, retained, incoming) {
+function replaceLog(file, observed, retained, incoming) {
   const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
   try {
@@ -971,19 +973,18 @@ function replaceCutLog(file, observed, retained, incoming) {
     } finally {
       closeSync(fd);
     }
-    verifyCutLogFile(file, observed);
+    verifyLogFile(file, observed);
     renameSync(tmp, file);
   } finally {
     try { unlinkSync(tmp); } catch {}
   }
 }
 
-function appendCutLog(dir, body) {
-  const file = join(dir, CUTS_NAME);
+function appendBoundedLog(file, body, maxBytes) {
   const bytes = Buffer.from(body);
-  const incoming = bytes.length <= CUTS_LOG_MAX_BYTES
+  const incoming = bytes.length <= maxBytes
     ? bytes
-    : completeLogSuffix(bytes.subarray(bytes.length - CUTS_LOG_MAX_BYTES - 1), true);
+    : completeLogSuffix(bytes.subarray(bytes.length - maxBytes - 1), true);
   let before;
   try {
     before = lstatSync(file, { bigint: true });
@@ -992,27 +993,42 @@ function appendCutLog(dir, body) {
     if (incoming.length) writeFileSync(file, incoming, { flag: "wx", mode: 0o600 });
     return;
   }
-  if (!before.isFile() || before.nlink !== 1n) throw new Error("spine: unsupported cut log target");
+  if (!before.isFile() || before.nlink !== 1n) throw new Error("spine: unsupported log target");
   const fd = openSync(file, fsConstants.O_RDWR | fsConstants.O_APPEND | (fsConstants.O_NOFOLLOW ?? 0));
   let observed;
   let retained;
   try {
     observed = fstatSync(fd, { bigint: true });
-    verifyCutLogFile(file, before);
-    verifyCutLogFile(file, observed);
+    verifyLogFile(file, before);
+    verifyLogFile(file, observed);
     const size = Number(observed.size);
-    if (!Number.isSafeInteger(size)) throw new Error("spine: invalid cut log size");
+    if (!Number.isSafeInteger(size)) throw new Error("spine: invalid log size");
     const last = Buffer.alloc(1);
     const complete = size === 0 || (readSync(fd, last, 0, 1, size - 1) === 1 && last[0] === 0x0a);
-    if (complete && size + incoming.length <= CUTS_LOG_MAX_BYTES) {
+    if (complete && size + incoming.length <= maxBytes) {
       if (incoming.length) writeFileSync(fd, incoming);
       return;
     }
-    retained = cutLogSuffix(fd, size, CUTS_LOG_MAX_BYTES - incoming.length);
+    retained = logSuffix(fd, size, maxBytes - incoming.length);
   } finally {
     closeSync(fd);
   }
-  replaceCutLog(file, observed, retained, incoming);
+  replaceLog(file, observed, retained, incoming);
+}
+
+export function appendMaintenanceStatus(dir, record) {
+  try {
+    if (!existsSync(dir)) return false;
+    const root = ensureShadowDirIdentity(dir);
+    return withCutStatsLock(dir, () => {
+      if (!root || directoryIdentity(dir) !== root) return false;
+      const line = JSON.stringify({ v: 1, ts: new Date().toISOString(), ...record });
+      appendBoundedLog(join(dir, MAINTENANCE_NAME), `${line}\n`, MAINTENANCE_LOG_MAX_BYTES);
+      return true;
+    }) === true;
+  } catch {
+    return false;
+  }
 }
 
 function writeCutStats(dir, next) {
@@ -1062,7 +1078,7 @@ export function flushDrainStats(dir, notes, meta = {}) {
         });
       } catch {}
     }
-    try { appendCutLog(dir, `${lines.join("\n")}\n`); } catch {}
+    try { appendBoundedLog(join(dir, CUTS_NAME), `${lines.join("\n")}\n`, CUTS_LOG_MAX_BYTES); } catch {}
   });
   return charged;
 }
