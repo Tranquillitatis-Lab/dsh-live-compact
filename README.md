@@ -2,7 +2,7 @@
 
 一段对话做久了，读过的日志、跑过的命令和工具输出会越积越多。Live Compact 会在每轮结束时检查，能安全收短的长输出就整理一下。这一步在本机做，无需再请求模型。只替换选中的一段，切点前面的内容保持原样。整理前会备份原文，备份失败就保留原来的内容。
 
-版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前稳定版 [v1.1.13](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.13)。版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 测评实证
 
@@ -33,13 +33,13 @@
 headless：
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.12
+dsh plugin --profile headless add dsh-live-compact@1.1.13
 ```
 
 网页端：
 
 ```sh
-dsh plugin --profile web add dsh-live-compact@1.1.12
+dsh plugin --profile web add dsh-live-compact@1.1.13
 ```
 
 想先装到本机看版本：
@@ -191,8 +191,8 @@ Windows 会重新设置备份访问权限，失败时停止写备份并保留原
 从 npm 装。headless 和网页是两个 profile，要各装一次。桌面端是另一个 profile，普通 `dsh plugin --profile desktop` 会被拒绝。
 
 ```sh
-dsh plugin --profile headless add dsh-live-compact@1.1.12
-dsh plugin --profile web add dsh-live-compact@1.1.12
+dsh plugin --profile headless add dsh-live-compact@1.1.13
+dsh plugin --profile web add dsh-live-compact@1.1.13
 ```
 
 想先装到本机看版本：
@@ -202,7 +202,7 @@ npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
 
-上不了 npm 时的镜像安装命令：
+以下是 1.1.12 的历史镜像。
 
 ```sh
 dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.12.tgz
