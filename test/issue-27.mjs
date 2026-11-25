@@ -511,6 +511,108 @@ test("a recovered fence stays shared across module instances and later PID reuse
   assert.equal(readFileSync(lock, "utf8"), holder(process.pid, "b".repeat(48)));
 });
 
+test("a second dead lock on the same root gets independent durable recovery", async (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const lock = join(f.dir, LOCK);
+  const recovery = join(f.dir, RECOVERED);
+  writeFileSync(lock, holder());
+  const probe = t.mock.method(process, "kill", () => { throw Object.assign(new Error("dead"), { code: "ESRCH" }); });
+  assert.equal(rotation(f).estimated, undefined);
+  const probesAfterFirst = probe.mock.callCount();
+  renameSync(lock, join(f.base, "first-lock"));
+  const second = "b".repeat(48);
+  writeFileSync(lock, holder(process.pid, second));
+  const before = statSync(lock).ino;
+  assert.equal(statSync(backup(f, 120).file).size, 120);
+  assert.ok(probe.mock.callCount() > probesAfterFirst, "the second record requires its own death probe");
+  probe.mock.restore();
+
+  assert.equal(readFileSync(recovery, "utf8"), holder());
+  assert.equal(statSync(join(f.dir, `${RECOVERED}-${process.pid}-${second}`)).size, 0);
+  assert.equal(statSync(lock).ino, before);
+  const duplicate = await import(`../shadow.js?second-recovery=${Date.now()}`);
+  assert.equal(duplicate.rotateShadow({ dir: f.dir, cap: 1000, incomingBytes: 0 }).used, 120);
+  assert.equal(statSync(backup(f, 120).file).size, 120);
+
+  renameSync(lock, join(f.base, "second-lock"));
+  writeFileSync(lock, holder(process.pid, "c".repeat(48)));
+  t.mock.method(process, "kill", () => { throw Object.assign(new Error("probe denied"), { code: "EPERM" }); });
+  assert.throws(() => rotation(f), (error) => error.code === "ESHADOWBUSY" && error.cause?.step === "rotation-recovery-conflict");
+});
+
+for (const valid of [true, false]) {
+  test(`concurrent second recovery only admits a complete exact proof: ${valid}`, (t) => {
+    const f = fixture(t);
+    configure(t, f);
+    const second = "b".repeat(48);
+    const proof = join(f.dir, `${RECOVERED}-${process.pid}-${second}`);
+    writeFileSync(join(f.dir, RECOVERED), holder());
+    writeFileSync(join(f.dir, LOCK), holder(process.pid, second));
+    t.mock.method(process, "kill", () => { throw Object.assign(new Error("dead"), { code: "ESRCH" }); });
+    withFsMock(t, "openSync", (open) => (path, flags, mode) => {
+      if (path === proof && flags === "wx") {
+        const fd = open(path, flags, mode);
+        try { if (!valid) fs.writeSync(fd, "invalid"); } finally { fs.closeSync(fd); }
+      }
+      return open(path, flags, mode);
+    }, () => {
+      if (valid) assert.equal(rotation(f).estimated, undefined);
+      else assert.throws(() => rotation(f), { code: "ESHADOWBUSY" });
+    });
+    assert.equal(readFileSync(join(f.dir, RECOVERED), "utf8"), holder());
+    assert.equal(readFileSync(join(f.dir, LOCK), "utf8"), holder(process.pid, second));
+  });
+}
+
+test("the second recovery rejects a linked proof and a failed proof flush", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const second = "b".repeat(48);
+  const proof = join(f.dir, `${RECOVERED}-${process.pid}-${second}`);
+  writeFileSync(join(f.dir, RECOVERED), holder());
+  writeFileSync(join(f.dir, LOCK), holder(process.pid, second));
+  t.mock.method(process, "kill", () => { throw Object.assign(new Error("dead"), { code: "ESRCH" }); });
+  if (process.platform !== "win32") {
+    const other = join(f.base, "other");
+    writeFileSync(other, "");
+    symlinkSync(other, proof);
+    assert.throws(() => rotation(f), { code: "ESHADOWBUSY" });
+    assert.equal(statSync(other).size, 0);
+    unlinkSync(proof);
+  }
+  withFsMock(t, "fsyncSync", (sync) => (fd) => {
+    if (existsSync(proof) && fs.fstatSync(fd).ino === statSync(proof).ino) throw new Error("proof flush failed");
+    return sync(fd);
+  }, () => assert.throws(() => withShadowRoot(f.dir, () => assert.fail("unflushed proof admitted")), { code: "ESHADOWBUSY" }));
+  assert.equal(readFileSync(join(f.dir, RECOVERED), "utf8"), holder());
+});
+
+test("second recovery never admits a replacement holder installed during publication", (t) => {
+  const f = fixture(t);
+  configure(t, f);
+  const lock = join(f.dir, LOCK);
+  const second = "b".repeat(48);
+  const proof = join(f.dir, `${RECOVERED}-${process.pid}-${second}`);
+  const replacement = holder(process.pid, "c".repeat(48));
+  writeFileSync(join(f.dir, RECOVERED), holder());
+  writeFileSync(lock, holder(process.pid, second));
+  const probe = t.mock.method(process, "kill", () => { throw Object.assign(new Error("dead"), { code: "ESRCH" }); });
+  withFsMock(t, "openSync", (open) => (path, flags, mode) => {
+    const fd = open(path, flags, mode);
+    if (path === proof && flags === "wx") {
+      renameSync(lock, join(f.base, "observed-lock"));
+      writeFileSync(lock, replacement);
+    }
+    return fd;
+  }, () => {
+    assert.throws(() => withShadowRoot(f.dir, () => assert.fail("replacement lock admitted")), { code: "ESHADOWBUSY" });
+  });
+  probe.mock.restore();
+  assert.equal(readFileSync(lock, "utf8"), replacement);
+  assert.throws(() => rotation(f), (error) => error.code === "ESHADOWBUSY" && error.cause?.step === "rotation-recovery-conflict");
+});
+
 test("the production writer reports a distinct recovery identity conflict through worker messages", async (t) => {
   const f = fixture(t);
   writeFileSync(join(f.dir, RECOVERED), holder());

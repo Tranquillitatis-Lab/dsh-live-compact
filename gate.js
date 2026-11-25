@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { STOCK_ENGINE as STOCK } from "./adapter.js";
+import { contextProperty, rootContext, STOCK_ENGINE as STOCK } from "./adapter.js";
 import { configSnapshot, engineConfig } from "./settings.js";
 
 const OURS = "dsh-live-compact";
@@ -19,7 +19,7 @@ export const PRESET_ENGINE_CONFIG = Object.freeze(engineConfig());
 export function activeCompactionPeers(ctx) {
   const peers = [];
   if (process.env.SPINE_STAND_DOWN === "1") peers.push("SPINE_STAND_DOWN");
-  const registry = ctx?.registry;
+  const registry = contextProperty(ctx, "registry");
   if (!registry || typeof registry.values !== "function") return peers;
   try {
     for (const runtime of registry.values()) {
@@ -40,10 +40,10 @@ export function compactionStandDown(ctx) {
   return activeCompactionPeers(ctx).length > 0;
 }
 
-export function warnCompactionStandDown(ctx, logger = ctx?.logger) {
+export function warnCompactionStandDown(ctx, logger = contextProperty(ctx, "logger")) {
   const peers = activeCompactionPeers(ctx);
   if (!peers.length) return peers;
-  const root = ctx?.root || ctx;
+  const root = rootContext(ctx);
   const key = peers.join(",");
   if (root && standDownNotices.get(root) === key) return peers;
   if (root) standDownNotices.set(root, key);
@@ -188,21 +188,20 @@ const installedGates = new WeakMap();
 
 function entryDepth(ctx) {
   let depth = 0;
-  for (let fiber = ctx.fiber; fiber?.runtime; fiber = fiber.parent.fiber) depth++;
+  for (let fiber = contextProperty(ctx, "fiber"); fiber?.runtime; fiber = contextProperty(fiber.parent, "fiber")) depth++;
   return depth;
 }
 
-export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
+export function installPresetGate(ctx, config = {}, { legacy = false, deferCommit = false } = {}) {
   const depth = entryDepth(ctx);
-  const previous = installedGates.get(ctx.root);
+  const root = rootContext(ctx);
+  if (!root) throw new Error("spine: Cordis root context unavailable");
+  const previous = installedGates.get(root);
   if (previous) {
     if (legacy && !previous.legacy) return;
     if (legacy === previous.legacy && (depth > previous.depth || (depth === previous.depth && previous.active))) return;
-    previous.active = false;
-    previous.disposeListener?.();
   }
-  const gate = { depth, legacy, active: true };
-  installedGates.set(ctx.root, gate);
+  const gate = { depth, legacy, active: false };
   ctx.effect(() => () => { gate.active = false; });
   const enabled = () => {
     const value = config.takeoverPresets ?? true;
@@ -211,11 +210,11 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
   const seen = new Set();
   gate.disposeListener = ctx.on("internal/config", function (fiber, next) {
     const resolved = next();
+    if (!gate.active) return resolved;
     if (compactionStandDown(ctx)) {
       warnCompactionStandDown(ctx);
       return resolved;
     }
-    if (!gate.active) return resolved;
     const selector = enabled();
     if (!selector || (Array.isArray(selector) && selector.length === 0)) return resolved;
     const loadable = packageLoadable();
@@ -236,6 +235,16 @@ export function installPresetGate(ctx, config = {}, { legacy = false } = {}) {
     }
     return rewritten;
   }, { global: true });
+  const commit = () => {
+    installedGates.set(root, gate);
+    gate.active = true;
+    if (previous) {
+      previous.active = false;
+      try { previous.disposeListener?.()?.catch?.(() => {}); } catch {}
+    }
+  };
+  if (deferCommit) return commit;
+  commit();
 }
 
 // Legacy entry for existing compositions; new installs only register compaction-spine.

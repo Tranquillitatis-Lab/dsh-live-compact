@@ -293,6 +293,18 @@ function hasLinklessRecovery(root, record) {
   }
 }
 
+function publishLinklessRecovery(root, record) {
+  let fd;
+  try {
+    fd = openSync(join(root, linklessRecoveryName(record)), "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "EEXIST" && hasLinklessRecovery(root, record)) return;
+    throw error;
+  }
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  if (!hasLinklessRecovery(root, record)) throw new Error("shadow recovery fence disappeared");
+}
+
 function verifyRotationGuard(root, identity, guard) {
   if (identity && directoryIdentity(root) !== identity) throw new Error("shadow directory identity changed");
   if (!guard.record) {
@@ -368,23 +380,36 @@ function recoverRotationGuard(root, identity, guard) {
   try { recovery = readRotationRecord(recovered); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  if (recovery && !sameRotationRecord(recovery, guard.record)) {
-    throw Object.assign(new Error("shadow recovery identity changed"), { step: "rotation-recovery-conflict" });
-  }
-  const knownDead = !!recovery || hasLinklessRecovery(root, guard.record);
+  const priorRecovery = recovery && sameRotationRecord(recovery, guard.record);
+  const knownDead = priorRecovery || hasLinklessRecovery(root, guard.record);
   if (!knownDead) {
     let dead = false;
     try { process.kill(guard.record.pid, 0); } catch (error) { dead = error?.code === "ESRCH"; }
-    if (!dead) throw new Error("shadow holder is live or its death is unknown");
+    if (!dead) {
+      if (recovery) {
+        throw Object.assign(new Error("shadow recovery identity changed"), { step: "rotation-recovery-conflict" });
+      }
+      throw new Error("shadow holder is live or its death is unknown");
+    }
   }
   // Persist shared participation BEFORE permitting any action or recording
   // recovery. A later reused PID cannot resurrect this exact proven-dead token.
   persistRotationShared(root);
   verifyRotationGuard(root, identity, guard);
   if (!knownDead) {
-    try { publishRotationRecord(recovered, guard.record); } catch (error) {
-      if (error?.code === "ESHADOWLINKUNSUPPORTED") persistRotationFence(root, linklessRecoveryName(guard.record));
-      else if (error?.code !== "EEXIST" || !sameRotationRecord(readRotationRecord(recovered), guard.record)) throw error;
+    if (recovery) {
+      publishLinklessRecovery(root, guard.record);
+    } else {
+      try {
+        publishRotationRecord(recovered, guard.record);
+      } catch (error) {
+        if (error?.code === "ESHADOWLINKUNSUPPORTED" ||
+            (error?.code === "EEXIST" && !sameRotationRecord(readRotationRecord(recovered), guard.record))) {
+          publishLinklessRecovery(root, guard.record);
+        } else if (error?.code !== "EEXIST") {
+          throw error;
+        }
+      }
     }
     syncRotationDirectory(root);
   }

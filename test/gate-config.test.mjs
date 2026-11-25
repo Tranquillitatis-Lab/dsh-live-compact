@@ -85,6 +85,29 @@ test("a disabled root gate is not re-enabled by a nested engine", () => {
   child.dispose();
 });
 
+test("the symbol root keeps one gate and preserves it when replacement registration fails", () => {
+  const host = gateHost();
+  const scope = (owner) => {
+    const root = owner.root;
+    delete owner.root;
+    Object.defineProperty(owner, "root", { get() { throw new Error("legacy root read"); } });
+    owner[Symbol.for("cordis.root")] = root;
+    return owner;
+  };
+  const legacy = scope(host.mount());
+  installPresetGate(legacy, { takeoverPresets: true }, { legacy: true });
+  const failing = scope(host.mount());
+  failing.on = () => { throw new Error("gate registration failed"); };
+  assert.throws(() => installPresetGate(failing), /gate registration failed/);
+  const sibling = scope(host.mount());
+  installPresetGate(sibling, { takeoverPresets: false }, { legacy: true });
+  assert.equal(host.listeners.size, 1);
+  assert.equal(host.load().plugins[0].name, "dsh-live-compact");
+  failing.dispose();
+  sibling.dispose();
+  legacy.dispose();
+});
+
 const groupEntry = { id: "compaction", name: "cordis:group", group: true, isolate: { compaction: true } };
 
 function groupRows() {

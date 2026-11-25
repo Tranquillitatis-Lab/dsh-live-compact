@@ -19,7 +19,7 @@ import { setImmediate as scheduleImmediate } from "node:timers";
 import { Worker } from "node:worker_threads";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadBase, loadCompaction, loadLlm } from "./adapter.js";
+import { contextProperty, loadBase, loadCompaction, loadLlm, rootContext } from "./adapter.js";
 import { DEFAULTS, engineConfig, readSettings } from "./settings.js";
 import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJobs, cutLongReadRound, finishedToolRounds, indexToolCalls, isToolFailure, jobCutDecision, keptToolRounds, messageText, planMessages, pointerOnlyText, pointerSpanAllowed, RAIL_TOKENS, readResultLabel, reservedCutEnd, resolveEngine, resolveProviderBaseURL, roundHasLongRead, selectCutIndexes, shadowSections, takeLocalCut, withoutFullBackupClaim } from "./plan.js";
 import { captureOwnedToolResult, contentHash, PRUNE_MARKER, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
@@ -1360,9 +1360,11 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (!state.opPinCount) state.opPin = null;
   }
 
-  constructor(ctx, config, resolvedConfig) {
+  constructor(ctx, config, resolvedConfig, { strictActivation = false, deferActivation = false } = {}) {
     if (process.env.SPINE_ENGINE_FAIL === "construct") throw new Error("spine: constructor refused");
-    super(ctx, resolvedConfig ?? engineConfig(config));
+    const effective = resolvedConfig ?? engineConfig(config);
+    const waitForInit = deferActivation && (effective.auto === undefined || effective.auto === true);
+    super(ctx, waitForInit ? { ...effective, auto: false } : effective);
     this.persistCapture = true;
     this.catalogPromise = loadPiAiCatalog().then((catalog) => {
       this.catalogCache = catalog;
@@ -1374,6 +1376,16 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     });
     if (process.env.SPINE_ENGINE_FAIL === "after-super") throw new Error("spine: after super");
     this.liveConfig = config;
+    if (!deferActivation) this.registerLifecycle(ctx, strictActivation);
+  }
+
+  activateAfterInit(auto) {
+    this.config = Object.freeze({ ...this.config, auto });
+    if (auto) this._registerAutomaticCompaction();
+    this.registerLifecycle(this.ctx, true);
+  }
+
+  registerLifecycle(ctx, strictActivation) {
     try {
       ctx.effect(() => async () => {
         await Promise.allSettled([...this.pendingCuts, ...this.pendingCaptures, ...this.pendingCatchupJobs]);
@@ -1454,6 +1466,7 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
         await this.runTurnStoppingMaintenance(agent, signal, turn);
       });
     } catch (error) {
+      if (strictActivation) throw error;
       const message = error instanceof Error ? error.message : String(error);
       ctx.logger?.warn?.(`spine: 本会话未接管自动小切。${message}`);
     }
@@ -2632,11 +2645,10 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
   }
 
   hostService(name) {
-    const nodes = [this.ctx, this.ctx?.root, this.ctx?.parent];
+    const nodes = [this.ctx, rootContext(this.ctx), contextProperty(this.ctx, "parent")];
     for (const node of nodes) {
-      if (!node || typeof node.get !== "function") continue;
       try {
-        const hit = node.get(name);
+        const hit = node?.get?.(name);
         if (hit) return hit;
       } catch {}
     }

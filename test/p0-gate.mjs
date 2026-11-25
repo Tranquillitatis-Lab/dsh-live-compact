@@ -833,7 +833,7 @@ check("p0-18 bundle exposes one component with an internal preset gate", () => {
   assert.equal((patch.match(/name: dsh-live-compact\b/g) ?? []).length, 1);
   assert.equal(patch.includes("live-compact-gate"), false);
   assert.match(patch, /takeoverPresets: true/);
-  assert.match(readFileSync(join(packageRoot, "shell.js"), "utf8"), /installPresetGate\(ctx, config\)/);
+  assert.match(readFileSync(join(packageRoot, "shell.js"), "utf8"), /installPresetGate\(ctx, config(?:,|\))/);
 });
 
 check("p0-17 config beats env beats default", () => {
