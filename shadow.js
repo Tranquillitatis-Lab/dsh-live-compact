@@ -15,9 +15,9 @@ import { workerData } from "node:worker_threads";
 import {
   constants as fsConstants,
   chmodSync,
-  appendFileSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   linkSync,
@@ -88,7 +88,7 @@ function realDirectory(dir) {
   return realpathSync.native(dir);
 }
 
-function directoryIdentity(dir) {
+export function directoryIdentity(dir) {
   const info = statSync(dir, { bigint: true });
   if (!info.isDirectory() || info.ino <= 0n) return "";
   return `${info.dev}:${info.ino}`;
@@ -368,7 +368,9 @@ function recoverRotationGuard(root, identity, guard) {
   try { recovery = readRotationRecord(recovered); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  if (recovery && !sameRotationRecord(recovery, guard.record)) throw new Error("shadow recovery identity changed");
+  if (recovery && !sameRotationRecord(recovery, guard.record)) {
+    throw Object.assign(new Error("shadow recovery identity changed"), { step: "rotation-recovery-conflict" });
+  }
   const knownDead = !!recovery || hasLinklessRecovery(root, guard.record);
   if (!knownDead) {
     let dead = false;
@@ -628,7 +630,7 @@ function accessEntry(path, kind) {
   if (kind === "dir" ? !info.isDirectory() : !info.isFile() || info.nlink !== 1n) {
     throw new Error("spine: unsupported shadow permission target");
   }
-  return { absolute, canonical, identity: accessIdentity(info) };
+  return { absolute, canonical, identity: accessIdentity(info), mode: info.mode };
 }
 
 function sameAccessEntry(left, right) {
@@ -649,10 +651,12 @@ export function shadowDirLocked(path) {
 
 export function noteShadowWarning(logger, error) {
   const code = error?.code || "ESHADOWACCESS";
-  if (shadowWarnings.has(code)) return;
-  shadowWarnings.add(code);
-  const status = error?.cause?.status ?? error?.status;
   const step = error?.step || error?.cause?.step || "";
+  const separateReason = step === "rotation-recovery-conflict" || step === "dir-mode" || step === "file-mode";
+  const key = separateReason ? `${code}:${step}` : code;
+  if (shadowWarnings.has(key)) return;
+  shadowWarnings.add(key);
+  const status = error?.cause?.status ?? error?.status;
   const where = step ? ` ${step}` : "";
   const exit = status == null ? "" : ` exit ${status}`;
   logger?.warn?.(`spine: shadow permission failed ${code}${where}${exit}`);
@@ -699,6 +703,7 @@ export function shadowFileBody(sessionKey, body) {
 export const STATS_NAME = "spine-stats.json";
 export const CUTS_NAME = "spine-cuts.jsonl";
 export const DECISIONS_NAME = "spine-decisions.jsonl";
+const CUTS_LOG_MAX_BYTES = 1024 * 1024;
 
 export function appendDecision(dir, record = {}, { protectPaths = [] } = {}) {
   try {
@@ -888,11 +893,120 @@ function acquireStatsLock(lock) {
   return null;
 }
 
+function withCutStatsLock(dir, action) {
+  const lock = join(dir, "spine-stats.lock");
+  const fd = acquireStatsLock(lock);
+  if (fd === null) return null;
+  try {
+    return action();
+  } catch {
+    return null;
+  } finally {
+    try { closeSync(fd); } catch {}
+    try { unlinkSync(lock); } catch {}
+  }
+}
+
+function completeLogSuffix(bytes, discardFirst) {
+  const first = discardFirst ? bytes.indexOf(0x0a) + 1 : 0;
+  const end = bytes.lastIndexOf(0x0a) + 1;
+  if ((discardFirst && !first) || end <= first) return Buffer.alloc(0);
+  return bytes.subarray(first, end);
+}
+
+function cutLogSuffix(fd, size, budget) {
+  // Include one byte before the retained range to recognize an exact line boundary.
+  const offset = Math.max(0, size - budget - 1);
+  const bytes = Buffer.alloc(size - offset);
+  let read = 0;
+  while (read < bytes.length) {
+    const count = readSync(fd, bytes, read, bytes.length - read, offset + read);
+    if (!count) break;
+    read += count;
+  }
+  return completeLogSuffix(bytes.subarray(0, read), size > budget);
+}
+
+function verifyCutLogFile(file, observed) {
+  const named = lstatSync(file, { bigint: true });
+  if (!named.isFile() || named.nlink !== 1n || !observed.isFile() || observed.nlink !== 1n ||
+      !accessIdentity(named) || accessIdentity(named) !== accessIdentity(observed) ||
+      named.size !== observed.size || named.mtimeNs !== observed.mtimeNs || named.ctimeNs !== observed.ctimeNs) {
+    throw new Error("spine: cut log identity changed");
+  }
+}
+
+function replaceCutLog(file, observed, retained, incoming) {
+  const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", 0o600);
+  try {
+    try {
+      writeFileSync(fd, Buffer.concat([retained, incoming]));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    verifyCutLogFile(file, observed);
+    renameSync(tmp, file);
+  } finally {
+    try { unlinkSync(tmp); } catch {}
+  }
+}
+
+function appendCutLog(dir, body) {
+  const file = join(dir, CUTS_NAME);
+  const bytes = Buffer.from(body);
+  const incoming = bytes.length <= CUTS_LOG_MAX_BYTES
+    ? bytes
+    : completeLogSuffix(bytes.subarray(bytes.length - CUTS_LOG_MAX_BYTES - 1), true);
+  let before;
+  try {
+    before = lstatSync(file, { bigint: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    if (incoming.length) writeFileSync(file, incoming, { flag: "wx", mode: 0o600 });
+    return;
+  }
+  if (!before.isFile() || before.nlink !== 1n) throw new Error("spine: unsupported cut log target");
+  const fd = openSync(file, fsConstants.O_RDWR | fsConstants.O_APPEND | (fsConstants.O_NOFOLLOW ?? 0));
+  let observed;
+  let retained;
+  try {
+    observed = fstatSync(fd, { bigint: true });
+    verifyCutLogFile(file, before);
+    verifyCutLogFile(file, observed);
+    const size = Number(observed.size);
+    if (!Number.isSafeInteger(size)) throw new Error("spine: invalid cut log size");
+    const last = Buffer.alloc(1);
+    const complete = size === 0 || (readSync(fd, last, 0, 1, size - 1) === 1 && last[0] === 0x0a);
+    if (complete && size + incoming.length <= CUTS_LOG_MAX_BYTES) {
+      if (incoming.length) writeFileSync(fd, incoming);
+      return;
+    }
+    retained = cutLogSuffix(fd, size, CUTS_LOG_MAX_BYTES - incoming.length);
+  } finally {
+    closeSync(fd);
+  }
+  replaceCutLog(file, observed, retained, incoming);
+}
+
+function writeCutStats(dir, next) {
+  const file = join(dir, STATS_NAME);
+  const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(next));
+    renameSync(tmp, file);
+    return next;
+  } finally {
+    try { unlinkSync(tmp); } catch {}
+  }
+}
+
 export function flushDrainStats(dir, notes, meta = {}) {
   const cuts = (notes || []).filter((note) => note?.kind === "cut" && note.saved > 0);
   const charged = drainRewrite(notes);
   const saved = cuts.reduce((sum, note) => sum + note.saved, 0);
-  if (cuts.length) recordDrainStats(dir, { cuts: cuts.length, saved, rewrite: charged });
+  const firstCut = (notes || []).findIndex((note) => note?.kind === "cut");
   const lines = (notes || []).map((note, index) => JSON.stringify({
     v: 1,
     ts: new Date().toISOString(),
@@ -901,7 +1015,7 @@ export function flushDrainStats(dir, notes, meta = {}) {
     pass: index,
     drain: meta.drain === true,
     saved: note.saved || 0,
-    rewriteCharged: note.kind === "cut" && index === (notes || []).findIndex((item) => item?.kind === "cut") ? charged : 0,
+    rewriteCharged: index === firstCut ? charged : 0,
     tailBeyondKept: note.tailBeyondKept || 0,
     prefix: note.prefix || 0,
     afterPrefix: note.afterPrefix || 0,
@@ -910,69 +1024,35 @@ export function flushDrainStats(dir, notes, meta = {}) {
     gate: note.gate || "cut",
   }));
   if (!lines.length) return charged;
-  try {
-    appendFileSync(join(dir, CUTS_NAME), `${lines.join("\n")}\n`);
-  } catch {}
-  return charged;
-}
-
-function recordDrainStats(dir, { cuts = 0, saved = 0, rewrite = 0 } = {}) {
-  if (!(cuts > 0) || !(saved > 0)) return null;
-  try {
-    const file = join(dir, STATS_NAME);
-    const lock = join(dir, "spine-stats.lock");
-    const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    const fd = acquireStatsLock(lock);
-    if (fd === null) return null;
-    try {
-      const prev = readCutStats(dir);
-      const locked = {
-        cuts: prev.cuts + cuts,
-        savedTokens: prev.savedTokens + saved,
-        rewriteTokens: prev.rewriteTokens + rewrite,
-        drains: (Number(prev.drains) || 0) + 1,
-        updatedAt: new Date().toISOString(),
-      };
-      writeFileSync(tmp, JSON.stringify(locked));
-      renameSync(tmp, file);
-      return locked;
-    } finally {
-      try { unlinkSync(tmp); } catch {}
-      closeSync(fd);
-      try { unlinkSync(lock); } catch {}
+  withCutStatsLock(dir, () => {
+    if (cuts.length) {
+      try {
+        const prev = readCutStats(dir);
+        writeCutStats(dir, {
+          cuts: prev.cuts + cuts.length,
+          savedTokens: prev.savedTokens + saved,
+          rewriteTokens: prev.rewriteTokens + charged,
+          drains: prev.drains + 1,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch {}
     }
-  } catch {
-    return null;
-  }
+    try { appendCutLog(dir, `${lines.join("\n")}\n`); } catch {}
+  });
+  return charged;
 }
 
 export function recordCutStats(dir, { saved = 0, rewrite = 0 } = {}) {
   if (!(saved > 0)) return readCutStats(dir);
-  try {
-    const file = join(dir, STATS_NAME);
-    const lock = join(dir, "spine-stats.lock");
-    const tmp = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
-    const fd = acquireStatsLock(lock);
-    if (fd === null) return null;
-    try {
-      const prev = readCutStats(dir);
-      const locked = {
-        cuts: prev.cuts + 1,
-        savedTokens: prev.savedTokens + saved,
-        rewriteTokens: prev.rewriteTokens + rewrite,
-        updatedAt: new Date().toISOString(),
-      };
-      writeFileSync(tmp, JSON.stringify(locked));
-      renameSync(tmp, file);
-      return locked;
-    } finally {
-      try { unlinkSync(tmp); } catch {}
-      closeSync(fd);
-      try { unlinkSync(lock); } catch {}
-    }
-  } catch {
-    return null;
-  }
+  return withCutStatsLock(dir, () => {
+    const prev = readCutStats(dir);
+    return writeCutStats(dir, {
+      cuts: prev.cuts + 1,
+      savedTokens: prev.savedTokens + saved,
+      rewriteTokens: prev.rewriteTokens + rewrite,
+      updatedAt: new Date().toISOString(),
+    });
+  });
 }
 
 function validWindowsSid(sid) {
@@ -1071,6 +1151,15 @@ export function shadowAccessPlan(platform = process.platform, userSid = "", kind
   };
 }
 
+function verifyPosixShadowMode(mode, expected, kind) {
+  if ((mode & 0o777n) !== BigInt(expected)) {
+    const actual = (mode & 0o777n).toString(8).padStart(4, "0");
+    const error = new Error(`spine: shadow ${kind} mode ${actual} did not match ${expected.toString(8).padStart(4, "0")}`);
+    error.step = `${kind}-mode`;
+    throw error;
+  }
+}
+
 export function defaultShadowAccessRunner({
   path,
   kind,
@@ -1080,7 +1169,14 @@ export function defaultShadowAccessRunner({
 } = {}) {
   if (platform !== "win32") {
     const plan = shadowAccessPlan(platform);
-    chmodSync(path, kind === "dir" ? plan.dirMode : plan.fileMode);
+    const expected = kind === "dir" ? plan.dirMode : plan.fileMode;
+    const before = accessEntry(path, kind);
+    chmodSync(before.canonical, expected);
+    const after = accessEntry(path, kind);
+    if (!sameAccessEntry(before, after)) {
+      throw new Error("spine: shadow permission target identity changed");
+    }
+    verifyPosixShadowMode(after.mode, expected, kind);
     return true;
   }
 
@@ -1209,45 +1305,61 @@ export function ensureShadowDir(dir, access = {}) {
   return dir;
 }
 
-export function tightenCreatedShadow(file, fd, access, { remember = true, skipRunner = false } = {}) {
-  if (skipRunner) {
-    try {
-      const entry = accessEntry(file);
-      const opened = fstatSync(fd, { bigint: true });
-      if (!entry.identity || entry.identity !== accessIdentity(opened) || opened.nlink !== 1n) {
-        throw new Error("spine: shadow published file identity changed");
-      }
-      if (remember) rememberLockedEntry(lockedFiles, entry.canonical, entry);
-      return;
-    } catch (cause) {
-      tripFuse();
-      const error = new Error("spine: shadow permission action failed; backup refused", { cause });
-      error.code = "ESHADOWACCESS";
-      error.step = "file";
-      throw error;
-    }
+export function ensureShadowDirIdentity(dir, access = {}) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const identity = directoryIdentity(dir);
+  tightenShadow(dir, "dir", access);
+  if (identity && directoryIdentity(dir) !== identity) {
+    throw Object.assign(new Error("spine: shadow directory identity changed"), { code: "ESHADOWACCESS", step: "dir" });
   }
-  if ((access.platform ?? process.platform) === "win32" && !access.runner && !shadowAccessFused()) {
-    try {
-      if (shadowDirLocked(dirname(file))) {
-        const entry = accessEntry(file, "file");
-        const opened = fstatSync(fd, { bigint: true });
-        if (!entry.identity || entry.identity !== accessIdentity(opened) || opened.nlink !== 1n) {
-          throw new Error("spine: shadow created file identity changed");
-        }
-        // Only this wx-created object is known to inherit our confirmed DACL.
-        if (remember) rememberLockedEntry(lockedFiles, entry.canonical, entry);
-        return;
-      }
-    } catch (cause) {
-      tripFuse();
-      const error = new Error("spine: shadow permission action failed; backup refused", { cause });
-      error.code = "ESHADOWACCESS";
-      error.step = "file";
-      throw error;
-    }
+  return identity;
+}
+
+function openedShadowEntry(file, fd) {
+  const entry = accessEntry(file, "file");
+  const opened = fstatSync(fd, { bigint: true });
+  if (!opened.isFile() || opened.nlink !== 1n || !entry.identity || entry.identity !== accessIdentity(opened)) {
+    throw new Error("spine: shadow created file identity changed");
   }
-  tightenShadow(file, "file", access);
+  return { entry, mode: opened.mode };
+}
+
+export function shadowFileIdentity(file, fd) {
+  try {
+    return fd === undefined ? accessEntry(file, "file").identity : openedShadowEntry(file, fd).entry.identity;
+  } catch {
+    return "";
+  }
+}
+
+export function tightenCreatedShadow(file, fd, access = {}, { remember = true, skipRunner = false } = {}) {
+  const platform = access.platform ?? process.platform;
+  const windows = platform === "win32" && !access.runner;
+  const nativePosix = platform !== "win32" && !access.runner;
+  try {
+    // Only a file created under an already verified Windows parent inherits its DACL.
+    const inherited = windows && !skipRunner && !shadowAccessFused() && shadowDirLocked(dirname(file));
+    if (!skipRunner && !nativePosix && !inherited) tightenShadow(file, "file", access);
+    const plan = nativePosix ? shadowAccessPlan(platform) : null;
+    if (plan && !skipRunner) {
+      openedShadowEntry(file, fd);
+      fchmodSync(fd, plan.fileMode);
+    }
+    const { entry, mode } = openedShadowEntry(file, fd);
+    if (plan) {
+      verifyPosixShadowMode(mode, plan.fileMode, "file");
+      verifyPosixShadowMode(accessEntry(dirname(file), "dir").mode, plan.dirMode, "dir");
+    }
+    if (remember && (skipRunner || inherited)) rememberLockedEntry(lockedFiles, entry.canonical, entry);
+    return entry.identity;
+  } catch (cause) {
+    if (cause?.code === "ESHADOWACCESS") throw cause;
+    if (windows) tripFuse();
+    const error = new Error("spine: shadow permission action failed; backup refused", { cause });
+    error.code = "ESHADOWACCESS";
+    error.step = cause?.step || "file";
+    throw error;
+  }
 }
 
 export function discardShadowFiles(files, cause, unlink = unlinkSync) {
@@ -1320,6 +1432,7 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     }
     // Confirm ACL/mode before any secret bytes are written to the staged file.
     tightenCreatedShadow(target, fd, access);
+    rememberShadowParent(dir);
     // Full replacement bytes are a conservative charge, even for overwrites,
     // partial writes and failed cleanup. Metadata/owner/stats are not capacity.
     if (shadowUsage && isPluginShadowName(basename(file))) {
@@ -1355,6 +1468,7 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
     closeSync(opened);
     return file;
   } catch (error) {
+    const identity = fd !== null ? shadowFileIdentity(protectedPath, fd) : "";
     if (fd !== null) {
       try {
         closeSync(fd);
@@ -1365,8 +1479,9 @@ function writeShadowFileLocked(file, body, access, { exclusive, write, unlink, a
       // Do not unlink through a replacement directory after a failed write.
       let sameParent = false;
       try { sameParent = !parentIdentity || directoryIdentity(dir) === parentIdentity; } catch {}
-      if (sameParent) discardShadowFiles([protectedPath], error, unlink);
-      else shadowUsage = null;
+      if (sameParent && identity && shadowFileIdentity(protectedPath) === identity) {
+        discardShadowFiles([protectedPath], error, unlink);
+      } else shadowUsage = null;
     }
     throw error;
   }

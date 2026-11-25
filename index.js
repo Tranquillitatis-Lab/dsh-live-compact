@@ -25,13 +25,16 @@ import { attachBackupHint, backgroundJobId, backupClaimOk, buildCard, collectJob
 import { captureOwnedToolResult, contentHash, PRUNE_MARKER, rawExcerptText, rawName, readRawToolResult, restoreToolText, runPruneAfterCapture, verifiedRaw } from "./raw.js";
 import {
   ensureShadowDir,
+  ensureShadowDirIdentity,
   appendDecision,
+  directoryIdentity,
   flushDrainStats,
   noteShadowWarning,
   recoverTimedOutShadowWorker,
   saveShadowTransaction,
   shadowDirectory,
   shadowFileBody,
+  shadowFileIdentity,
   shadowMaxBytes,
   sessionDir,
   shadowAccessFused,
@@ -405,6 +408,9 @@ function shadowWorkerFor(root) {
     }
     const error = new Error(message?.error?.message || "spine: shadow worker failed");
     if (message?.error?.code) error.code = message.error.code;
+    if (typeof message?.error?.step === "string" && message.error.step.length <= 64) {
+      error.step = message.error.step;
+    }
     task.reject(error);
     releaseShadowSlot(entry, task);
     scheduleIdleExit();
@@ -2988,25 +2994,35 @@ export default class SpineCompactionEngine extends BasicCompactionEngine {
     if (this.persistCapture !== true || !Number.isSafeInteger(cursor) || cursor < 0) return;
     let tmp;
     let fd;
+    let tmpIdentity = "";
     try {
       ensureShadowDir(shadowDirectory(), access);
       const file = this.captureCursorFile(key);
       // Cursor metadata is outside the payload cap and needs no rotation lock.
       // Secure the parent first so Windows temps inherit its private ACL.
-      ensureShadowDir(dirname(file), access);
+      const parent = dirname(file);
+      const parentIdentity = ensureShadowDirIdentity(parent, access);
       const candidate = `${file}.${process.pid}-${randomBytes(8).toString("hex")}.tmp`;
       fd = openSync(candidate, "wx", 0o600);
       tmp = candidate;
-      tightenCreatedShadow(tmp, fd, access, { remember: false });
+      tmpIdentity = tightenCreatedShadow(tmp, fd, access, { remember: false });
+      if (parentIdentity && directoryIdentity(parent) !== parentIdentity) {
+        throw Object.assign(new Error("spine: capture cursor directory identity changed"), { code: "ESHADOWACCESS", step: "dir" });
+      }
       writeFileSync(fd, JSON.stringify({ v: 1, key, cursor }));
       closeSync(fd);
       fd = undefined;
+      if (shadowFileIdentity(tmp) !== tmpIdentity) {
+        throw Object.assign(new Error("spine: capture cursor temp identity changed"), { code: "ESHADOWACCESS", step: "file" });
+      }
       renameSync(tmp, file);
+      tmp = undefined;
     } catch (error) {
       noteShadowWarning(this.ctx?.logger, error);
     } finally {
+      if (tmp && fd !== undefined && !tmpIdentity) tmpIdentity = shadowFileIdentity(tmp, fd);
       if (fd !== undefined) { try { closeSync(fd); } catch {} }
-      if (tmp) { try { unlinkSync(tmp); } catch {} }
+      if (tmp && tmpIdentity && shadowFileIdentity(tmp) === tmpIdentity) { try { unlinkSync(tmp); } catch {} }
     }
   }
 

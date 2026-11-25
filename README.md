@@ -217,7 +217,9 @@ DSH-TUI 先不要装。本包已补预设压缩隔离组的接管；TUI 仍需�
 
 被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`。Unix 权限为目录 0700 / 文件 0600；Windows 新建/修正后的备份允许当前用户、SYSTEM、Administrators，历史文件及缓存限制见上面的 ACL 说明。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。插件自己不会去搜。
 
-`dsh-live-compact stats` 的 `saved` 是切完当下少掉的 token，`rewrite` 是同一次收尾实际要重写的尾巴，只记一次。同一步连切不会按刀数把尾巴乘上去。这两个数口径不同，比值不是盈亏。桌面端没有终端，`rg "spine cut"` 只在终端输出里找得到。逐刀明细在 shadow 目录的 `spine-cuts.jsonl`。
+`dsh-live-compact stats` 的 `saved` 是切完当下少掉的 token，`rewrite` 是同一次收尾实际要重写的尾巴，只记一次。同一步连切不会按刀数把尾巴乘上去。这两个数口径不同，比值不是盈亏。桌面端没有终端，`rg "spine cut"` 只在终端输出里找得到。每个 shadow 根的 `spine-cuts.jsonl` 最多保留 1 MiB 最近的完整逐刀明细，累计计数记录在 `spine-stats.json`。
+
+POSIX 备份目录所在的文件系统须实际强制 0700/0600 权限。插件会读回目录及文件的权限，并在写正文前拒绝权限不符的备份。
 
 改上限：
 

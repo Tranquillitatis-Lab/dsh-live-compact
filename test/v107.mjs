@@ -141,7 +141,7 @@ assert.equal(missed.matches.length, 0);
 rmSync(dir, { recursive: true, force: true });
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-assert.equal(pkg.version, "1.1.13");
+assert.equal(pkg.version, "1.1.14");
 const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
 assert.equal(indexSource.includes("<compacted-summary>"), false);
 assert.equal(indexSource.includes("spine-checkpoint"), true);

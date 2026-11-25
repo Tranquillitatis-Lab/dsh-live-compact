@@ -26,10 +26,12 @@ async function handle(id, payload) {
     const result = saveShadowTransaction(normalizeShadowBody(payload));
     parentPort.postMessage({ id, ok: true, result });
   } catch (error) {
+    const step = error?.step || error?.cause?.step;
     parentPort.postMessage({ id, ok: false, error: {
       name: error?.name || "Error",
       message: error?.message || String(error),
       code: error?.code,
+      step: typeof step === "string" && step.length <= 64 ? step : undefined,
     } });
   }
 }

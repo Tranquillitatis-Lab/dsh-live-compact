@@ -14,7 +14,7 @@ import { Worker } from "node:worker_threads";
 import { saveShadow } from "../index.js";
 import { shadowSections } from "../plan.js";
 import { captureOwnedToolResult, captureToolResult } from "../raw.js";
-import { flushDrainStats, listShadowEntries, readCutStats, rotateShadow, shadowFileBody, withShadowRoot, writeShadowFile } from "../shadow.js";
+import { CUTS_NAME, ensureShadowDir, flushDrainStats, listShadowEntries, noteShadowWarning, readCutStats, resetShadowAccessState, rotateShadow, shadowFileBody, withShadowRoot, writeShadowFile } from "../shadow.js";
 
 const LOCK = ".spine-rotation.lock";
 const OWNER = ".spine-rotation.owner";
@@ -509,6 +509,110 @@ test("a recovered fence stays shared across module instances and later PID reuse
   writeFileSync(lock, holder(process.pid, "b".repeat(48)));
   assert.throws(() => rotation(f), (error) => error.code === "ESHADOWBUSY");
   assert.equal(readFileSync(lock, "utf8"), holder(process.pid, "b".repeat(48)));
+});
+
+test("the production writer reports a distinct recovery identity conflict through worker messages", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.dir, RECOVERED), holder());
+  writeFileSync(join(f.dir, LOCK), holder(process.pid, "b".repeat(48)));
+  const file = join(f.dir, "cut-1-aaaaaaaa.txt");
+  const worker = new Worker(new URL("../shadow-save-worker.mjs", import.meta.url), {
+    workerData: { shadow: f.dir, file, body: "fixture", required: true, sessionKey: "fixture" },
+  });
+  try {
+    const [response] = await once(worker, "message");
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "ESHADOWBUSY");
+    assert.equal(response.error.step, "rotation-recovery-conflict");
+    assert.equal(existsSync(file), false);
+    assert.equal(readFileSync(join(f.dir, LOCK), "utf8"), holder(process.pid, "b".repeat(48)));
+    resetShadowAccessState();
+    t.after(resetShadowAccessState);
+    const warnings = [];
+    const logger = { warn: (line) => warnings.push(line) };
+    noteShadowWarning(logger, { code: "ESHADOWBUSY" });
+    noteShadowWarning(logger, response.error);
+    noteShadowWarning(logger, response.error);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[1], /rotation-recovery-conflict/);
+  } finally {
+    await worker.terminate();
+  }
+});
+
+test("native POSIX backup refuses unchanged broad directory and staged file permissions before writing", { skip: process.platform === "win32" }, (t) => {
+  const f = fixture(t);
+  fs.chmodSync(f.dir, 0o755);
+  withFsMock(t, "chmodSync", (chmod) => (path, mode) => {
+    if (path !== f.dir) return chmod(path, mode);
+  }, () => {
+    assert.throws(() => ensureShadowDir(f.dir), { code: "ESHADOWACCESS", step: "dir-mode" });
+  });
+  assert.equal(statSync(f.dir).mode & 0o777, 0o755);
+  const file = join(f.dir, "cut-1-aaaaaaaa.txt");
+  let targetFd;
+  withFsMock(t, "openSync", (open) => (path, flags, mode) => {
+    if (flags !== "wx" || !String(path).includes(".cut-1-aaaaaaaa.txt-")) return open(path, flags, mode);
+    targetFd = open(path, flags, mode);
+    fs.fchmodSync(targetFd, 0o644);
+    return targetFd;
+  }, () => {
+    withFsMock(t, "fchmodSync", (chmod) => (fd, mode) => {
+      if (fd !== targetFd || mode !== 0o600) return chmod(fd, mode);
+    }, () => {
+      assert.throws(() => writeShadowFile(file, "fixture", {}, {
+        root: f.dir, write() { assert.fail("body write before permissions were verified"); },
+      }), { code: "ESHADOWACCESS", step: "file-mode" });
+    });
+  });
+  assert.equal(existsSync(file), false);
+  assert.deepEqual(readdirSync(f.dir), []);
+  writeShadowFile(file, "fixture", {}, { root: f.dir });
+  assert.equal(statSync(f.dir).mode & 0o777, 0o700);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(readFileSync(file, "utf8"), "fixture");
+});
+
+test("native POSIX staging revalidates the open object after chmod and leaves a replacement alone", { skip: process.platform === "win32" }, (t) => {
+  const f = fixture(t);
+  const file = join(f.dir, "cut-1-aaaaaaaa.txt");
+  const moved = join(f.base, "moved-staging");
+  let replacement;
+  withFsMock(t, "fchmodSync", (chmod) => (fd, mode) => {
+    chmod(fd, mode);
+    replacement = join(f.dir, readdirSync(f.dir).find((name) => name.startsWith(".cut-1-aaaaaaaa.txt-")));
+    renameSync(replacement, moved);
+    writeFileSync(replacement, "replacement", { mode: 0o600 });
+  }, () => {
+    assert.throws(() => writeShadowFile(file, "fixture", {}, {
+      root: f.dir, write() { assert.fail("body write after the temporary name was replaced"); },
+    }), { code: "ESHADOWACCESS" });
+  });
+  assert.equal(statSync(moved).size, 0);
+  assert.equal(readFileSync(replacement, "utf8"), "replacement");
+  assert.equal(existsSync(file), false);
+  assert.equal(existsSync(join(f.dir, LOCK)), false);
+});
+
+test("native POSIX staging refuses a changed parent even if the same fd is named inside the new directory", { skip: process.platform === "win32" }, (t) => {
+  const f = fixture(t);
+  const parent = join(f.dir, "session");
+  const original = join(f.base, "replaced-parent");
+  const file = join(parent, "cut-1-aaaaaaaa.txt");
+  let temp;
+  withFsMock(t, "fchmodSync", (chmod) => (fd, mode) => {
+    chmod(fd, mode);
+    temp = readdirSync(parent).find((name) => name.startsWith(".cut-1-aaaaaaaa.txt-"));
+    renameSync(parent, original);
+    mkdirSync(parent, { mode: 0o700 });
+    renameSync(join(original, temp), join(parent, temp));
+  }, () => {
+    assert.throws(() => writeShadowFile(file, "fixture", {}, {
+      root: f.dir, write() { assert.fail("body write through a replaced parent"); },
+    }), { code: "ESHADOWBUSY" });
+  });
+  assert.equal(statSync(join(parent, temp)).size, 0);
+  assert.equal(existsSync(file), false);
 });
 
 test("default DSH_HOME roots, explicit default aliases and undeclared roots always scan; old writers remain visible", (t) => {
@@ -1095,6 +1199,117 @@ test("rotation log uses post-deletion plus incoming bytes; cut stats/log files s
   assert.equal(readCutStats(f.dir).cuts, 1);
   assert.equal(readFileSync(join(f.dir, "spine-cuts.jsonl"), "utf8").trim().split("\n").length, 1);
   assert.equal(rotation(f).used, 120);
+});
+
+test("cut log compaction bounds reads and bytes and keeps the latest complete UTF-8 rows", (t) => {
+  const f = fixture(t);
+  const cap = 1024 * 1024;
+  const log = join(f.dir, CUTS_NAME);
+  const padding = "過去の行".repeat(100);
+  const prior = Array.from({ length: 1650 }, (_, n) => JSON.stringify({ n, padding }) + "\n").join("");
+  assert.ok(Buffer.byteLength(prior) > cap);
+  writeFileSync(log, prior + '{"n":');
+  let bytesRead = 0;
+  withFsMock(t, "readSync", (read) => (fd, buffer, offset, length, position) => {
+    bytesRead += length;
+    return read(fd, buffer, offset, length, position);
+  }, () => {
+    flushDrainStats(f.dir, [{ kind: "cut", saved: 50, afterPrefix: 25 }], { sid: "最新" });
+  });
+  assert.ok(bytesRead <= cap + 2);
+  assert.ok(statSync(log).size <= cap);
+  const contents = readFileSync(log, "utf8");
+  assert.ok(contents.endsWith("\n"));
+  const lines = contents.trimEnd().split("\n").map(JSON.parse);
+  assert.ok(lines[0].n > 0);
+  assert.equal(lines[0].padding, padding);
+  assert.ok(lines[0].n < 1649);
+  assert.equal(lines.at(-2).n, 1649);
+  assert.equal(lines.at(-1).sid, "最新");
+  assert.deepEqual(readCutStats(f.dir), { cuts: 1, savedTokens: 50, rewriteTokens: 25, drains: 1 });
+});
+
+test("partial cut log tails are repaired below the cap; replacement errors keep the prior bytes and counters", (t) => {
+  const f = fixture(t);
+  const log = join(f.dir, CUTS_NAME);
+  const prior = '{"saved":1}\n{"saved":';
+  writeFileSync(log, prior);
+  const notes = [{ kind: "cut", saved: 2, afterPrefix: 6 }];
+  withFsMock(t, "renameSync", (rename) => (source, target) => {
+    if (target === log) throw new Error("fixture rotation rename denied");
+    return rename(source, target);
+  }, () => assert.equal(flushDrainStats(f.dir, notes), 6));
+  assert.equal(readFileSync(log, "utf8"), prior);
+  assert.equal(readCutStats(f.dir).savedTokens, 2);
+  assert.equal(existsSync(join(f.dir, "spine-stats.lock")), false);
+  assert.equal(readdirSync(f.dir).some((entry) => entry.endsWith(".tmp")), false);
+  flushDrainStats(f.dir, notes);
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map(JSON.parse);
+  assert.deepEqual(lines.map((row) => row.saved), [1, 2]);
+  assert.equal(readCutStats(f.dir).savedTokens, 4);
+});
+
+test("cut detail and stats respect the same busy, dead and legacy lock before writing", (t) => {
+  const f = fixture(t);
+  const lock = join(f.dir, "spine-stats.lock");
+  const log = join(f.dir, CUTS_NAME);
+  const notes = [{ kind: "cut", saved: 2, afterPrefix: 6 }];
+  writeFileSync(lock, String(process.pid));
+  assert.equal(flushDrainStats(f.dir, notes), 6);
+  assert.equal(existsSync(log), false);
+  assert.equal(readCutStats(f.dir).cuts, 0);
+  const absentPid = 190000001;
+  writeFileSync(lock, String(absentPid));
+  const kill = process.kill;
+  const probe = t.mock.method(process, "kill", (pid, signal) => {
+    if (pid === absentPid) throw Object.assign(new Error("fixture dead PID"), { code: "ESRCH" });
+    return kill.call(process, pid, signal);
+  });
+  try { flushDrainStats(f.dir, notes); } finally { probe.mock.restore(); }
+  writeFileSync(lock, "");
+  utimesSync(lock, 1, 1);
+  flushDrainStats(f.dir, notes);
+  assert.equal(readFileSync(log, "utf8").trimEnd().split("\n").length, 2);
+  assert.equal(readCutStats(f.dir).cuts, 2);
+  assert.equal(existsSync(lock), false);
+});
+
+test("two OS processes serialize cut log trimming and append under the stats lock", { timeout: 15000 }, async (t) => {
+  const f = fixture(t);
+  const log = join(f.dir, CUTS_NAME);
+  const cap = 1024 * 1024;
+  writeFileSync(log, `${JSON.stringify({ sid: "old", body: "x".repeat(cap) })}\n{"sid":"prior"}\n`);
+  const release = join(f.base, "release-stats");
+  const worker = fork(workerURL, [JSON.stringify({ root: f.dir })], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const exited = once(worker, "exit");
+  t.after(() => { if (worker.exitCode === null && worker.signalCode === null) worker.kill(); });
+  try {
+    const [ready] = await once(worker, "message");
+    assert.equal(ready.event, "ready");
+    const admitted = once(worker, "message");
+    worker.send({ command: "drain", barrier: release });
+    const [locked] = await admitted;
+    assert.equal(locked.event, "stats-locked");
+    assert.notEqual(locked.pid, process.pid);
+    const notes = [{ kind: "cut", saved: 3, afterPrefix: 5 }];
+    assert.equal(flushDrainStats(f.dir, notes, { sid: "blocked" }), 5);
+    assert.equal(readCutStats(f.dir).cuts, 0);
+    assert.ok(statSync(log).size > cap);
+    const flushed = once(worker, "message");
+    writeFileSync(release, "go");
+    const [result] = await flushed;
+    assert.equal(result.event, "result");
+    assert.equal(result.result, 11);
+    flushDrainStats(f.dir, notes, { sid: "caller" });
+    const lines = readFileSync(log, "utf8").trimEnd().split("\n").map(JSON.parse);
+    assert.deepEqual(lines.map((line) => line.sid), ["prior", "worker", "caller"]);
+    assert.ok(statSync(log).size <= cap);
+    assert.deepEqual(readCutStats(f.dir), { cuts: 2, savedTokens: 10, rewriteTokens: 16, drains: 2 });
+  } finally {
+    if (!existsSync(release)) writeFileSync(release, "go");
+    if (worker.connected) worker.send({ command: "exit" });
+    await exited;
+  }
 });
 
 test("save refuses a protected full root, preserves originals and keeps the existing oversize warning/exception", (t) => {
