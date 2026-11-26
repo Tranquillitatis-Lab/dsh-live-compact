@@ -202,18 +202,18 @@ npm install -g dsh-live-compact
 dsh-live-compact --version
 ```
 
-以下是 1.1.12 的历史镜像。
+也可以从镜像装：
 
 ```sh
-dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.12.tgz
-dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.12.tgz
-npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.12.tgz"
+dsh plugin --profile headless add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.14.tgz
+dsh plugin --profile web add https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.14.tgz
+npm install -g --force "https://download.merkyorlynn.com/downloads/plugins/dsh-live-compact-1.1.14.tgz"
 dsh-live-compact --version
 ```
 
 需要 DSH `>=0.2.0-rc.2 <0.3.0`。装上后跑长任务，日志里出现 `spine cut …ms` 才算这刀生效。页面：https://download.merkyorlynn.com/live-compact.html
 
-DSH-TUI 先不要装。本包已补预设压缩隔离组的接管；TUI 仍需适配 `spine-checkpoint` 的局部卡片显示，两仓联合验收后再开放支持。
+DSH-TUI 先不要装。TUI 已在 v0.20.0 支持显示 `spine-checkpoint` 局部卡片，但本包目前只接管网页和 Desktop 预设里的压缩，TUI 预设仍走原版压缩；接管和联合验收完成后再开放支持。
 
 被切掉的原文会写到 `~/.dsh/compaction-spine/shadow`。Unix 权限为目录 0700 / 文件 0600；Windows 新建/修正后的备份允许当前用户、SYSTEM、Administrators，历史文件及缓存限制见上面的 ACL 说明。上限 256MB。快满时删最老的备份。卡片里的序号是会话日志的事件号。要在当前会话的备份里找一行，用 `import { searchShadow } from "dsh-live-compact/shadow-search"`。插件自己不会去搜。
 
