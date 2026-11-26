@@ -1,11 +1,12 @@
 // Real OS-process/worker barriers for Issue #27. No host profiles or models.
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import fs, { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { saveShadow } from "../../index.js";
 import { shadowSections } from "../../plan.js";
 import { captureOwnedToolResult } from "../../raw.js";
-import { listShadowEntries, rotateShadow, shadowFileBody, withShadowRoot, writeShadowFile } from "../../shadow.js";
+import { flushDrainStats, listShadowEntries, rotateShadow, shadowFileBody, STATS_NAME, withShadowRoot, writeShadowFile } from "../../shadow.js";
 
 const config = isMainThread ? JSON.parse(process.argv[2]) : workerData;
 const { root, optIn = false, defaultRoot = false } = config;
@@ -19,6 +20,15 @@ let scans = 0;
 const io = { readdir(...args) { scans++; return readdirSync(...args); }, stat: statSync };
 let ordinal = 0;
 
+function awaitBarrier(barrier) {
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 10000;
+  while (!existsSync(barrier)) {
+    if (Date.now() > deadline) throw new Error("barrier was not released");
+    Atomics.wait(wait, 0, 0, 5);
+  }
+}
+
 function save(bytes, barrier) {
   const key = "A";
   const message = { role: "user", content: "x" };
@@ -27,14 +37,9 @@ function save(bytes, barrier) {
   const file = join(root, key, `cut-${++ordinal}-aaaaaaaa.txt`);
   const logs = [];
   const access = barrier ? { runner({ kind, path }) {
-    if (kind === "file" && path.endsWith(".txt")) {
+    if (kind === "file") {
       send({ event: "admitted", pid: process.pid });
-      const wait = new Int32Array(new SharedArrayBuffer(4));
-      const deadline = Date.now() + 10000;
-      while (!existsSync(barrier)) {
-        if (Date.now() > deadline) throw new Error("barrier was not released");
-        Atomics.wait(wait, 0, 0, 5);
-      }
+      awaitBarrier(barrier);
     }
     return true;
   } } : {};
@@ -56,6 +61,22 @@ function command(message) {
       result = captureOwnedToolResult({ dir: join(root, "B"), root, toolCallId: "B", text: "b".repeat(320) });
     } else if (message.command === "save") {
       result = save(120, message.barrier);
+    } else if (message.command === "drain") {
+      const rename = fs.renameSync;
+      fs.renameSync = (file, target) => {
+        if (target === join(root, STATS_NAME)) {
+          send({ event: "stats-locked", pid: process.pid });
+          awaitBarrier(message.barrier);
+        }
+        return rename(file, target);
+      };
+      syncBuiltinESMExports();
+      try {
+        result = flushDrainStats(root, [{ kind: "cut", saved: 7, afterPrefix: 11 }], { sid: "worker" });
+      } finally {
+        fs.renameSync = rename;
+        syncBuiltinESMExports();
+      }
     } else if (message.command === "inspect") {
       const rotation = rotateShadow({ dir: root, incomingBytes: 0, cap: 1000, ...io });
       result = { rotation, bytes: listShadowEntries(root).reduce((sum, file) => sum + file.size, 0), scans };

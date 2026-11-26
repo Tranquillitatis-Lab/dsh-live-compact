@@ -1,0 +1,47 @@
+{
+  "corpusVersion": "1",
+  "head": "4b86453e82986af767ff0ecfcd16829d5682adf8",
+  "cases": {
+    "tiny-below-min": {
+      "file": "tiny-below-min.json",
+      "sha256": "0a703681507fe4e06ccb8a971ba38bb0262567172ef920ab75544e9505a5a99f"
+    },
+    "small-cut-local": {
+      "file": "small-cut-local.json",
+      "sha256": "43793de44a16e0c06f4b113c5045682ee38902431b0644e73751101257506145"
+    },
+    "small-cut-cloud": {
+      "file": "small-cut-cloud.json",
+      "sha256": "2b19e4c40210b3d3119f6d12386a3977647aa27faf5b5db2b3f92efae1003fbf"
+    },
+    "multiround-medium": {
+      "file": "multiround-medium.json",
+      "sha256": "c58e28fc218d1500c4d9fed71bab99c30be767de4829da7f8cda7df6c56ce8eb"
+    },
+    "pointer-over-32000": {
+      "file": "pointer-over-32000.json",
+      "sha256": "f7d1315fb086541ca8b927806e124c53c67aa2c99949f68d5a9cd3471dc938f1"
+    },
+    "big-gate-skip": {
+      "file": "big-gate-skip.json",
+      "sha256": "6f8ac2c9d49ab300f771e2d4bf80c8fb5129c24bf87a7a40cb0daf0fc2b4587e"
+    },
+    "thunder-on": {
+      "file": "thunder-on.json",
+      "sha256": "4a568454aec1e9df2ba36cacd533b217f21413e3947009487b04e26d9beebf9d"
+    },
+    "cooldown-window": {
+      "file": "cooldown-window.json",
+      "sha256": "c6c92de84fd749e9e21cbd35475cc5d9566d9ced0d81d3acc91ab34b780d4877"
+    },
+    "failure-oversized": {
+      "file": "failure-oversized.json",
+      "sha256": "95c86cf6cb851e1957eaede8663df229d8e85e1d5536396632d106fe4e871a67"
+    },
+    "keeprounds-drain-cloud": {
+      "file": "keeprounds-drain-cloud.json",
+      "sha256": "ffd2776be87683aeb3150bdfbbea80dd368ddc3ab23d5b571c9bbb7da1281d84"
+    }
+  },
+  "ok": true
+}

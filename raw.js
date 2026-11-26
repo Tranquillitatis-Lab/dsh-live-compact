@@ -20,6 +20,10 @@ import {
 
 export const PRUNE_MARKER = "[... tool result middle pruned ...]";
 
+function transientCaptureError(error) {
+  return ["ESHADOWBUSY", "EAGAIN", "EBUSY", "EINTR", "EIO"].includes(error?.code);
+}
+
 export function contentHash(text) {
   const hash = createHash("sha256");
   hash.update(typeof text === "string" ? Buffer.from(text, "utf8") : text);
@@ -35,7 +39,11 @@ function readExisting(file, toolCallId) {
   try {
     meta = JSON.parse(readFileSync(`${file}.meta.json`, "utf8"));
   } catch {
-    return { ok: false, reason: "missing-meta", toolCallId };
+    return {
+      ok: false,
+      reason: existsSync(`${file}.meta.json`) ? "bad-meta" : "missing-meta",
+      toolCallId,
+    };
   }
   if (meta?.toolCallId !== toolCallId || typeof meta.sha256 !== "string" || !Number.isInteger(meta.bytes)) {
     return { ok: false, reason: "bad-meta", toolCallId };
@@ -62,12 +70,14 @@ function readExisting(file, toolCallId) {
 
 // Restart recovery is read-only: never manufacture an original from the surface.
 // Resolve only the requested ID, with the same permissions/meta checks as capture.
-export function readRawToolResult({ dir, toolCallId, access = {} }) {
+export function readRawToolResult({ dir, toolCallId, access = {}, tighten = true }) {
   const file = join(dir, rawName(toolCallId));
   if (!existsSync(file)) return { ok: false, reason: "missing-file", toolCallId };
-  ensureShadowDir(dir, access);
-  tightenShadow(file, "file", access);
-  if (existsSync(`${file}.meta.json`)) tightenShadow(`${file}.meta.json`, "file", access);
+  if (tighten) {
+    ensureShadowDir(dir, access);
+    tightenShadow(file, "file", access);
+    if (existsSync(`${file}.meta.json`)) tightenShadow(`${file}.meta.json`, "file", access);
+  }
   return readExisting(file, toolCallId);
 }
 
@@ -114,13 +124,13 @@ export function captureToolResult(options) {
   const { dir, toolCallId, access = {}, root = shadowRootForDir(dir) } = options;
   if (!toolCallId) return { ok: false, reason: "missing-id", toolCallId: "" };
   if (!existsSync(join(dir, rawName(toolCallId))) && String(options.text ?? "").includes(PRUNE_MARKER)) {
-    return { ok: false, reason: "already-pruned", toolCallId };
+    return { ok: false, reason: "already-pruned", toolCallId, unrecoverable: true };
   }
   try {
     ensureShadowDir(dir, access);
   } catch (error) {
     if (error?.code === "ESHADOWACCESS" || error?.code === "ESHADOWCLEANUP") throw error;
-    return { ok: false, reason: "unwritable", toolCallId };
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
   }
   let entered = false;
   try {
@@ -129,7 +139,7 @@ export function captureToolResult(options) {
       return captureToolResultLocked({ ...options, root });
     });
   } catch (error) {
-    if (!entered || error?.code === "ESHADOWBUSY") return { ok: false, reason: "unwritable", toolCallId, retryable: error?.code === "ESHADOWBUSY" };
+    if (!entered || transientCaptureError(error)) return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
     throw error; // In particular, preserve exceptions from failed raw cleanup.
   }
 }
@@ -151,9 +161,11 @@ function captureToolResultLocked({
   const body = String(text ?? "");
   const file = join(dir, rawName(toolCallId));
   const metaPath = `${file}.meta.json`;
+  const bytes = Buffer.from(body, "utf8");
+  const hash = contentHash(bytes);
 
   if (!existsSync(file) && body.includes(PRUNE_MARKER)) {
-    return { ok: false, reason: "already-pruned", toolCallId };
+    return { ok: false, reason: "already-pruned", toolCallId, unrecoverable: true };
   }
 
   const readProtectedExisting = () => readRawToolResult({ dir, toolCallId, access });
@@ -161,10 +173,24 @@ function captureToolResultLocked({
   let createdRaw = false;
 
   try {
-    if (existsSync(file)) return readProtectedExisting();
-
-    const bytes = Buffer.from(body, "utf8");
-    const hash = contentHash(bytes);
+    if (existsSync(file)) {
+      const existing = readProtectedExisting();
+      if (!existing.ok) {
+        // A raw without its meta marker is an incomplete publication. When
+        // the current event still has the original body, discard the orphan
+        // and rebuild the pair; a malformed/valid meta file remains fail-closed.
+        if (existing.reason === "missing-meta" && !body.includes(PRUNE_MARKER)) {
+          discardShadowFiles([file, metaPath], new Error("incomplete raw/meta pair"));
+        } else {
+          return existing;
+        }
+      }
+      if (existing.ok && body.includes(PRUNE_MARKER)) return existing;
+      if (existing.ok && (existing.sha256 !== hash || existing.bytes !== bytes.length)) {
+        return { ok: false, reason: "duplicate-tool-call-id", toolCallId, retryable: false };
+      }
+      if (existing.ok) return existing;
+    }
 
     writeShadowFile(file, bytes, access, { exclusive: true, root });
     createdRaw = true;
@@ -206,7 +232,7 @@ function captureToolResultLocked({
       return readProtectedExisting();
     }
 
-    return { ok: false, reason: "unwritable", toolCallId, retryable: error?.code === "ESHADOWBUSY" };
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
   }
 }
 

@@ -170,6 +170,8 @@ const middleFail = ["header", ..."x".repeat(12).split("").map((_, index) => `noi
 const keptFail = failureKeptLines(middleFail);
 assert.equal(keptFail.some((line) => line.includes("FAIL tests/ledger.py::test_total")), true);
 assert.equal(keptFail.some((line) => line.includes("Error: ledger total negative: -42.17")), true);
+const earlyRoot = ["Error: EARLY_ROOT_CAUSE", ...Array.from({ length: 10 }, (_, index) => `Error: downstream ${index}`), "final context"].join("\n");
+assert.equal(failureKeptLines(earlyRoot).some((line) => line.includes("EARLY_ROOT_CAUSE")), true);
 const successWithWord = buildCard("", "", [{ role: "tool", text: `${"note Error: not a failure\n".repeat(20)}done` }]);
 assert.equal(successWithWord.text.includes("报错原文"), false);
 assert.equal(buildCard("", "", [{ role: "tool", text: "exit_code=1" }]).text.includes("报错原文"), true);

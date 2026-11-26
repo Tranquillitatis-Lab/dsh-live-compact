@@ -6,6 +6,7 @@
  */
 
 const PROSE_TOKEN_CAP = 32000;
+const CJK_CHARACTER = /[\p{Script=Han}\p{Script=Hangul}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]/u;
 
 export function sharedPrefixLength(previous, next) {
   if (!previous || !next) return 0;
@@ -28,24 +29,29 @@ export function decideThunder({ previous, next, modelKind, prefixTokens, attachM
   return "attach";
 }
 
-function estimateTokens(text) {
-  const cjk = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-  return Math.ceil(cjk / 1.5 + (text.length - cjk) / 4);
+function limitProse(text, tokens) {
+  // Twelfths of a token preserve the estimate at exact budget boundaries.
+  const budget = Math.floor(tokens) * 12;
+  let cost = 0;
+  let end = 0;
+  for (const character of text) {
+    cost += CJK_CHARACTER.test(character) ? 8 : character.length * 3;
+    if (cost > budget) return text.slice(0, end);
+    end += character.length;
+  }
+  return text;
 }
 
 export function buildSendLess({ taskLine, uncovered, facts, proseTokens = PROSE_TOKEN_CAP }) {
-  const kept = (facts || []).filter(Boolean);
-  let prose = uncovered || "";
-  if (estimateTokens(prose) > proseTokens) {
-    let low = 0;
-    let high = prose.length;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      if (estimateTokens(prose.slice(0, mid)) <= proseTokens) low = mid;
-      else high = mid - 1;
+  const kept = (facts || []).filter(Boolean).map((fact) => {
+    if (typeof fact === "object" && fact !== null) {
+      const role = String(fact.role || "unknown");
+      const line = String(fact.line || "");
+      return line ? `[${role}] ${line}` : "";
     }
-    prose = prose.slice(0, low);
-  }
+    return `[unknown] ${String(fact)}`;
+  }).filter(Boolean);
+  const prose = limitProse(uncovered || "", proseTokens);
   return [
     taskLine || "Continue the current task.",
     "Facts already copied locally:",

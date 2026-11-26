@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs, { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { setImmediate } from "node:timers/promises";
@@ -10,6 +10,65 @@ import { contentHash, pointerFor, PRUNE_MARKER, rawName } from "../raw.js";
 import { sessionDir } from "../shadow.js";
 import { fixture, runtime } from "./helpers/runtime.mjs";
 import { windowsAclCall } from "./helpers/windows-acl.mjs";
+
+test("capture cursor never writes through a parent replaced while opening the temporary file", { skip: process.platform === "win32" }, (t) => {
+  const h = runtime(t);
+  const { engine } = h.engine();
+  const key = "cursor-parent";
+  engine.writeCaptureCursor(key, 7);
+  const published = engine.captureCursorFile(key);
+  const parent = dirname(published);
+  const parked = join(h.root, "original-cursor-parent");
+  const open = fs.openSync;
+  const write = fs.writeFileSync;
+  let stagedFd;
+  let writes = 0;
+  const openMock = t.mock.method(fs, "openSync", (path, flags, mode) => {
+    if (flags === "wx" && String(path).startsWith(published + ".") && String(path).endsWith(".tmp")) {
+      renameSync(parent, parked);
+      mkdirSync(parent, { mode: 0o700 });
+      stagedFd = open(path, flags, mode);
+      return stagedFd;
+    }
+    return open(path, flags, mode);
+  });
+  const writeMock = t.mock.method(fs, "writeFileSync", (path, ...args) => {
+    if (stagedFd !== undefined && path === stagedFd) writes++;
+    return write(path, ...args);
+  });
+  syncBuiltinESMExports();
+  try { engine.writeCaptureCursor(key, 9); }
+  finally { openMock.mock.restore(); writeMock.mock.restore(); syncBuiltinESMExports(); }
+  assert.notEqual(stagedFd, undefined);
+  assert.equal(writes, 0);
+  assert.equal(existsSync(published), false);
+  assert.equal(JSON.parse(readFileSync(join(parked, published.slice(parent.length + 1)), "utf8")).cursor, 7);
+  assert.match(h.warnings.at(-1), /ESHADOWACCESS dir/);
+});
+
+test("capture cursor rename failure retains both the previously published cursor and a replacement temp", (t) => {
+  const h = runtime(t);
+  const { engine } = h.engine();
+  const key = "cursor-rename";
+  engine.writeCaptureCursor(key, 7);
+  const published = engine.captureCursorFile(key);
+  const parked = join(h.root, "original-cursor-temp");
+  const rename = fs.renameSync;
+  let replacement;
+  const mock = t.mock.method(fs, "renameSync", (from, to) => {
+    if (to !== published) return rename(from, to);
+    replacement = from;
+    rename(from, parked);
+    writeFileSync(from, "replacement", { mode: 0o600 });
+    throw new Error("fixture rename failed");
+  });
+  syncBuiltinESMExports();
+  try { engine.writeCaptureCursor(key, 9); }
+  finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(readFileSync(replacement, "utf8"), "replacement");
+  assert.equal(JSON.parse(readFileSync(parked, "utf8")).cursor, 9);
+  assert.equal(engine.readCaptureCursor(key), 7);
+});
 
 test("guarded prune retries the first busy result, caches later captures and publishes only safe cursor progress", (t) => {
   const h = runtime(t);
@@ -129,7 +188,6 @@ test("restart restores visible raw references before guarded prune and a real lo
 
 const damageCases = {
   "missing raw": (file) => unlinkSync(file),
-  "missing meta": (file) => unlinkSync(`${file}.meta.json`),
   "invalid meta JSON": (file) => writeFileSync(`${file}.meta.json`, "{"),
   "wrong meta ID": (_file, meta) => ({ ...meta, toolCallId: "another-call" }),
   "wrong meta bytes": (_file, meta) => ({ ...meta, bytes: meta.bytes + 1 }),

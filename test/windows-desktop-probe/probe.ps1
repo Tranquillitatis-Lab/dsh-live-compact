@@ -9,10 +9,24 @@ foreach ($scriptName in @('child.ps1','cdp.ps1')) {
 }
 $root = Join-Path "$($env:SystemDrive)\" "dsh112-desktop-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
 New-Item -ItemType Directory -Path $root | Out-Null
-$installer = Join-Path $root 'dsh-0.2.2-rc.1.exe'
-Invoke-WebRequest -Uri 'https://download.deepseek.com/desktop/dsh-latest-windows-x64.exe' -OutFile $installer -TimeoutSec 240
-if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne '830947F8996DC05D991CA9133FFF4D3400073E47B9CFA6507754867E79482B23' -or
-    (Get-AuthenticodeSignature -FilePath $installer).Status -ne 'Valid') { throw 'Unexpected official installer hash or signature.' }
+$pin = if ($env:RUNNER_ARCH -eq 'ARM64') {
+    @{ version = '0.2.3-alpha.2'; bytes = 301227624 }
+} else {
+    @{ version = '0.2.2-rc.5'; bytes = 299593552 }
+}
+$installer = Join-Path $root 'dsh-installer.exe'
+$asset = "https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-$($pin.version)-win-x64.exe"
+Write-Host "Downloading official Desktop $($pin.version) for $env:RUNNER_ARCH"
+Invoke-WebRequest -Uri $asset -OutFile $installer -TimeoutSec 240
+if ((Get-Item -LiteralPath $installer).Length -ne $pin.bytes -or
+    (Get-AuthenticodeSignature -FilePath $installer).Status -ne 'Valid') { throw 'Unexpected official installer size or signature.' }
+$pin.sha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+$pin | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $root 'installer-pin.json')
+$package = Join-Path $PSScriptRoot 'dsh-live-compact-1.1.14.tgz'
+if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne '25A52F56BBD63A417BBCC46F555A642DB052ABCBD3FBAA1F2503D25EBC023428') { throw 'Candidate archive mismatch.' }
+$candidateUrl = "https://raw.githubusercontent.com/Tranquillitatis-Lab/dsh-live-compact/$env:GITHUB_SHA/test/windows-desktop-probe/dsh-live-compact-1.1.14.tgz"
+Set-Content -LiteralPath (Join-Path $root 'candidate-url.txt') -Value $candidateUrl
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'desktop-electron-probe.mjs') -Destination $root
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'child.ps1') -Destination $root
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uia.ps1') -Destination $root
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cdp.ps1') -Destination $root
@@ -43,7 +57,7 @@ try {
     }
     if ($child.ExitCode -ne 0) { throw "Standard-user Desktop probe exited $($child.ExitCode)." }
     $proof = Get-Content -LiteralPath (Join-Path $root 'desktop-proof.json') -Raw | ConvertFrom-Json
-    foreach ($gate in @('Complete','StandardUser','CandidateInstalled','EditableMinTokens','OfficialSaveClicked','PersistedInProfile','RestartReadback','NativeWindow')) {
+    foreach ($gate in @('Complete','StandardUser','CandidateInstalled','EditableMinTokens','OfficialSaveClicked','PersistedInProfile','RestartReadback','NativeWindow','ElectronShells')) {
         if ($proof.$gate -ne $true) { throw "Desktop validation gate did not pass: $gate." }
     }
     $saved = Get-Content -LiteralPath (Join-Path $root 'settings-save-proof.json') -Raw | ConvertFrom-Json
@@ -61,7 +75,7 @@ try {
         & "$env:SystemRoot\System32\taskkill.exe" /PID $child.Id /T /F 2>$null | Out-Null
         $null = $child.WaitForExit(10000)
     }
-    foreach ($f in @('desktop-stage.txt','desktop-env-proof.json','desktop-proof.json','cdp-proof.json','cdp-read-diagnostic.json','last-ui-proof.json','plugin-manager-proof.json','plugin-install-proof.json','install-progress-proof.json','installed-candidate-proof.json','candidate-details-proof.json','settings-edited-proof.json','settings-save-proof.json','restart-cdp-proof.json','restart-settings-ui-proof.json','settings-restart-proof.json','uia-diagnostic.txt','uia-error.txt','child-output.txt','child-error.txt','desktop-failure.txt')) {
+    foreach ($f in @('desktop-stage.txt','desktop-env-proof.json','desktop-proof.json','cdp-proof.json','cdp-read-diagnostic.json','last-ui-proof.json','plugin-manager-proof.json','plugin-install-proof.json','install-progress-proof.json','installed-candidate-proof.json','candidate-details-proof.json','settings-edited-proof.json','settings-save-proof.json','restart-cdp-proof.json','restart-settings-ui-proof.json','settings-restart-proof.json','uia-diagnostic.txt','uia-error.txt','child-output.txt','child-error.txt','electron-probe.json','electron-stderr.txt','desktop-failure.txt')) {
         $p = Join-Path $root $f
         if (Test-Path -LiteralPath $p) {
             Write-Host "Desktop probe evidence: $f"

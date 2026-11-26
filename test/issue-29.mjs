@@ -116,6 +116,8 @@ for (const scenario of [
 test("#29 exact account no-address fallback; near names and existing public providers keep their behavior", (t) => {
   const h = routing(t);
   assert.deepEqual(h.engine.engineFor(h.agent), { engine: "cloud", source: "provider" });
+  const blankLaunch = routing(t, { launchURL: "   " });
+  assert.deepEqual(blankLaunch.engine.engineFor(blankLaunch.agent), { engine: "cloud", source: "provider" });
   for (const provider of ["deepseek-account-copy", "my-deepseek-account", "DeepSeek-Account", "deepseek_account", "unknown"]) {
     assert.deepEqual(resolveEngine({ provider, env: {} }), { engine: "local", source: "unknown" }, provider);
     assert.equal(resolveProviderBaseURL({ provider, launchURL: LOCAL, directory, layers: [] }), "");
@@ -125,6 +127,35 @@ test("#29 exact account no-address fallback; near names and existing public prov
     assert.deepEqual(resolveEngine({ provider, baseURL, env: {} }), { engine: "cloud", source: "address" });
   }
   assert.deepEqual(resolveEngine({ provider: "strata-box", baseURL: PUBLIC, env: {} }), { engine: "local", source: "provider" });
+});
+
+test("#45 model-level catalog baseURL selects cloud without changing the request route", (t) => {
+  const h = routing(t, {
+    provider: "opencode-go",
+    header: { model: "deepseek-v4.1-flash" },
+    listed: [{ id: "opencode-go", name: "OpenCode Go" }],
+    catalog: [{
+      id: "opencode-go",
+      models: [{ id: "deepseek-v4.1-flash", baseURL: "https://opencode.ai/inference/go/v1" }],
+    }],
+  });
+  assert.equal(resolveProviderBaseURL({
+    provider: "opencode-go",
+    model: "deepseek-v4.1-flash",
+    catalog: h.engine.catalogProviders(),
+  }), "https://opencode.ai/inference/go/v1");
+  assert.deepEqual(h.engine.engineFor(h.agent), { engine: "cloud", source: "address" });
+
+  const unmatched = routing(t, {
+    provider: "opencode-go",
+    header: { model: "unknown-model" },
+    listed: [{ id: "opencode-go", name: "OpenCode Go" }],
+    catalog: [{
+      id: "opencode-go",
+      models: [{ id: "deepseek-v4.1-flash", baseURL: "https://opencode.ai/inference/go/v1" }],
+    }],
+  });
+  assert.deepEqual(unmatched.engine.engineFor(unmatched.agent), { engine: "local", source: "unknown" });
 });
 
 test("#29 header, context, listed URL, generic layers, account root, patch and launch precedence", async (t) => {
@@ -425,6 +456,20 @@ test("#29 maintenance rejection, cancellation and commit failure do not poison c
   assert.equal(engine.stateFor(f.agent()).localOnly, false);
   engine.commitSelectedSpan = commit;
   await engine.finishTurn(f.agent());
+  assert.deepEqual(f.summaries().at(-1).data.shadowedSeqs, pair);
+  assert.equal(engine.stateFor(f.agent()).localOnly, false);
+});
+
+test("#49 disposed CLI maintenance still finishes an already-started local cut", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture({ totalTokens: 60000 }));
+  const pair = work(f);
+  const { engine } = h.engine();
+  h.capture(engine, f);
+  await engine.finishTurn({
+    session: f.session,
+    runMaintenance: (fn) => fn(AbortSignal.abort({ kind: "disposed" })),
+  });
   assert.deepEqual(f.summaries().at(-1).data.shadowedSeqs, pair);
   assert.equal(engine.stateFor(f.agent()).localOnly, false);
 });

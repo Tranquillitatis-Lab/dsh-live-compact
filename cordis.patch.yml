@@ -1,8 +1,5 @@
-# Host stock stays disabled so this engine can register ctx.compaction.
-# The entry installs its preset listener before constructing the engine.
+# Keep the host stock entry available until Live Compact has activated.
 # takeoverPresets controls future preset loads, not existing session engines.
-- id: compaction-basic
-  disabled: true
 - insert:
     - id: compaction-spine
       name: dsh-live-compact

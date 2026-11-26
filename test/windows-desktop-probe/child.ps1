@@ -161,10 +161,10 @@ function Assert-CandidateIdentity {
     $engineHash = (Get-FileHash -LiteralPath (Join-Path $installed 'index.js') -Algorithm SHA256).Hash
     $shadowHash = (Get-FileHash -LiteralPath (Join-Path $installed 'shadow.js') -Algorithm SHA256).Hash
     $gateHash = (Get-FileHash -LiteralPath (Join-Path $installed 'gate.js') -Algorithm SHA256).Hash
-    if ($package.name -ne 'dsh-live-compact' -or $package.version -ne '1.1.3' -or
-        $engineHash -ne 'e816381bd6542e399a9bb34ce036c9d64574c51dfbb023daafeec62845fa293e' -or
-        $gateHash -ne 'a12df2d3694f1be520f54ea8ec38f43993239ff6affa12924ad2ac318d3f3f79' -or
-        $shadowHash -ne 'd04669f6fe20fc6feea41db7dfabda5b3f3522545316067167327d721c92a53b') { throw 'Desktop installed candidate identity mismatch.' }
+    if ($package.name -ne 'dsh-live-compact' -or $package.version -ne '1.1.14' -or
+        $engineHash -ne '2b054f3d528c0147fab69f4d53a4f5f72d3f02c4488b954d5ec48b0116102dcb' -or
+        $gateHash -ne 'bfacecc78cbd5bc285f26b89ea99a33deaf1025d819528ed53e2775e77344cba' -or
+        $shadowHash -ne '8e4de38cdf58944c229825e559f59055e41cb8393eebf91fe83967616b703e78') { throw 'Desktop installed candidate identity mismatch.' }
     [pscustomobject]@{ CandidateInstalled = $true; Version = $package.version; EngineSHA256 = $engineHash; ShadowSHA256 = $shadowHash; GateSHA256 = $gateHash } |
         ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'installed-candidate-proof.json')
 }
@@ -194,8 +194,9 @@ try {
     $env:TMP = $env:TEMP
     $env:DSH_HOME = Join-Path $profile '.dsh'
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
-    $installer = Join-Path $PSScriptRoot 'dsh-0.2.2-rc.1.exe'
-    if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne '830947F8996DC05D991CA9133FFF4D3400073E47B9CFA6507754867E79482B23') {
+    $pin = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'installer-pin.json') -Raw | ConvertFrom-Json
+    $installer = Join-Path $PSScriptRoot 'dsh-installer.exe'
+    if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $pin.sha256) {
         throw 'Installer hash mismatch before execution.'
     }
     Set-ProbeStage 'Installing pinned signed Desktop'
@@ -232,7 +233,8 @@ try {
     if ((Get-AuthenticodeSignature -FilePath $app.FullName).Status -ne 'Valid') { throw 'Desktop executable signature did not validate.' }
     $version = $app.VersionInfo.ProductVersion
     # PE version metadata is numeric; the signed installer digest pins the prerelease.
-    if ($version -notmatch '^0\.2\.2(?:\.0|-rc\.1)?$') { throw "Unexpected Desktop executable version $version." }
+    $numericVersion = $pin.version -replace '-.*$', ''
+    if ($version -notin @($numericVersion, ($numericVersion + '.0'), $pin.version)) { throw "Unexpected Desktop executable version $version." }
     $folders = [pscustomobject]@{
         HasProfile = Test-Path -LiteralPath ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile))
         ProfileEnvMatches = $env:USERPROFILE -eq [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
@@ -244,7 +246,7 @@ try {
     $proof.StandardUser = $true
     $proof.InstallerExitCode = $installCode
     $proof.LaunchMode = $launchMode
-    $proof.SignedInstallerVersion = '0.2.2-rc.1'
+    $proof.SignedInstallerVersion = $pin.version
     $proof.DesktopExecutableVersion = $version
     $appProfile = Join-Path $local 'DSH Release Validation'
     $desktopHome = $env:DSH_HOME
@@ -262,7 +264,7 @@ try {
     $view = Get-DesktopView 'plugin-manager-proof.json'
     Invoke-RequiredClick 'Add plugin'
     $view = Get-DesktopView 'plugin-install-proof.json'
-    $candidate = 'https://raw.githubusercontent.com/Tranquillitatis-Lab/dsh-live-compact/c8059b5ebcbce913e3e41a5fd4d6aef42dad6e5b/test/windows-runtime/fixtures/dsh-live-compact-1.1.3.tgz'
+    $candidate = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'candidate-url.txt') -Raw).Trim()
     if (-not (& (Join-Path $PSScriptRoot 'cdp.ps1') -Endpoint $view.Endpoint -Port $port -PackageAddress $candidate)) { throw 'Cannot enter candidate package address.' }
     Set-ProbeStage 'Installing frozen candidate through official UI'
     Invoke-RequiredClick 'Install'
@@ -327,6 +329,28 @@ try {
         Editable = -not $view.State.minTokens.disabled -and -not $view.State.minTokens.readOnly
         ReadbackValue = [int]$view.State.minTokens.value
     } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'settings-restart-proof.json')
+
+    Set-ProbeStage 'Testing PowerShell and grep after a real shadow write using the Desktop Electron executable'
+    $pwsh = (Get-Command pwsh.exe -CommandType Application).Source
+    $git = (Get-Command git.exe -CommandType Application).Source
+    $grep = Join-Path (Split-Path (Split-Path $git -Parent) -Parent) 'usr\bin\grep.exe'
+    if (-not (Test-Path -LiteralPath $grep)) { throw 'Git grep fixture executable unavailable.' }
+    $scriptFile = Join-Path $PSScriptRoot 'desktop-electron-probe.mjs'
+    $shadowModule = Join-Path $installed 'shadow.js'
+    $proofPath = Join-Path $PSScriptRoot 'electron-probe.json'
+    $argsForProbe = '"{0}" "{1}" "{2}" "{3}" "{4}" "{5}"' -f $scriptFile, $shadowModule, $PSScriptRoot, $pwsh, $grep, $proofPath
+    $previous = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $smoke = Start-Process -FilePath $app.FullName -ArgumentList $argsForProbe -PassThru -RedirectStandardOutput (Join-Path $PSScriptRoot 'electron-stdout.txt') -RedirectStandardError (Join-Path $PSScriptRoot 'electron-stderr.txt')
+    } finally {
+        $env:ELECTRON_RUN_AS_NODE = $previous
+    }
+    $ownedProcesses.Add($smoke)
+    if (-not $smoke.WaitForExit(100000) -or $smoke.ExitCode -ne 0) { throw 'Desktop Electron PowerShell/grep smoke failed.' }
+    $shellProof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+    if ($shellProof.after -ne 6 -or $shellProof.shadowWrite -ne $true) { throw 'Incomplete Electron child process proof.' }
+    $proof.ElectronShells = $true
     $proof.Complete = $proof.CandidateInstalled -and $proof.EditableMinTokens -and $proof.OfficialSaveClicked -and $proof.PersistedInProfile -and $proof.RestartReadback
     if (-not $proof.Complete) { throw 'Desktop candidate validation has incomplete required gates.' }
     Set-ProbeStage 'All candidate install, UI save, persistence, and restart gates passed'

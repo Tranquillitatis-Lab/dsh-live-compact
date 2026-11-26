@@ -1,0 +1,169 @@
+# 版本规划：语义归档索引与冷会话恢复
+
+这份规划建立在 1.1.5 候选实现之上。语义索引只记录设计、开关和验收边界，本版未实现。公开的 #27 和 #34 仍未关闭；在它们的真实 Windows 长会话复测通过前，不把本 RFC 接入默认收尾路径，也不以受控小夹具的通过代替现场复测。
+
+## 本轮修复与交付边界
+
+1. **#34 调用契约**：`finishTurn` 不等待整批 catch-up。捕获和恢复进入分批队列；切片提交只核验被选 span 的目标 raw，目标未就绪就保留 span，后台继续追赶。重启只读恢复不逐文件启动 ACL helper；真正切片前再授权选中目标，并与首次确认的 hash/bytes 比较。
+2. **#27 shared-root 性能**：默认和 shared 根继续完整扫描，不开启 shared estimate。容量扫描、删除、ACL 和 card 发布事务由按 root 串行的受管 worker 执行，正常事务沿用同一 root lock；worker 可复用、空闲回收，父线程与 worker 共享权限熔断。
+3. **未实现的架构提案仍单独保留**：此前的持久容量账本、pending reservation、统一异步 raw/meta/cursor writer 没有在本版实现。本轮选择保持完整计量并将轮换事务移出主线程，避免用新增账本改变共享目录的安全依据。raw 捕获仍可能在下一次轮换前超过正文容量上限；现有正文限额不是整个目录的物理硬配额。这些后续提案不能写成已经交付，也不能拿 worker 的通过证明它们成立。
+4. **受控验收与未完成项**：持续运行默认 shared root 的 11,078 文件、9,430-event、29-turn/restart，以及 15,001-event 捕获恢复场景，分别记录 Windows x64/ARM 的 finishTurn、event-loop gap、capture lag、hash/bytes、轮换及锁状态。外部 writer、阶段强杀已有回归；旧版真实 writer、目录 alias、双进程的同规模强压及外部 mutation/scan 的 barrier 重叠证明仍须补齐。公开原用户的冷装回退复测仍单独保留，不能由受控通过代替。
+
+## Windows 稳定后的实现条目：语义归档索引
+
+### 目标
+
+让 codemode/PTC 小程序在调用工具前用固定 marker 写下“想做什么”，插件把这个意图和工具结果绑定到已有会话 `seq` 与备份编号。卡片默认只留短意图、结果状态和指针；需要时通过显式 typed API 召回工具结果。
+
+### 建议记录
+
+```json
+{
+  "schema": 1,
+  "sessionId": "session-...",
+  "seq": 1842,
+  "intentKey": "repo-status",
+  "ref": "repo-status",
+  "intent": "查找并修复配置加载失败",
+  "assistantSeq": 1842,
+  "parentCallId": "call_...",
+  "resultSeqs": [1847],
+  "toolCallIds": ["call_..."],
+  "result": {
+    "status": "ok",
+    "exitCode": 0,
+    "summary": "修改 2 个文件并通过测试"
+  },
+  "archive": "opaque-archive-id",
+  "summaryHash": "sha256:..."
+}
+```
+
+- marker 固定为单行 `// spine-intent:v1 {"ref":"repo-status","summary":"inspect repository status"}`，只接受锚定在 PTC 调用前的 marker；正则识别 envelope 后必须用 `JSON.parse` 校验。`ref`、摘要长度和控制字符都要限额，解析失败、重复 marker 或跨调用歧义均忽略并退回现有规则。
+- `intent` 只是模型声明，不代表成功；卡片必须把意图、实际结果（状态、退出码、错误摘要）和 `seq`/备份编号分开。
+- 索引键必须包含 `sessionId`，模型提供的 `ref` 只作标签，不能作为跨会话身份。索引只保存关联关系和摘要指针，工具正文继续由现有 raw 备份、哈希和 ACL 机制管理；`archive` 只能是 opaque id，不能暴露本地路径。使用原子追加/替换和 root writer，索引损坏时只丢语义标签，不影响原始 raw 备份。
+- 召回必须绑定当前 session/agent，且是显式 API，例如 `spine.recall({ sessionId, intentRef, kind: "result", maxItems, maxBytes })`。默认不自动注入上下文，也不把结果重新写成 user/assistant 消息；跨会话、哈希不符、找不到或超限时返回 `unavailable`。
+- 原始 thinking/reasoning 不纳入下一版；若未来支持，必须是独立宿主策略、独立开关、明确用户请求、限额和脱敏。
+
+### 冷会话点火与状态重构
+
+可取部分是把切片后的状态重构成一个可验证的旁路索引：保留 checkpoint、当前任务进度、工具调用/结果索引和来源 `seq`，让引擎按需从最小状态恢复，而不是重新读整段历史。
+
+不采用状态重构消息系列，也不伪造 `turn1` 或任何宿主生命周期事件；它会污染 transcript、checkpoint、tool pairing、prefix cache 和官方压缩边界。冷会话点火只做内部 lazy hydrate：引擎初始化或第一个真实事件到来时分批读取索引，索引缺失就降级为无意图索引模式。
+
+### 开关与回退
+
+- `SPINE_INTENT_INDEX=0` 默认关闭；开启后默认只有 `result` 召回，先以离线索引和只读召回实验验证。出现格式错误、索引撕裂、召回超时或恢复失败，立即退回现有卡片和 `shadow-search` 路径。
+- 新字段必须向后兼容：旧卡片没有 `intent`、`archive` 或 `seedId` 时照旧读取，不重做已完成的压缩。
+- 任何召回失败都保留原始 span，不因语义索引失败而丢失工具结果。
+
+### 最小验收矩阵
+
+1. 注释存在、缺失、重复、超长、恶意伪造；解析失败均能安全回退。
+2. 成功、非零退出码、超时、部分输出、重试和重启后恢复；每条记录的 `seq`、toolCallId、archive 与实际 raw 一致。
+3. 默认不自动召回；显式 `kind:"result"` 召回验证数量/字节限制、跨会话拒绝和哈希一致性；`kind:"thinking"` 明确返回拒绝。
+4. 冷会话 lazy hydrate 的重启、重复消费、乱序和旧 schema；不得产生重复真实事件、错误计费或错误 cooldown。
+5. 多进程 shared-root 与账本/rotation 同时运行；语义索引不可绕过 reservation、ACL 或 fail-closed 规则。
+
+### 副作用硬门禁
+
+- **旁路零污染**：索引只能写 shadow 旁路文件；不得 `session.append` user/assistant/turn/compaction 事件，不得把索引 seq 放入 `sourceEventSeqs`，不得影响 checkpoint、prefix cache、官方 compaction 或 cooldown。开关 on/off 时 event hash、surface nodes、prefix fingerprint、压缩数量和 cooldown 状态必须一致。
+- **可信归因**：只解析同一 assistant message 中紧邻父调用前的单行 marker；user/tool/result 文本里的 marker、重复/跨调用/歧义 marker 全部忽略。意图只表示声明，`status/exitCode/error` 必须来自可信 tool metadata 和已校验 raw；marker 不能触发工具、路径、命令、压缩或召回。
+- **最小泄露面**：索引不保存 arguments、环境变量、headers、token、绝对路径或 raw 正文；摘要限长并按策略脱敏，archive 只用 opaque id。raw 召回仍走 ACL/hash/bytes 校验，损坏或缺失返回 `unavailable`，不回退表面文本；thinking 默认拒绝。
+- **绑定与配额**：主键使用可信 `(sessionId, parentCallId/assistantSeq, generated intentKey)`；recall 必须绑定当前 session/agent capability，拒绝跨会话、跨 agent 和同 ref 猜测。每条记录、每 session 和全局设置字节/条数上限；超额或 Windows I/O stall 时只禁用当前 session 索引，现有 raw/compaction 继续。
+- **崩溃与重放**：raw 成功且 hash/meta 验证后才写语义行；版本化 checksum + temp/fsync/rename 或 journal，幂等键包含 session、父调用、toolCallId 和 resultSeq。强杀、重启、并发 writer 和旧 schema 只能丢索引，不能误报成功、重复映射或改 transcript。
+- **关闭零差异**：`SPINE_INTENT_INDEX=0` 时不解析 marker、不创建索引文件、不新增 I/O 或事件；旧卡片缺少新字段时照旧读取。宿主没有 recall API 时返回 `unavailable`，不能崩溃或阻塞。
+- **冷会话边界**：只做内部 lazy hydrate/first-real-event hook；禁止状态重构消息系列、synthetic turn1、synthetic user/assistant/tool 事件，以及把 raw/result/thinking 自动注入上下文。
+
+该条目在 #27/#34 的真实 Windows 门槛通过后再进入实现评审；在此之前只维护文档、离线原型和测试夹具，不改变当前版本默认行为。
+
+## 2026-11-10 验收状态
+
+- 公开 `v1.1.4` tag 与后续专用候选链必须分开报告；`152402e`、`34a00b4`、`de6ed70`、`839aab9`、`69bb3ce` 和 `66417c4` 尚未证明已进入公开 tag。
+- Windows hosted run `42763949342` 的 Windows 2022 job 通过，但 Windows 11 ARM 的 29-turn replay 以 exit code 1 失败；不能宣称 1.1.4 在 Windows 全部修复 #34。必须保留 ARM annotation 和标准用户 stage 证据，直到同一候选的 ARM 干净复跑。
+- 下一轮验证必须包含真实 9,430-event/29-turn、86 existing raw/meta 的冷启动/重启场景，以及 15,001-event/356-tool-result 的首次 capture + restart recovery。记录 `finishReturnMs`、maintenance entry、后台 catch-up、最大 event-loop gap、cursor、retryable、raw/meta/hash 完整性；任何持续秒级静默都保持 HOLD。
+- catch-up 的 visible-existing 阶段只能把 `tighten:false` 且 hash/meta 完整的 raw 放入非 retryable cache；missing/corrupt/pruned/fuse 记录必须可回退到 retryable capture 或 fail-closed，不能让持久 cursor 越过失败结果。选中 span 的目标 raw 仍需按当前 ACL 策略重新授权，不能把只读恢复当成 ACL 证明。
+- #27 的 `69bb3ce` 只移除 rotation 中冗余的 raw 首行读取；shared/default root 仍会 `readdir/stat` 全量计量，尚无 11k 文件 native Windows p95/p99 证据，继续保持未解决 P0/P1 边界。
+
+## 2026-11-10 最终候选复测补充
+
+### Worker 生命周期复核（尚未发布）
+
+- `ec39c5a` 修复不可序列化 payload 的 `postMessage` 异常清理遗漏、旧 worker 迟到退出误删 replacement，以及空闲 worker 意外 exit 0 后残留死 entry。不可序列化 payload 的独立进程回归先复现 5 秒超时，修复后自然退出；可控 Worker 测试直接驱动实际 `index.js`，覆盖三个生命周期边界。
+- GPT-6.1 SOL MAX 已复核实际 diff 并独立读回完整门禁：523/523。DSH 0.2.2-rc.1 / Cordis 4.1.0 的隔离 peer graph 同样通过 settings 20/20 和完整门禁 523/523。
+- Windows run `42847877710` 已完成，Windows 2022 x64 与 Windows 11 ARM 两个 job 均 success，原始 JSON 已分别读回。候选 tarball SHA256 为 `0675e7c317f874ea181de275f9a732d145c925f0ea5282560e784821a58c66a4`，85,220 bytes。只有真实子进程 exit 0、无 signal 后才接受 external summary；崩溃测试核对 self-kill 前 PID/lock 证据。
+- #34 受控场景：两边 29-turn 均 PASS，9,430-event 的 finishReturnMs 为 x64 8.49 / ARM 6.38，catchupMs 为 542.57 / 777.10，maxGapMs 为 273 / 397；86/86 raw、cursor 9430、retryable 0。
+- #27 受控场景：两边 11,078 文件、8 次 full scan、worker 与 320 次外部 mutation 均 PASS；worker 主线程 maxGapMs 为 x64 15 / ARM 11，external 阶段为 12 / 16，0 invalid file、无正常事务锁泄露。SIGKILL ready/lock 证据及崩溃后 full-scan/re-save 均 PASS。同步扫描对照的 maxGapMs 306 / 267 不应冒充生产 worker 指标。
+- 前几轮 hard-11k 的 exit 13/exit 1 未完整归因，不能全部称作 harness 失败；本轮已修复 PowerShell 提前抛错吞掉 stderr 的诊断缺陷，并记录每个异步子阶段。外部 mutation 与实际 scan 的重叠尚未通过 barrier 单独证明，受控 PASS 不代表旧版本真实 writer、alias 或双进程同规模强压的全部矩阵已完成。新补丁尚未发布；公开 #27/#34 仍不以受控通过代替原用户冷装复测。
+
+### Issue #42 Cordis 4.1.0 兼容
+
+- 已确认 Cordis 4.1.0 的 compaction 记录可能没有顶层 `fiber`；`shell.js` 现在按 `current.fiber ?? current.ctx?.fiber` 做身份校验后释放失败构造，避免误删其他服务。
+- `settings-integration` 的 listener 断言改为 Context 初始基线加一，保留“插件只新增一个 listener”的语义，不改 `installPresetGate` 的注册方式。
+- 仓库锁定的 DSH 0.2.0-rc.2 / Cordis 4.0.x 基线与隔离的 DSH 0.2.2-rc.1 / Cordis 4.1.0 peer graph 均通过 settings 20/20 和完整 `npm run test:gate` 523/523；兼容命令为 `npm run test:compat41`，只应在完整 rc.1/4.1.0 clean install 中运行。
+- Cordis 4.1.0 的 `internal/config` 自带 listener 不再计为插件重复注册；开发依赖仍保留 4.0.x，避免覆盖旧基线。
+
+- `42794155039` 的 ARM 与 Windows 2022 都失败，但两边失败点均是 hard-9430 合成 watchdog 的 `<100ms` 门槛：x64 观测约 279ms、ARM 约 441ms；candidate、223-file recovery、29-turn replay、重启和 native rotation 均已通过。该 run 保留为 harness 阈值失败证据，不能作为 #34 修复证明。
+- 最终候选 `b3325e7` 使用 `<1000ms` watchdog 后，`42801602112` 的 ARM/x64 两 job 均成功。x64：223-file recovery 39ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=7.95`、`catchupMs=578.82`、`maxGapMs=285`、86/86 raw、retryable 0、cursor 9430；ARM：223-file recovery 56ms/maxStall 0，29 turns，hard-9430 `finishReturnMs=6.17`、`catchupMs=749.94`、`maxGapMs=380`、86/86 raw、retryable 0、cursor 9430。
+- 这证明当前候选在受控 Windows x64/ARM 场景通过了代码和 harness 门槛；公开 #27/#34 仍保持 Open，#27 仍缺 11k shared-root native 证据，#34 仍缺公开原始用户冷装/同规模回退证据，不能自动关闭 issue 或把公开 1.1.4 tag 改写成已修复。
+- #27 的首轮 native telemetry run `42806335173` 已在 Windows 2022 x64 与 Windows 11 ARM 均通过：shared/default root、20 sessions、11,078 files、8 次 full scan、每次 11,078 stat（总 88,624），estimate=false。x64 p50/p95/p99 为 272.89/320.84/320.84ms，max event-loop gap 311ms；ARM 为 216.27/257.73/257.73ms，max gap 248ms。used/deleted/freed 保持 460258/0/0，未删除或低估。该数据确认 #27 的同步 full scan 已达到阻塞门槛，下一步必须进入完整串行 root-writer 设计；shared/default 继续 HOLD，不能开启 estimate。
+- root-writer 第一阶段候选 `42812179678` 已在 x64/ARM 通过：完整 scan/delete/ACL/write 事务在 worker 中持有同一 root lock 执行，29-turn、9,430-event、11k telemetry 均通过；worker 主线程 gap 为 x64 15ms、ARM 12ms。worker wall p95 为 x64 1.64s、ARM 2.17s，仍需 worker 复用/队列优化，且尚未覆盖旧 writer、外部 create/delete/overwrite/rename、SIGKILL、alias 和双进程强压矩阵。因此 #27 仍保持公开 HOLD，不能关闭 issue 或开启 shared estimate。
+- pooled/idle-reclaimed root-writer 候选 `42817381321` 已在 x64/ARM 通过，且修复了 pooled worker 持有 CLI 导致的 long-18 120s 超时。两边 candidate、权限拒绝、重启、223-file recovery、29-turn、9,430-event、11k、native rotation 均 PASS；worker 主线程 gap 为 x64 15ms、ARM 22ms。外部 writer、旧版本 writer、目录 alias、SIGKILL/重启和双进程强压矩阵仍未完成，因此 #27 仍是公开 HOLD，不能宣称全部问题关闭。
+
+## 2026-11-11 最终代码复核（候选，尚未发布）
+
+- `c4a5e3f`：受管 worker 与父线程通过共享原子状态传播 Windows ACL 熔断；回收和重建不会清除熔断。选中 raw 重新授权时必须保持首次确认的路径、字节数和 SHA256，变化后保留负缓存，不自动重新认证。
+- `206981a`：修复 #33 的失败诊断裁剪和 oversized pointer 路径。完整诊断放不进预算就保留原段；结构化 JSON 额外字段也参加完整性校验。成功和状态未知输出沿用原策略。
+- GPT-6.1 SOL MAX 已给出本轮代码安全复核 PASS；主门禁 551/551、离线 live-fill 214/214。隔离的 DSH 0.2.2-rc.1 / Cordis 4.1.0 同样通过 settings 20/20 和完整门禁 551/551。
+- 上面的旧 Windows run 不覆盖这两个新提交；必须用包含它们的最终候选重新运行 x64/ARM 并读回同一 tarball SHA256，才可进入发布。公开 #27/#34 不因代码复核或受控验收自动关闭。
+
+## 1.1.5 最终受控 Windows 验收
+
+最终同包 [run 42856576241](https://github.com/Tranquillitatis-Lab/dsh-live-compact/actions/runs/42856576241) 已在 Windows 2022 x64 / Windows 11 ARM 普通用户环境完成，两边 13 个阶段均 PASS。冻结包 88,379 bytes，SHA256 `d9fc653b9de85c4de641d5baca02a0f8fe7dee77c39f944a32f1178eb636466b`，19 个文件与复核主树逐字节一致。
+
+9,430-event：finishReturnMs 为 5.42 / 5.53，catchupMs 为 446.19 / 828.46，maxGapMs 为 228 / 417；两边 raw 86/86、cursor 9430、retryable 0。223-file 恢复为 17 / 52ms，全部 hash 通过。11k worker 主线程 maxGapMs 为 14 / 16，external 为 11 / 11；29 轮、58 次捕获、重启边界与强杀恢复均通过。
+
+每边各 1 条 checkout/setup-node 内部 Node 20 弃用 warning，0 error annotation；不能写成零 annotation。完整指标和日志哈希见 [release-1.1.5-verification.json](release-1.1.5-verification.json)。GPT-6.1 SOL MAX 独立读回后解除发布前验证 HOLD；#27/#34 继续保留原用户现场复测边界，语义索引仍未实现。
+
+## 1.1.5 发布与独立读回
+
+[1.1.5 已正式发布](https://github.com/Tranquillitatis-Lab/dsh-live-compact/releases/tag/v1.1.5)。GitHub、npm 官方 registry、下载镜像的实际 tarball 均重新下载并匹配冻结 SHA256；公网裸下载页与候选页面逐字节一致。npm 与镜像的 global/headless/web 共六次隔离全新安装均通过，每次核对 19 个文件；README/CHANGELOG 拆分已随版交付。
+
+详见 [publication receipt](release-1.1.5-publication.json)。发布 tag 固定在 `b6b7c61`，后续发布记录只更新文档，不改变已验收包。#27/#34 仍为原现场待复测，不以发布完成冒充公开 P0 已关单。
+
+## 1.1.7 review-derived fixes
+
+本节依据 `/Users/lynn/Downloads/dsh-live-compact-Opus5.5-review.md`（2026-11-12 对 `8f3766e` 的静态复核）和当前 1.1.6 源码整理，只保留有具体运行触发路径、会影响稳定性、数据完整性或用户体验的事项。1.1.6 的 CHANGELOG 和 P1 计划把其中三项写成已实现，但下面的源码证据显示它们不能直接视为关闭；本节把三项旧清单合并为各一条，避免重复记账。
+
+### P1：优先修复或完成定向复测
+
+1. **长 read fallback（旧清单项，尚未真正关闭）**：`selectNewestChunk()` 在 `index.js:435-437` 无条件计算 `longSpan`，而回退只在 `index.js:512-514` 传入 `disableLongRead: true`。因此长读切点在配对、指针、卡片或诊断校验失败时，递归回退仍可能再次选中同一长读；当前 `test/p1-fable-review.mjs` 没有覆盖这条行为路径。修复必须让 `disableLongRead` 参与 `longSpan` 选择，并用一个长读非法切点后能选普通合法切点的行为夹具验收，不能只匹配函数源码。
+
+2. **同会话重复 `toolCallId`（旧清单项，内存路径仍未关闭）**：磁盘层 `raw.js:172-187` 会比较已有正文哈希，但实时事件在 `index.js:617-623` 命中 `rawSeen` 的不可重试记录就直接返回，批量捕获在 `index.js:1485-1495` 也会复用缓存而不再比较正文。宿主或本地 provider 若复用 ID，第二份结果可能被还原成第一份原文。命中缓存时必须比较当前正文的 bytes/SHA256（相同内容保持幂等，冲突内容 fail-closed 且不可切片/删改），并分别覆盖实时捕获、批量 catch-up 和重启恢复。
+
+3. **incomplete raw/meta 恢复**：`raw.js:37-54` 将 raw 存在而 meta 缺失标为 `missing-meta`，虽然当前事件仍有原文时 `raw.js:172-183` 可以重建，但重启恢复在 `index.js:1616-1621` 调用 `recoveryRetryable()`，而 `index.js:174-180` 没有把 `missing-meta` 视为可重试，随后缓存成不可重试记录，`captureNewBatch()` 会跳过重建。这会让崩溃窗口留下的半成品长期阻塞 prune/cut。只允许在当前事件正文可得且未带 prune marker 时重建；坏 meta、哈希冲突或原文不可得继续 fail-closed。验收需覆盖 raw-only、meta-only、meta-first、重启后 cursor 不越过失败记录等场景。
+
+4. **worker timeout 的 stale lock/owner（旧清单项，机制成立但需运行复测）**：`index.js:139-142` 超时后终止 worker，`index.js:156-171` 清理 pending 并调用 `terminate()`；rotation owner 在 `shadow.js:296-303` 只记录 `process.pid`，恢复在 `shadow.js:335-360` 以 PID 存活判断并保守保留锁。若 worker 在持有 rotation 锁时超时，worker 与主线程共用 PID，后续进程可能持续看到 “holder is live or its death is unknown” 而无法恢复。应优先改为超时只放弃等待、让持锁事务自然释放，或给锁记录加入 isolate nonce/fence 并按 nonce 回收；必须用“持锁超时→新请求/重启→恢复”夹具读回 owner、锁和最终事务状态后，才能关闭此项。
+
+5. **工具原文隔离与 user 卡片指令边界**：`plan.js:1034-1057` 将工具原文和“可以接着用”前缀放入卡片，`plan.js:1192-1204`、`1263-1275` 还会把包含“必须/不要/口令”或类似事实的工具行送入顶层 `Kept lines`；`plan.js:1361-1374` 虽有免责声明，但原文仍以 user 卡片内容出现。外部网页或命令输出中的伪指令可因此获得过高的提示权重。保留 `[tool]` 来源和可召回指针，但把工具正文放进明确的“不可信工具证据”围栏，移除“可以接着用”措辞，不让工具行升级为顶层用户硬行；用伪造命令、网页指令、错误输出和普通事实夹具验证。
+
+### P2：防止常见会话退化
+
+6. **决策正则和工具事实过宽**：`plan.js:1200-1204` 把单独的“使用/确定”当成未决策项（例如“使用 grep”“我不确定”），`plan.js:1192-1194` 仍把 `us-east-1` 等普通工具输出识别成硬事实。中文会话和基础设施输出中这些文本很常见，会让卡片 `ok=false`、保留预算膨胀并延迟后续切片。收紧助手和工具两侧的词表，区分真正的决定/约束与普通动词、否定句、region/version 字符串，并加入中文负例和工具输出负例。
+
+7. **前缀缓存收益门槛与无收益切片**：`plan.js:899-935` 只按 `chunkMin`/`chunkMax` 选段；`index.js:960-1025` 的 cloud drain 最多连续八刀，没有“本刀节省至少覆盖从切点起重写前缀成本”的门槛，且 `index.js:1019-1021` 只在提交后记录 `did not reduce`。在 drain、`chunkMin` 较小时可能为省少量 token 反复失效并重算大段 KV，用户看到延迟却没有净收益。为 drain 增加收益/重写估算（紧急线可明确豁免），无净收益时在提交前停下；同时记录每刀 saved、rewrite 和耗时，作为性能回归证据。
+
+8. **stand-down 无对端的 P2 保护**：`index.js:902`、`1195-1213` 在 `SPINE_STAND_DOWN=1` 时让 compact 返回 `null`，`index.js:1750-1777` 也不安装/调用 pruner guard；这与 1.1.6 CHANGELOG 中“让位时不改会话”的设计一致，但若误设环境变量且没有实际接管方，会话既不压缩也不修剪而持续增长。保留有对端时的零改动语义，增加一次性“stand-down 无 owner”可见告警或状态指标，并在启动/维护验收中证明 owner 存在；不要把误配静默当作正常运行。
+
+9. **提交大小守门和 flush 可见性**：`index.js:1146-1149` 在宿主没有 `estimateMessage()` 时跳过“卡片更小”检查；`index.js:1174-1183` 在 `replaced=true` 后 flush 失败会落入 catch 而不抛错，`index.js:1019-1021` 对“没有减少”也只写日志。缺失估算器或持久化失败时，用户可能看到压缩已完成但卡片更大或尚未可靠落盘。没有估算器时应在提交前采用可验证的替代测量/明确拒绝切片，flush 失败需发出结构化 warning 并标记持久化未知，`did not reduce` 不得作为成功结果继续 drain。
+
+### 1.1.7 验收边界
+
+- 每项先有定向行为夹具和失败证据，再进入完整门禁；静态复核或源码正则匹配不能写成修复完成。
+- raw/meta、重复 ID、锁 owner 和工具卡片场景必须同时覆盖实时、批量、重启和强杀边界；任何 hash/bytes 不一致都保持 fail-closed，不能让 cursor 越过失败记录。
+- 中文决策、工具事实、drain 收益和 stand-down owner 需记录卡片大小、切片次数、耗时、flush 状态和告警；性能改进不能以改变 checkpoint、tool pairing 或官方 compaction 边界为代价。
+- 这些条目不替代公开 #27/#34 的原用户 Windows 冷装/长会话复测；受控夹具通过后仍保持现场证据门槛。
+
+### 当前候选状态（fix/1.1.7-review-derived）
+
+上述 9 项已在本候选分支落地，并加入重复 `toolCallId`、raw-only 恢复、长 read fallback、工具证据隔离、决策负例、维护闸让位和 worker timeout 的定向回归。当前证据为：完整门禁 571/571、Cordis 4.1.0 / DSH 0.2.2-rc.1 兼容门禁 22/22（脚本随后再次通过完整门禁 571/571）、离线 live-fill 214/214。真实 Windows 双会话冷装/长任务和宿主侧现场数据仍需在对应机器上验收，不能由这些受控夹具替代。

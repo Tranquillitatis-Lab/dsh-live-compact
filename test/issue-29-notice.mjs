@@ -13,12 +13,33 @@ import { fixture, runtime } from "./helpers/runtime.mjs";
 // Copied data contract only. Never import/execute the downloaded producer.
 const source = { kind: "progress-rules", form: "notice", summary: "过程纪律：要求正文通报" };
 const reminder = '（过程纪律提醒）先通报。\r\n必须保留 notice-only-7391。\n"引号" \\ 👋\t';
+const hostNoticeKinds = [
+  "time-context",
+  "tool-jobs",
+  "skill-catalog",
+  "runtime-context",
+  "subagent-settled",
+  "retry",
+  "goal",
+  "tool-goal",
+];
+const hostPluginNoticeSources = [
+  { kind: "plugin", plugin: "time-context", form: "snapshot", sections: [{ name: "time-context", text: reminder }] },
+  { kind: "plugin", plugin: "tool-jobs", form: "notice", summary: "job completed" },
+  { kind: "plugin", plugin: "skill-catalog", form: "catalog" },
+  { kind: "plugin", plugin: "runtime-context", form: "snapshot", sections: [{ name: "runtime-context", text: reminder }] },
+  { kind: "plugin", plugin: "subagent-settled", form: "notice", summary: "subagent settled" },
+  { kind: "plugin", plugin: "retry", form: "notice", summary: "retry notice" },
+  { kind: "plugin", plugin: "goal", form: "notice", summary: "goal notice" },
+  { kind: "plugin", plugin: "tool-goal", form: "notice", summary: "goal tool notice" },
+];
 const estimate = (message) => Math.ceil(JSON.stringify(message.content).length / 4) + 8;
 const bytes = (value) => Buffer.from(JSON.stringify(value));
 const summaryText = (f) => messageText({ content: f.summaries().at(-1)?.data.summary });
 let serial = 0;
 
-function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config = {}, tokens = 600, after = false } = {}) {
+function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, noticeKinds = null,
+  config = {}, tokens = 600, after = false } = {}) {
   const h = runtime(t, { liveSessions: true });
   const { engine, ctx } = h.engine(config, engineKind);
   const published = [];
@@ -37,8 +58,12 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   const prefix = [...f.session.surface.nodes];
   const prefixBytes = bytes(f.session.deriveMessages());
   const notices = [];
-  const inject = () => {
-    const message = { ...createUserMessage({ content: [{ type: "text", text: reminder }], source }), ...notice };
+  const inject = (kind = null) => {
+    const messageSource = kind
+      ? (typeof kind === "object" ? kind : { kind })
+      : source;
+    const message = { ...createUserMessage({ content: [{ type: "text", text: reminder }], source: messageSource }), ...notice };
+    if (kind) message.source = messageSource;
     for (const key of Object.keys(notice)) if (notice[key] === undefined) delete message[key];
     const seq = f.add("user/message", message, estimate(message));
     notices.push(seq);
@@ -46,8 +71,9 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   };
   const target = [];
   if (mode === "ordinary") {
-    for (let index = 0; index < 3; index++) {
-      if (index) target.push(inject());
+    const sequence = Array.isArray(noticeKinds) ? noticeKinds : [null, null];
+    for (let index = 0; index <= sequence.length; index++) {
+      if (index) target.push(inject(sequence[index - 1]));
       target.push(...f.round(`candidate-${index}`, { tokens, text: "INFO disposable heartbeat\n".repeat(250) }));
     }
   } else {
@@ -79,6 +105,45 @@ function setup(t, { engineKind = "local", mode = "ordinary", notice = {}, config
   engine.commitSelectedSpan = (...args) => { tickets.push(args[1]); return commit(...args); };
   return { h, engine, ctx, f, agent, target, notices, kept, prefix, prefixBytes, published, originals, originalCount,
     originalSurface, tickets, counters: () => ({ maintenance, flushes }) };
+}
+
+for (const engineKind of ["local", "cloud"]) {
+  test(`${engineKind}: dense host bookkeeping messages do not fragment a cut`, async (t) => {
+    const x = setup(t, { engineKind, noticeKinds: [...hostNoticeKinds, ...hostPluginNoticeSources] });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, 1, x.h.warnings.join("\n"));
+    assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+    assert.ok(x.target.length > 10, "fixture must contain repeated host injections");
+    assertUnchanged(x);
+  });
+
+  test(`${engineKind}: native host snapshots stay in the archive without stale copies in the card`, async (t) => {
+    const runtime = { kind: "runtime-context", form: "snapshot", sections: [{ name: "sandbox", text: reminder }] };
+    const catalog = { kind: "skill-catalog", form: "catalog", entries: [{ name: "example", description: reminder }] };
+    const x = setup(t, { engineKind, noticeKinds: [runtime, catalog, { ...catalog, update: true }] });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, 1, x.h.warnings.join("\n"));
+    assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+    assert.ok(!summaryText(x.f).includes("notice-only-7391"));
+    assertUnchanged(x);
+
+    const legacy = setup(t, { engineKind, noticeKinds: [runtime.kind, catalog.kind, { ...catalog, update: false }] });
+    await legacy.engine.finishTurn(legacy.agent);
+    assert.equal(legacy.f.summaries().length, 1, legacy.h.warnings.join("\n"));
+    assert.match(summaryText(legacy.f), /notice-only-7391/);
+    assertUnchanged(legacy);
+  });
+
+  test(`${engineKind}: a real user message still stops host-notice expansion`, async (t) => {
+    const x = setup(t, { engineKind, notice: { source: { kind: "time-context" } }, after: true });
+    await x.engine.finishTurn(x.agent);
+    assert.equal(x.f.summaries().length, engineKind === "cloud" ? 1 : 0, x.h.warnings.join("\n"));
+    if (engineKind === "cloud") {
+      assert.deepEqual(x.f.summaries()[0].data.shadowedSeqs, x.target);
+      assert.ok(x.f.session.surface.nodes.includes(x.target.at(-1) + 1));
+    }
+    assertUnchanged(x);
+  });
 }
 
 function assertUnchanged(x) {
@@ -189,6 +254,10 @@ const negatives = [
   ["genuine user plus notice", { source: { ...source, kind: "user" } }],
   ["unknown producer", { source: { ...source, kind: "malicious-producer" } }],
   ["nearby producer name", { source: { ...source, kind: "progress-rules-evil" } }],
+  ["plugin notice missing summary", { source: { kind: "plugin", plugin: "goal", form: "notice" } }],
+  ["plugin snapshot missing sections", { source: { kind: "plugin", plugin: "time-context", form: "snapshot" } }],
+  ["plugin catalog extra entries", { source: { kind: "plugin", plugin: "skill-catalog", form: "catalog", entries: [] } }],
+  ["plugin unknown form", { source: { kind: "plugin", plugin: "retry", form: "instructions" } }],
   ["missing form", { source: { kind: source.kind, summary: source.summary } }],
   ["missing summary", { source: { kind: source.kind, form: source.form } }],
   ["unknown summary", { source: { ...source, summary: "different contract" } }],
@@ -202,9 +271,6 @@ const negatives = [
   ["agent instructions", { source: { kind: "agent-instructions", form: "instructions" } }],
   ["skill instructions", { source: { kind: "skill-invocation", form: "instructions" } }],
   ["relay", { source: { kind: "relay", form: "notice" } }],
-  ["goal", { source: { kind: "goal" } }],
-  ["snapshot", { source: { kind: "runtime-context", form: "snapshot" } }],
-  ["subagent final output", { source: { kind: "subagent-settled", form: "notice" } }],
   ["model selection", { source: { kind: "model-selection", form: "notice" } }],
 ];
 

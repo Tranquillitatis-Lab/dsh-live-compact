@@ -1,0 +1,340 @@
+import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { setImmediate } from "node:timers/promises";
+import test from "node:test";
+import Spine from "../index.js";
+import { resetShadowAccessState, sessionDir, shadowDirectory } from "../shadow.js";
+import { fixture, runtime } from "./helpers/runtime.mjs";
+
+test("#34 idle maintenance defers full catch-up to the event loop", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let batches = 0;
+  engine.captureNewBatch = () => {
+    batches += 1;
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  assert.equal(batches, 0, "idle maintenance must return before the full catch-up batch");
+  await setImmediate();
+  assert.equal(batches, 1, "catch-up must run after the idle maintenance turn yields");
+});
+
+test("#34 turn-end maintenance returns before a large capture catch-up drains", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let batches = 0;
+  engine.captureNew = () => { throw new Error("turn-end must not use synchronous captureNew"); };
+  engine.captureNewBatch = () => {
+    batches += 1;
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  assert.equal(batches, 0, "turn-end must return before the large capture batch runs");
+  await setImmediate();
+  assert.equal(batches, 1, "large capture catch-up must run after the turn yields");
+});
+
+test("#34 pre-recovers visible raw before scanning capture events", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  const order = [];
+  engine.recoverVisibleRawBatch = () => {
+    order.push("recover");
+    return { done: true, nextIndex: 0, progressed: false };
+  };
+  engine.captureNewBatch = () => {
+    order.push("capture");
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await setImmediate();
+  assert.deepEqual(order, ["recover", "capture", "recover"], "existing raw is recovered before capture and then checked after capture");
+});
+
+test("#34 large turn-end capture does not wait for unrelated pending raw work", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  for (let index = 0; index < 130; index += 1) f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  engine.pendingCaptures.add(pending);
+  let batches = 0;
+  engine.captureNewBatch = () => {
+    batches += 1;
+    return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  const done = engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  await done;
+  assert.equal(batches, 0, "large turn-end capture must not await unrelated pending work");
+  release();
+  await setImmediate();
+  assert.equal(batches, 1);
+});
+
+test("#34 small direct turns keep synchronous capture and wait pending captures", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let released = false;
+  let release;
+  const pending = new Promise((resolve) => { release = () => { released = true; resolve(); }; });
+  const key = engine.rawKey(f.session, "pending");
+  engine.pendingCaptures.add(pending);
+  engine.pendingCaptureJobs.set(key, pending);
+  let syncCaptures = 0;
+  let batches = 0;
+  engine.captureNew = () => { syncCaptures += 1; };
+  engine.captureNewBatch = () => { batches += 1; return { done: true, progressed: false, retryable: false, seen: new Set(), nextIndex: 0 }; };
+  const done = engine.finishTurn(f.agent(), f.session.snapshotEvents());
+  await setImmediate();
+  assert.equal(released, false);
+  release();
+  await done;
+  assert.equal(syncCaptures, 1);
+  assert.equal(batches, 0);
+});
+
+test("#34 retries a transient raw lock without leaving catch-up retryable", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let attempts = 0;
+  engine.captureNewBatch = () => {
+    attempts += 1;
+    return attempts === 1
+      ? { done: false, progressed: false, retryable: true, seen: new Set(), nextIndex: 0 }
+      : { done: true, progressed: true, retryable: false, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(attempts, 2, "a transient busy capture is retried after yielding");
+  assert.equal(engine.pendingCatchups.size, 0, "retryable catch-up settles after the retry succeeds");
+});
+
+test("#62 captureBlocked schedules a maintenance retry", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let scheduled = 0;
+  engine.scheduleMaintenanceRetry = () => { scheduled += 1; };
+  engine.captureNewBatch = () => ({ done: false, progressed: false, blocked: true, retryable: false, seen: new Set(), nextIndex: 0 });
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await setImmediate();
+  await setImmediate();
+  assert.equal(scheduled, 1);
+});
+
+test("#34 bounds a permanent raw lock and leaves it fail-closed", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine } = h.engine({ minTokens: 100000 });
+  let attempts = 0;
+  engine.captureNewBatch = () => {
+    attempts += 1;
+    return { done: false, progressed: false, retryable: true, seen: new Set(), nextIndex: 0 };
+  };
+  engine.recoverVisibleRawBatch = () => ({ done: true, nextIndex: 0, progressed: false });
+
+  await engine.finishTurn(f.agent(), f.session.snapshotEvents(), { deferCapture: true });
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  assert.equal(engine.pendingCatchups.size, 0, "permanent busy capture does not leave a live task");
+  assert.equal(attempts, 8, "permanent busy capture is bounded");
+});
+
+test("#34 keeps the cursor at the first retryable catch-up result", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.callIndex = new Map();
+  engine.captureCursor = new Map([["s", 0]]);
+  engine.persistCapture = false;
+  engine.writeCaptureCursor = () => {};
+  engine.captureOne = () => ({ ok: false, retryable: true });
+  const session = { id: "s", surface: { nodes: [] }, eventAt() { return undefined; } };
+  const events = [
+    { seq: 0, type: "tool/result", data: { message: { toolCallId: "busy" } } },
+    { seq: 1, type: "tool/result", data: { message: { toolCallId: "later" } } },
+  ];
+
+  const result = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 1 });
+  assert.equal(result.retryable, true);
+  assert.equal(result.done, false);
+  assert.equal(engine.captureCursor.get("s"), 0);
+});
+
+test("#34 rewinds the batch index when the last event is retryable", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.callIndex = new Map();
+  engine.captureCursor = new Map([["s", 0]]);
+  engine.persistCapture = false;
+  engine.writeCaptureCursor = () => {};
+  engine.captureOne = () => ({ ok: false, retryable: true });
+  const session = { id: "s", surface: { nodes: [0] }, eventAt() { return this.event; } };
+  session.event = { seq: 0, type: "tool/result", data: { message: { toolCallId: "last" } } };
+
+  const result = engine.captureNewBatch(session, [session.event], { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128 });
+  assert.equal(result.retryable, true);
+  assert.equal(result.done, false);
+  assert.equal(result.nextIndex, 0, "a last retryable event must be retried, not advanced past the batch");
+});
+
+test("#34 rewinds the batch index when an older visible raw becomes retryable", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.callIndex = new Map();
+  engine.captureCursor = new Map([["s", 0]]);
+  engine.persistCapture = false;
+  engine.writeCaptureCursor = () => {};
+  const events = Array.from({ length: 260 }, (_, seq) => ({
+    seq,
+    type: "tool/result",
+    data: { message: { toolCallId: `id-${seq}` } },
+  }));
+  const session = {
+    id: "s",
+    surface: { nodes: events.map((event) => event.seq) },
+    eventAt(seq) { return events[seq]; },
+  };
+  const captured = [];
+  engine.captureOne = (_session, event) => {
+    captured.push(event.seq);
+    const id = event.data.message.toolCallId;
+    const record = { ok: true, toolCallId: id };
+    engine.rawSeen.set(engine.rawKey(session, id), record);
+    return record;
+  };
+
+  const first = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: 0 });
+  assert.equal(first.nextIndex, 128);
+  const retryable = { ok: false, retryable: true, toolCallId: "id-10" };
+  engine.rawSeen.set(engine.rawKey(session, "id-10"), retryable);
+  engine.noteCaptureResult(session, events[10], retryable);
+  const second = engine.captureNewBatch(session, events, { keepRounds: 3 }, { eventLimit: 128, resultLimit: 128, startIndex: first.nextIndex });
+  assert.equal(captured.includes(10), true, "a retryable older result must be revisited");
+  assert.equal(engine.captureCursor.get("s"), 138);
+  assert.equal(second.nextIndex, 138);
+});
+
+test("#34 idle hook does not wait for an unrelated pending capture", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  const { engine, ctx } = h.engine({ minTokens: 100000 });
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const key = engine.rawKey(f.session, "unrelated");
+  engine.pendingCaptures.add(pending);
+  engine.pendingCaptureJobs.set(key, pending);
+  ctx.emit("agent/status", { agent: f.agent(), status: "idle" });
+  assert.equal(engine.pendingCaptures.has(pending), true, "idle must not await unrelated capture work");
+  release();
+  await setImmediate();
+});
+
+test("#34 pre-step waits for the same session maintenance barrier", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  let release;
+  const state = engine.stateFor(f.agent());
+  const pending = new Promise((resolve) => {
+    release = () => {
+      state.maintenanceJob = null;
+      state.pendingMaintenance = false;
+      resolve();
+    };
+  });
+  state.pendingMaintenance = true;
+  state.maintenanceJob = pending;
+  let settled = false;
+  const done = engine.waitForMaintenance(f.agent(), AbortSignal.timeout(1000)).then(() => { settled = true; });
+  await setImmediate();
+  assert.equal(settled, false, "pre-step barrier must wait while maintenance is pending");
+  release();
+  await done;
+  assert.equal(settled, true, "pre-step barrier settles after maintenance completes");
+});
+
+test("idle hook ignores an earlier completed turn when a newer turn is unfinished", async (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  f.add("turn/end", { turn: 1, reason: { kind: "completed" } }, 0, {});
+  f.add("turn/start", { turn: 2 }, 0, {});
+  const { engine, ctx } = h.engine({ minTokens: 100000 });
+  ctx.emit("agent/status", { agent: f.agent(), status: "idle" });
+  await setImmediate();
+  assert.equal(engine.stateFor(f.agent()).warming, false);
+  assert.equal(f.summaries().length, 0);
+});
+
+test("#34 recovers a large visible-ID snapshot without rebuilding it per batch", () => {
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  const ids = Array.from({ length: 15000 }, (_, index) => `id-${index}`);
+  for (const id of ids) engine.rawSeen.set(engine.rawKey({ id: "s" }, id), { ok: true });
+  engine.surfaceToolIds = () => { throw new Error("visible IDs must use the queued snapshot"); };
+  const result = engine.recoverVisibleRawBatch({ id: "s" }, {}, 0, 1, ids);
+  assert.equal(result.done, true);
+  assert.equal(result.nextIndex, ids.length);
+});
+
+test("#34 recovery failures remain retryable for cursor rewind", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const result = engine.recoverVisibleRawBatch(f.session, {}, 0, 1, ["missing-after-restart"]);
+  assert.equal(result.done, true);
+  const record = engine.rawSeen.get(engine.rawKey(f.session, "missing-after-restart"));
+  assert.equal(record.ok, false);
+  assert.equal(record.retryable, true, "a missing recovered raw must be revisited by captureNewBatch");
+});
+
+test("#34 recovery failures after cursor seeding still rewind the retryable seq", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const events = f.session.snapshotEvents();
+  engine.captureCursorStart(f.session, events, { keepRounds: 3 });
+  const target = f.longRound[1];
+  const id = f.session.eventAt(target).data.message.toolCallId;
+  engine.recoverVisibleRawBatch(f.session, {}, 0, 1, [id]);
+  assert.equal(engine.retryableCaptureSeqs.get(f.session.id)?.has(target), true);
+  assert.equal(engine.captureCursorStart(f.session, events, { keepRounds: 3 }), target);
+});
+
+test("#34 previsible ACL fuse fails closed without escaping catch-up", (t) => {
+  const h = runtime(t);
+  const f = h.use(fixture());
+  const { engine } = h.engine({ minTokens: 100000 });
+  const access = {
+    platform: "win32",
+    env: { SystemRoot: "D:\\WinX" },
+    execFile() { throw Object.assign(new Error("permission denied"), { status: 1300 }); },
+  };
+  const id = f.session.eventAt(f.longRound[1]).data.message.toolCallId;
+  mkdirSync(sessionDir(shadowDirectory(), f.session.id), { recursive: true });
+  t.after(() => resetShadowAccessState());
+  assert.doesNotThrow(() => engine.recoverVisibleRawBatch(f.session, access, 0, 1, [id]));
+  assert.equal(engine.rawSeen.has(engine.rawKey(f.session, id)), false);
+});

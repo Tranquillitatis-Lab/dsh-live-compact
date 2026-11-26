@@ -6,6 +6,17 @@
 
 export const STOCK_ENGINE = "@deepseek-ai/dsh-compaction-basic";
 
+const ROOT = Symbol.for("cordis.root");
+
+export function contextProperty(ctx, key) {
+  try { return ctx?.[key]; } catch { return undefined; }
+}
+
+export function rootContext(ctx) {
+  const root = contextProperty(ctx, ROOT) ?? contextProperty(ctx, "root") ?? ctx;
+  return root && (typeof root === "object" || typeof root === "function") ? root : undefined;
+}
+
 export const loadBase = () => import("@deepseek-ai/dsh-compaction-basic");
 
 export const loadCompaction = () => import("@deepseek-ai/dsh-compaction");

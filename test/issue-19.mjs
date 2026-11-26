@@ -91,10 +91,22 @@ test("a long read inside a multi-tool round is not kept", () => {
   assert.equal(kept[0].end, 4);
 });
 
+test("retained rounds restart after the newest checkpoint", () => {
+  const events = [
+    { type: "other", checkpoint: false, toolCalls: 1 }, { type: "tool" },
+    { type: "other", checkpoint: true },
+    { type: "other", checkpoint: false, toolCalls: 1 }, { type: "tool" },
+    { type: "other", checkpoint: false, toolCalls: 1 }, { type: "tool" },
+  ];
+  assert.deepEqual(keptToolRounds(events, 3, 2), [{ start: 3, end: 4 }, { start: 5, end: 6 }]);
+});
+
 test("ordinary fallback is not rejected by the long-read bound", () => {
   const source = readFileSync(fileURLToPath(new URL("../index.js", import.meta.url)), "utf8");
-  assert.equal(source.includes("if (usedLongCut && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;"), true);
-  assert.equal(source.includes("if (longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) return null;"), false);
+  assert.match(source, /const candidates = \[\]/);
+  assert.match(source, /const evaluateCandidate =/);
+  assert.match(source, /forceLongRead/);
+  assert.equal(source.includes("return selectNewestChunk(session, measurement, key, { ...context, forceLongRead: true });"), false);
   const old = selectCutIndexes([
     { type: "assistant", tokens: 16, balancedBefore: true, balancedAfter: false },
     { type: "tool", tokens: 1800, balancedBefore: false, balancedAfter: true },

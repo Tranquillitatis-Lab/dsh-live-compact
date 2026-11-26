@@ -7,9 +7,10 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import Spine from "../index.js";
 import { contentHash, rawName, readRawToolResult } from "../raw.js";
 import {
-  ensureShadowDir, resetShadowAccessState, shadowAccessFused, shadowAccessPlan,
+  ensureShadowDir, resetShadowAccessState, sessionDir, shadowAccessFused, shadowAccessPlan,
   tightenShadow, win32Tool, writeShadowFile,
 } from "../shadow.js";
 import { windowsAclCall } from "./helpers/windows-acl.mjs";
@@ -56,7 +57,24 @@ test("replacement script drops all prior explicit ACEs and checks the whole prot
   assert.equal(JSON.parse(readFileSync(new URL("../package.json", import.meta.url))).files.includes("shadow.js"), true);
 });
 
-test("paths remain environment data and the encoded program stays identical", (t) => {
+test("Windows shadow creation succeeds when the launcher refuses encoded commands", (t) => {
+  const f = fixture(t);
+  const execute = f.access.execFile;
+  f.access.execFile = (file, args, options) => {
+    if (args.includes("-EncodedCommand")) {
+      const error = new Error("spawn EPERM");
+      error.code = "EPERM";
+      throw error;
+    }
+    return execute(file, args, options);
+  };
+  ensureShadowDir(f.dir, f.access);
+  assert.equal(f.actions.length, 1);
+  assert.equal(f.actions[0].kind, "dir");
+  assert.equal(shadowAccessFused(), false);
+});
+
+test("paths travel as environment data with one fixed PowerShell program", (t) => {
   const env = { ...ENV, dsh_shadow_acl_path: "stale", DsH_ShAdOw_AcL_sId: "stale" };
   const f = fixture(t, env);
   ensureShadowDir(f.dir, f.access);
@@ -87,6 +105,80 @@ test("legacy raw and meta files each require replacement even under a confirmed 
   assert.equal(readRawToolResult({ dir: f.dir, toolCallId, access: f.access }).ok, true);
   assert.equal(f.actions.length, 3);
   assert.equal(readFileSync(unrelated, "utf8"), "leave alone");
+});
+
+test("read-only recovery can skip repeated ACL tightening while retaining raw/meta verification", (t) => {
+  const f = fixture(t);
+  ensureShadowDir(f.dir, f.access);
+  f.actions.length = 0;
+  const toolCallId = "recovery";
+  const file = join(f.dir, rawName(toolCallId));
+  const text = "synthetic recovery backup";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const result = readRawToolResult({ dir: f.dir, toolCallId, access: f.access, tighten: false });
+  assert.equal(result.ok, true);
+  assert.equal(f.actions.length, 0, "read-only recovery must not spawn per-file ACL work");
+  assert.equal(result.sha256, contentHash(text));
+});
+
+test("prune revalidation stays read-only after recovery", (t) => {
+  const f = fixture(t);
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = f.dir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+  });
+  const session = { id: "prune-revalidation" };
+  const dir = sessionDir(f.dir, session.id);
+  mkdirSync(dir);
+  const toolCallId = "prune-revalidation-tool";
+  const file = join(dir, rawName(toolCallId));
+  const text = "cached raw for prune revalidation";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map([[`${session.id}\0${toolCallId}`, { ok: true, path: file, bytes: Buffer.byteLength(text), sha256: contentHash(text), toolCallId, aclVerified: true }]]);
+  engine.surfaceToolIds = () => [toolCallId];
+  f.actions.length = 0;
+  assert.deepEqual([...engine.rawVerifiedSet(session)], [toolCallId]);
+  assert.equal(f.actions.length, 0, "prune revalidation must not spawn per-file ACL work");
+});
+
+test("large recovered surfaces refuse prune before per-file ACL work", (t) => {
+  const f = fixture(t);
+  const session = { id: "large-recovery" };
+  const ids = Array.from({ length: 33 }, (_, index) => `recovered-${index}`);
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map(ids.map((id) => [`${session.id}\0${id}`, { ok: true, recovered: true, aclVerified: false, toolCallId: id }]));
+  engine.surfaceToolIds = () => ids;
+  assert.deepEqual([...engine.rawVerifiedSet(session)], []);
+  assert.equal(f.actions.length, 0, "large recovery must fail closed without per-file ACL work");
+});
+
+test("recovery entry secures the existing session directory once, not each raw file", (t) => {
+  const f = fixture(t);
+  const previous = process.env.SPINE_SHADOW_DIR;
+  process.env.SPINE_SHADOW_DIR = f.dir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+    else process.env.SPINE_SHADOW_DIR = previous;
+  });
+  const session = { id: "recovery-session" };
+  const dir = sessionDir(f.dir, session.id);
+  mkdirSync(dir);
+  const toolCallId = "recovery-entry";
+  const file = join(dir, rawName(toolCallId));
+  const text = "existing recovery payload";
+  writeFileSync(file, text);
+  writeFileSync(`${file}.meta.json`, JSON.stringify({ toolCallId, bytes: Buffer.byteLength(text), sha256: contentHash(text) }));
+  const engine = Object.create(Spine.prototype);
+  engine.rawSeen = new Map();
+  engine.surfaceToolIds = () => [toolCallId];
+  engine.recoverVisibleRaw(session, f.access);
+  assert.equal(engine.rawSeen.get(`${session.id}\0${toolCallId}`).ok, true);
+  assert.deepEqual(f.actions.map(({ kind }) => kind), ["dir"], "recovery should recheck only the session directory ACL");
 });
 
 test("fresh exclusive and replacement writes use inherited allowlist without file children or traversal", (t) => {

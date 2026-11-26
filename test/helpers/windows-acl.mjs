@@ -5,9 +5,9 @@ import { win32Tool } from "../../shadow.js";
 // prove Windows access denial; the coordinator's two-user hosted probe does.
 export function windowsAclCall(file, args, options, env, sid) {
   assert.equal(file, win32Tool("WindowsPowerShell\\v1.0\\powershell.exe", env));
-  assert.deepEqual(args.slice(0, 4), ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+  assert.deepEqual(args.slice(0, 4), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
   assert.equal(args.length, 5);
-  const script = Buffer.from(args[4], "base64").toString("utf16le");
+  const script = args[4];
   assert.match(script, /DirectorySecurity\]::new\(\)/);
   assert.match(script, /FileSecurity\]::new\(\)/);
   assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/);
