@@ -186,6 +186,10 @@ assert.equal(rawCard.text.includes("[... tool result middle pruned ...]"), false
 const trust = join(root, "trust");
 mkdirSync(trust);
 const trusted = captureToolResult({ dir: trust, toolCallId: "id-trust", text: "ORIGINAL", turn: 1, name: "bash" });
+const duplicate = captureToolResult({ dir: trust, toolCallId: "id-trust", text: "DIFFERENT", turn: 2, name: "bash" });
+assert.equal(duplicate.ok, false);
+assert.equal(duplicate.reason, "duplicate-tool-call-id");
+assert.equal(readFileSync(trusted.path, "utf8"), "ORIGINAL");
 writeFileSync(trusted.path, "TAMPERED");
 const reread = captureToolResult({ dir: trust, toolCallId: "id-trust", text: "ORIGINAL", turn: 1, name: "bash" });
 assert.equal(reread.ok, false);
@@ -216,7 +220,8 @@ runPruneAfterCapture(["good"], new Set(["good"]), () => {
 assert.equal(fullWrites, 1);
 rmSync(`${trusted.path}.meta.json`);
 const missingMeta = captureToolResult({ dir: trust, toolCallId: "id-trust", text: "ORIGINAL", turn: 1, name: "bash" });
-assert.equal(missingMeta.ok, false);
+assert.equal(missingMeta.ok, true);
+assert.equal(existsSync(`${missingMeta.path}.meta.json`), true);
 const restored = restoreToolText(
   { role: "tool", toolCallId: "call-raw", content: "head\n\n[... tool result middle pruned ...]\n\ntail" },
   saved,

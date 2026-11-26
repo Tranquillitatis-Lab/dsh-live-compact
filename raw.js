@@ -11,12 +11,18 @@ import { join } from "node:path";
 import {
   discardShadowFiles,
   ensureShadowDir,
+  shadowRootForDir,
   tightenShadow,
   writeShadowFile,
   writeShadowOwner,
+  withShadowRoot,
 } from "./shadow.js";
 
 export const PRUNE_MARKER = "[... tool result middle pruned ...]";
+
+function transientCaptureError(error) {
+  return ["ESHADOWBUSY", "EAGAIN", "EBUSY", "EINTR", "EIO"].includes(error?.code);
+}
 
 export function contentHash(text) {
   const hash = createHash("sha256");
@@ -33,7 +39,11 @@ function readExisting(file, toolCallId) {
   try {
     meta = JSON.parse(readFileSync(`${file}.meta.json`, "utf8"));
   } catch {
-    return { ok: false, reason: "missing-meta", toolCallId };
+    return {
+      ok: false,
+      reason: existsSync(`${file}.meta.json`) ? "bad-meta" : "missing-meta",
+      toolCallId,
+    };
   }
   if (meta?.toolCallId !== toolCallId || typeof meta.sha256 !== "string" || !Number.isInteger(meta.bytes)) {
     return { ok: false, reason: "bad-meta", toolCallId };
@@ -56,6 +66,19 @@ function readExisting(file, toolCallId) {
     toolCallId,
     label: meta.label || "",
   };
+}
+
+// Restart recovery is read-only: never manufacture an original from the surface.
+// Resolve only the requested ID, with the same permissions/meta checks as capture.
+export function readRawToolResult({ dir, toolCallId, access = {}, tighten = true }) {
+  const file = join(dir, rawName(toolCallId));
+  if (!existsSync(file)) return { ok: false, reason: "missing-file", toolCallId };
+  if (tighten) {
+    ensureShadowDir(dir, access);
+    tightenShadow(file, "file", access);
+    if (existsSync(`${file}.meta.json`)) tightenShadow(`${file}.meta.json`, "file", access);
+  }
+  return readExisting(file, toolCallId);
 }
 
 export function verifiedRaw(record, readFile = readFileSync) {
@@ -97,7 +120,31 @@ export function rawExcerptText(surface, record) {
 // 正文已经带修剪标记、又没有旧文件时，不把修剪后的文本当成原文。
 // Write once per toolCallId. An existing file is verified, never overwritten.
 // Pruned text with no earlier file is not stored as the original.
-export function captureToolResult({
+export function captureToolResult(options) {
+  const { dir, toolCallId, access = {}, root = shadowRootForDir(dir) } = options;
+  if (!toolCallId) return { ok: false, reason: "missing-id", toolCallId: "" };
+  if (!existsSync(join(dir, rawName(toolCallId))) && String(options.text ?? "").includes(PRUNE_MARKER)) {
+    return { ok: false, reason: "already-pruned", toolCallId, unrecoverable: true };
+  }
+  try {
+    ensureShadowDir(dir, access);
+  } catch (error) {
+    if (error?.code === "ESHADOWACCESS" || error?.code === "ESHADOWCLEANUP") throw error;
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
+  }
+  let entered = false;
+  try {
+    return withShadowRoot(root, () => {
+      entered = true;
+      return captureToolResultLocked({ ...options, root });
+    });
+  } catch (error) {
+    if (!entered || transientCaptureError(error)) return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
+    throw error; // In particular, preserve exceptions from failed raw cleanup.
+  }
+}
+
+function captureToolResultLocked({
   dir,
   toolCallId,
   text,
@@ -105,6 +152,7 @@ export function captureToolResult({
   name,
   pathLabel,
   access = {},
+  root = shadowRootForDir(dir),
 }) {
   if (!toolCallId) {
     return { ok: false, reason: "missing-id", toolCallId: "" };
@@ -113,30 +161,38 @@ export function captureToolResult({
   const body = String(text ?? "");
   const file = join(dir, rawName(toolCallId));
   const metaPath = `${file}.meta.json`;
+  const bytes = Buffer.from(body, "utf8");
+  const hash = contentHash(bytes);
 
   if (!existsSync(file) && body.includes(PRUNE_MARKER)) {
-    return { ok: false, reason: "already-pruned", toolCallId };
+    return { ok: false, reason: "already-pruned", toolCallId, unrecoverable: true };
   }
 
-  const readProtectedExisting = () => {
-    tightenShadow(file, "file", access);
-    if (existsSync(metaPath)) {
-      tightenShadow(metaPath, "file", access);
-    }
-    return readExisting(file, toolCallId);
-  };
+  const readProtectedExisting = () => readRawToolResult({ dir, toolCallId, access });
 
   let createdRaw = false;
 
   try {
-    ensureShadowDir(dir, access);
+    if (existsSync(file)) {
+      const existing = readProtectedExisting();
+      if (!existing.ok) {
+        // A raw without its meta marker is an incomplete publication. When
+        // the current event still has the original body, discard the orphan
+        // and rebuild the pair; a malformed/valid meta file remains fail-closed.
+        if (existing.reason === "missing-meta" && !body.includes(PRUNE_MARKER)) {
+          discardShadowFiles([file, metaPath], new Error("incomplete raw/meta pair"));
+        } else {
+          return existing;
+        }
+      }
+      if (existing.ok && body.includes(PRUNE_MARKER)) return existing;
+      if (existing.ok && (existing.sha256 !== hash || existing.bytes !== bytes.length)) {
+        return { ok: false, reason: "duplicate-tool-call-id", toolCallId, retryable: false };
+      }
+      if (existing.ok) return existing;
+    }
 
-    if (existsSync(file)) return readProtectedExisting();
-
-    const bytes = Buffer.from(body, "utf8");
-    const hash = contentHash(bytes);
-
-    writeShadowFile(file, bytes, access, { exclusive: true });
+    writeShadowFile(file, bytes, access, { exclusive: true, root });
     createdRaw = true;
 
     writeShadowFile(
@@ -150,6 +206,7 @@ export function captureToolResult({
         label: pathLabel || "",
       }),
       access,
+      { root },
     );
 
     return {
@@ -175,20 +232,26 @@ export function captureToolResult({
       return readProtectedExisting();
     }
 
-    return { ok: false, reason: "unwritable", toolCallId };
+    return { ok: false, reason: "unwritable", toolCallId, retryable: transientCaptureError(error) };
   }
 }
 
 export function captureOwnedToolResult(options) {
-  const { dir, access = {} } = options;
+  const { dir, access = {}, root = shadowRootForDir(dir) } = options;
+  ensureShadowDir(dir, access);
+  return withShadowRoot(root, () => captureOwnedToolResultLocked({ ...options, root }));
+}
+
+function captureOwnedToolResultLocked(options) {
+  const { dir, access = {}, root } = options;
   const owner = join(dir, "owner");
   const ownerExisted = existsSync(owner);
   let ownerWritten = false;
 
   try {
-    writeShadowOwner(dir, access);
+    writeShadowOwner(dir, access, root);
     ownerWritten = true;
-    return captureToolResult(options);
+    return captureToolResult({ ...options, root });
   } catch (error) {
     if (ownerWritten && !ownerExisted) {
       discardShadowFiles([owner], error);

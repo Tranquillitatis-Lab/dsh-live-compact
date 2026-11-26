@@ -1,0 +1,25 @@
+{
+  "exp": "A",
+  "src": "baseline",
+  "date": "2026-11-22T17:02:09.546Z",
+  "node": "v26.7.0",
+  "params": {
+    "sessions": 40,
+    "waves": 3,
+    "payloadKb": 4096,
+    "tokensPerRound": 13000
+  },
+  "preHeapUsed": 9565648,
+  "peakHeapUsed": 399922600,
+  "postGcHeapUsed": 1332153800,
+  "preRss": 83226624,
+  "peakRss": 814161920,
+  "postGcRss": 1469075456,
+  "burstDeltaHeap": 390356952,
+  "burstDeltaRss": 730935296,
+  "compactions": 23,
+  "modelCalls": 0,
+  "warnings": 97,
+  "baseHeapUsed": 7722632,
+  "baseRss": 74915840
+}

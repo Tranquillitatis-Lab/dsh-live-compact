@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { preflightConfig } from "../shell.js";
 import { isPluginShadowName, rotateShadow, sanitizeSessionKey, sessionDir, shadowFileBody } from "../shadow.js";
 
-assert.throws(() => preflightConfig({ thresholdRatio: 0.05 }), /retainRatio \(0\.16\)/);
+assert.equal(preflightConfig({ thresholdRatio: 0.05 }).retainTokens, 8192);
 assert.doesNotThrow(() => preflightConfig({ thresholdRatio: 0.8, retainTokens: 8192 }));
 assert.equal(sanitizeSessionKey("../session-abc"), "session-abc");
 assert.equal(sessionDir("/tmp/shadow", "session-abc"), "/tmp/shadow/session-abc");

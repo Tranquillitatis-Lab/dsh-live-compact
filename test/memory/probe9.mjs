@@ -1,0 +1,30 @@
+// 探针9：首次 cut 前后的警告、shadow 目录与线程证据。
+import { execSync } from "node:child_process";
+import { readdirSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadSrc, makeFixture, makeRuntime } from "./fix.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = dirname(dirname(here));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const wc = () => process.report.getReport().workers?.length ?? -1;
+const tc = () => Number(execSync(`pwsh -NoProfile -Command "(Get-Process -Id ${process.pid}).Threads.Count"`, { encoding: "utf8" }).trim());
+console.log("NODE_TEST_CONTEXT =", JSON.stringify(process.env.NODE_TEST_CONTEXT));
+const src = await loadSrc(repoRoot);
+const h = makeRuntime({ src, rootDir: join(here, ".tmp") });
+console.log("shadow root:", h.root, "exists:", existsSync(h.root));
+const { engine } = h.engine({}, "local");
+const f = h.use(makeFixture({ totalTokens: 24000, id: "probe9-0" }));
+h.capture(engine, f);
+const text = "C".repeat(64 * 1024 - 32);
+console.log("base: report=", wc(), "threads=", tc());
+const ret = await engine.finishTurn(f.agent(), undefined, { maintenanceRetry: true });
+console.log("cut ret=", ret, "cuts=", f.summaries().length);
+console.log("warnings:", JSON.stringify(h.warnings));
+console.log("infos:", JSON.stringify(h.infos));
+console.log("after cut: report=", wc(), "threads=", tc());
+console.log("shadow dir entries:", existsSync(join(h.root, "probe9-0")) ? readdirSync(join(h.root, "probe9-0")).length : readdirSync(h.root).length);
+await h.dispose();
+console.log("post-dispose: report=", wc(), "threads=", tc());
+process.exit(0);

@@ -1,7 +1,7 @@
 [
   {
     "turn": 1,
-    "prompt": "这是项目约定，之后不再重复。禁止 rm，改用 trash/。新的 py 文件首行必须是 # owner: team-kestrel。不许改 vendor/。check.sh 只许跑一次。缓存用 SQLite。端口 8642。限流 37/分钟。真配置是 conf/settings.local.toml，conf/settings.toml 是旧文件不许改。现在用工具跑一次 ./check.sh，把报错原文告诉我。"
+    "prompt": "这是项目约定，之后不再重复。禁止 rm，改用 trash/。新的 py 文件首行必须是 # owner: team-kestrel。不许改 vendor/。check.sh 只许跑一次。缓存用 SQLite。端口 8642。限流 37/分钟。真配置是 conf/settings.local.toml，conf/settings.toml 是旧文件不许改。现在用工具只执行一次 ./check.sh；可直接调用 ./check.sh，或紧接着用 echo \"exit_code=$?\" 捕获退出码。不要使用其它退出码别名、重复执行、包装命令或管道。把报错原文告诉我。所有读写都留在当前项目目录内。若使用 Python，只允许 python3 -I -c 或 python -I -c 的标准库只读命令；必须保留 -I 隔离选项，不要使用普通的非隔离 -c。"
   },
   {
     "turn": 2,

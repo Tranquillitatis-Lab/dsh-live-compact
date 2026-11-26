@@ -49,21 +49,21 @@ assert.equal(local, null);
 assert.equal(selectCutIndexes([user(5000)], { engine: "cloud" }), null);
 assert.equal(selectCutIndexes([user(5000)], { engine: "local" }), null);
 
-assert.equal(selectCutIndexes([
+const onlyHeavy = selectCutIndexes([
   user(), round(20000), user(), round(300), round(100), round(100), round(100),
-], { engine: "cloud", drain: true, totalTokens: 60000 }), null);
-const drainCut = selectCutIndexes([
-  user(), round(20000), user(), round(5000),
-], { engine: "cloud", drain: true, totalTokens: 25000 });
-assert.equal(drainCut.start, 3);
-assert.equal(drainCut.end, 3);
+], { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 2 });
+assert.equal(onlyHeavy.start, 1);
+assert.equal(onlyHeavy.end, 1);
 
-assert.equal(selectCutIndexes([
+const across = selectCutIndexes([
   user(), round(20000), user(), round(300), user(), round(100), round(100), round(100),
-], { engine: "cloud", maxEnd: 4 }), null);
+], { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 4 });
+assert.equal(across.start, 1);
+assert.equal(across.end, 3);
+assert.equal(across.gain, 20300);
 assert.equal(selectCutIndexes([
-  user(), round(15000), user(), round(15000), user(), round(300), user(), round(100),
-], { engine: "cloud", maxEnd: 5 }), null);
+  user(), round(1200), { type: "tool", tokens: 10, checkpoint: true }, user(), round(100),
+], { engine: "cloud", drain: true, totalTokens: 60000, maxEnd: 4 }), null);
 
 assert.equal(selectCutIndexes([user(1200), round(100)], { engine: "cloud" }), null);
 
@@ -141,7 +141,7 @@ assert.equal(missed.matches.length, 0);
 rmSync(dir, { recursive: true, force: true });
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-assert.equal(pkg.version, "1.0.9");
+assert.equal(pkg.version, "1.1.14");
 const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
 assert.equal(indexSource.includes("<compacted-summary>"), false);
 assert.equal(indexSource.includes("spine-checkpoint"), true);

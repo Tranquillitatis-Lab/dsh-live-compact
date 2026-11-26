@@ -7,7 +7,7 @@ $gitRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Copy-Item -LiteralPath (Join-Path $gitRoot 'shadow.js') -Destination $root
 $moduleHash = (Get-FileHash -LiteralPath (Join-Path $root 'shadow.js') -Algorithm SHA256).Hash
 Write-Host "SHADOW_MODULE_SHA256 $moduleHash"
-if ($moduleHash -ne '50037DB3E442386CCA82121B70866A08BA8911F4DAE911463E078218EC30974F') { throw 'Wrong frozen shadow module.' }
+if ($moduleHash -ne '8E4DE38CDF58944C229825E559F59055E41CB8393EEBF91FE83967616B703E78') { throw 'Wrong frozen shadow module.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'probe.mjs') -Destination $root
 '{"type":"module"}' | Set-Content -LiteralPath (Join-Path $root 'package.json')
 'positive control' | Set-Content -LiteralPath (Join-Path $root 'control.txt')
