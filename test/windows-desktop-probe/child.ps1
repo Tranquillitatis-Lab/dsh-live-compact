@@ -278,10 +278,12 @@ try {
 
 
     Set-ProbeStage 'Testing PowerShell and grep after a real shadow write using the Desktop Electron executable'
-    $pwsh = (Get-Command pwsh.exe -CommandType Application).Source
-    $git = (Get-Command git.exe -CommandType Application).Source
-    $grep = Join-Path (Split-Path (Split-Path $git -Parent) -Parent) 'usr\bin\grep.exe'
-    if (-not (Test-Path -LiteralPath $grep)) { throw 'Git grep fixture executable unavailable.' }
+    $pwsh = (Get-Command pwsh.exe -CommandType Application | Select-Object -First 1).Source
+    $grepCandidates = foreach ($git in (Get-Command git.exe -CommandType Application)) {
+        Join-Path (Split-Path (Split-Path $git.Source -Parent) -Parent) 'usr\bin\grep.exe'
+    }
+    $grep = $grepCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $grep -or $grep -isnot [string]) { throw 'Git grep fixture executable unavailable.' }
     $scriptFile = Join-Path $PSScriptRoot 'desktop-electron-probe.mjs'
     $shadowModule = Join-Path $installed 'shadow.js'
     $proofPath = Join-Path $PSScriptRoot 'electron-probe.json'
