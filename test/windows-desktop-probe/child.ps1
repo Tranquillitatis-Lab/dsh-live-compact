@@ -276,6 +276,28 @@ try {
     Assert-CandidateIdentity
     $proof.CandidateInstalled = $true
 
+
+    Set-ProbeStage 'Testing PowerShell and grep after a real shadow write using the Desktop Electron executable'
+    $pwsh = (Get-Command pwsh.exe -CommandType Application).Source
+    $git = (Get-Command git.exe -CommandType Application).Source
+    $grep = Join-Path (Split-Path (Split-Path $git -Parent) -Parent) 'usr\bin\grep.exe'
+    if (-not (Test-Path -LiteralPath $grep)) { throw 'Git grep fixture executable unavailable.' }
+    $scriptFile = Join-Path $PSScriptRoot 'desktop-electron-probe.mjs'
+    $shadowModule = Join-Path $installed 'shadow.js'
+    $proofPath = Join-Path $PSScriptRoot 'electron-probe.json'
+    $argsForProbe = '"{0}" "{1}" "{2}" "{3}" "{4}" "{5}"' -f $scriptFile, $shadowModule, $PSScriptRoot, $pwsh, $grep, $proofPath
+    $previous = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $smoke = Start-Process -FilePath $app.FullName -ArgumentList $argsForProbe -PassThru -RedirectStandardOutput (Join-Path $PSScriptRoot 'electron-stdout.txt') -RedirectStandardError (Join-Path $PSScriptRoot 'electron-stderr.txt')
+    } finally {
+        $env:ELECTRON_RUN_AS_NODE = $previous
+    }
+    $ownedProcesses.Add($smoke)
+    if (-not $smoke.WaitForExit(100000) -or $smoke.ExitCode -ne 0) { throw 'Desktop Electron PowerShell/grep smoke failed.' }
+    $shellProof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+    if ($shellProof.after -ne 6 -or $shellProof.shadowWrite -ne $true) { throw 'Incomplete Electron child process proof.' }
+    $proof.ElectronShells = $true
     Set-ProbeStage 'Opening candidate settings and saving minTokens 24000'
     $view = Open-CandidateSettings 'candidate-details-proof.json' $true
     $proof.EditableMinTokens = $true
@@ -329,28 +351,6 @@ try {
         Editable = -not $view.State.minTokens.disabled -and -not $view.State.minTokens.readOnly
         ReadbackValue = [int]$view.State.minTokens.value
     } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'settings-restart-proof.json')
-
-    Set-ProbeStage 'Testing PowerShell and grep after a real shadow write using the Desktop Electron executable'
-    $pwsh = (Get-Command pwsh.exe -CommandType Application).Source
-    $git = (Get-Command git.exe -CommandType Application).Source
-    $grep = Join-Path (Split-Path (Split-Path $git -Parent) -Parent) 'usr\bin\grep.exe'
-    if (-not (Test-Path -LiteralPath $grep)) { throw 'Git grep fixture executable unavailable.' }
-    $scriptFile = Join-Path $PSScriptRoot 'desktop-electron-probe.mjs'
-    $shadowModule = Join-Path $installed 'shadow.js'
-    $proofPath = Join-Path $PSScriptRoot 'electron-probe.json'
-    $argsForProbe = '"{0}" "{1}" "{2}" "{3}" "{4}" "{5}"' -f $scriptFile, $shadowModule, $PSScriptRoot, $pwsh, $grep, $proofPath
-    $previous = $env:ELECTRON_RUN_AS_NODE
-    try {
-        $env:ELECTRON_RUN_AS_NODE = '1'
-        $smoke = Start-Process -FilePath $app.FullName -ArgumentList $argsForProbe -PassThru -RedirectStandardOutput (Join-Path $PSScriptRoot 'electron-stdout.txt') -RedirectStandardError (Join-Path $PSScriptRoot 'electron-stderr.txt')
-    } finally {
-        $env:ELECTRON_RUN_AS_NODE = $previous
-    }
-    $ownedProcesses.Add($smoke)
-    if (-not $smoke.WaitForExit(100000) -or $smoke.ExitCode -ne 0) { throw 'Desktop Electron PowerShell/grep smoke failed.' }
-    $shellProof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
-    if ($shellProof.after -ne 6 -or $shellProof.shadowWrite -ne $true) { throw 'Incomplete Electron child process proof.' }
-    $proof.ElectronShells = $true
     $proof.Complete = $proof.CandidateInstalled -and $proof.EditableMinTokens -and $proof.OfficialSaveClicked -and $proof.PersistedInProfile -and $proof.RestartReadback
     if (-not $proof.Complete) { throw 'Desktop candidate validation has incomplete required gates.' }
     Set-ProbeStage 'All candidate install, UI save, persistence, and restart gates passed'

@@ -77,8 +77,9 @@ JSON.stringify({
         $expression = $expression.Replace('__LABEL__', (ConvertTo-Json -InputObject $Click -Compress))
     }
     if ($PackageAddress) {
+        $expectedAddress = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'candidate-url.txt') -Raw).Trim()
         if ($PackageAddress.Scheme -ne 'https' -or $PackageAddress.Host -ne 'raw.githubusercontent.com' -or
-            $PackageAddress.AbsolutePath -ne '/Tranquillitatis-Lab/dsh-live-compact/c8059b5ebcbce913e3e41a5fd4d6aef42dad6e5b/test/windows-runtime/fixtures/dsh-live-compact-1.1.3.tgz') {
+            $PackageAddress.AbsoluteUri -cne $expectedAddress) {
             throw 'Package address is outside the frozen fixture.'
         }
         $expression = @'
